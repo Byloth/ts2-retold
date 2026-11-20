@@ -38,6 +38,10 @@ out of here into the roadmap or an ADR when work on them starts.
 - **GDI cannot draw on a DirectDraw surface.** `GetDC` gives a context that
   serves as the model for a compatible one (all the game does with it);
   drawing through it stops the machine.
+- **A run starts from what the previous one wrote.** `andy boot` keeps
+  `out/run` (saves, `toy2.cfg`) between runs, as an installed game would,
+  so two runs are identical only if that directory is. Tests and replays
+  need a way to start from a named state.
 - **The guest heap never reuses memory.** `Os::allocate` only moves forward;
   blocks the game frees, and the runtime's own blocks (surface memory,
   DIB sections, vertex buffers), are never returned. A long session will

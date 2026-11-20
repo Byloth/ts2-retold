@@ -12,10 +12,13 @@ Every dependency or tool is listed here **before** it is adopted
 | `serde`, `serde_json` | MIT OR Apache-2.0 | analysis reports |
 | `fontdue` 0.9 | MIT OR Apache-2.0 OR Zlib | turning glyph outlines into pixels for GDI text |
 | `ttf-parser` 0.25 | MIT OR Apache-2.0 | reading the bundled font's metric tables |
+| `png` 0.17 | MIT OR Apache-2.0 | `andy boot --surfaces`: writing surfaces as images for inspection (command-line tool only) |
 
 Transitive dependencies: all `MIT`, `MIT OR Apache-2.0` or `Unlicense OR MIT`,
 plus `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`, build-time only)
-and `foldhash` (`Zlib`, through `fontdue`'s `hashbrown`).
+and `foldhash` (`Zlib`, through `fontdue`'s `hashbrown`); `png` brings
+`flate2`, `miniz_oxide`, `fdeflate`, `crc32fast`, `adler2`, `simd-adler32`
+and `bitflags`, all MIT or dual MIT/Apache-2.0 (some also Zlib or 0BSD).
 No copyleft and no noncommercial-only license is in the tree.
 
 ## Bundled data

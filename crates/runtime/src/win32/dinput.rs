@@ -194,10 +194,8 @@ fn enum_devices(m: &mut Machine, a: &[u32]) -> HostResult {
         }
         // DIDEVICEINSTANCE (the DirectInput 3 layout, a prefix of the later
         // one): size, instance GUID, product GUID, device type, and two
-        // names of 260 characters. It lives on the stack during the call.
+        // names of 260 characters.
         const SIZE: u32 = 4 + 16 + 16 + 4 + 260 + 260;
-        let saved = m.cpu.regs[4];
-        let at = saved - SIZE;
         let mut block = vec![0u8; SIZE as usize];
         block[0..4].copy_from_slice(&SIZE.to_le_bytes());
         block[4..20].copy_from_slice(&identifier);
@@ -205,11 +203,7 @@ fn enum_devices(m: &mut Machine, a: &[u32]) -> HostResult {
         block[36..40].copy_from_slice(&kind.to_le_bytes());
         block[40..40 + name.len()].copy_from_slice(name);
         block[300..300 + name.len()].copy_from_slice(name);
-        m.memory.load(at, &block).expect("the stack is mapped");
-        m.cpu.regs[4] = at;
-        let answer = m.call_guest(callback, &[at, context]);
-        m.cpu.regs[4] = saved;
-        if answer? == 0 {
+        if m.with_stack_bytes(&block, |m, at| m.call_guest(callback, &[at, context]))? == 0 {
             break;
         }
     }

@@ -65,6 +65,30 @@ impl PixelFormat {
         }
     }
 
+    /// The colour, as `0xAARRGGBB`, of a raw pixel of this format. A channel
+    /// narrower than eight bits is widened by repeating its bits, so that
+    /// its largest value becomes 255; a format without alpha is opaque.
+    /// A depth value becomes a grey, far being white. `None` for a palette
+    /// index, which has no colour by itself.
+    pub fn to_argb(self, raw: u32) -> Option<u32> {
+        // The top `bits` bits of a channel found at `shift`, widened to eight.
+        let channel = |shift: u32, bits: u32| {
+            let value = raw >> shift & ((1 << bits) - 1);
+            (0..8u32.div_ceil(bits)).fold(0, |wide, n| wide | (value << 8 >> (bits * (n + 1)))) & 0xFF
+        };
+        let pack = |alpha: u32, red: u32, green: u32, blue: u32| alpha << 24 | red << 16 | green << 8 | blue;
+        Some(match self {
+            PixelFormat::Rgb565 => pack(0xFF, channel(11, 5), channel(5, 6), channel(0, 5)),
+            PixelFormat::Xrgb1555 => pack(0xFF, channel(10, 5), channel(5, 5), channel(0, 5)),
+            PixelFormat::Argb1555 => pack(channel(15, 1), channel(10, 5), channel(5, 5), channel(0, 5)),
+            PixelFormat::Argb4444 => pack(channel(12, 4), channel(8, 4), channel(4, 4), channel(0, 4)),
+            PixelFormat::Xrgb8888 => raw | 0xFF00_0000,
+            PixelFormat::Argb8888 => raw,
+            PixelFormat::Depth16 => pack(0xFF, raw >> 8 & 0xFF, raw >> 8 & 0xFF, raw >> 8 & 0xFF),
+            PixelFormat::Indexed8 => return None,
+        })
+    }
+
     /// The 16-bit depth value for a depth between 0 (near) and 1 (far).
     pub fn depth16(depth: f32) -> u32 {
         (depth.clamp(0.0, 1.0) * 65535.0).round() as u32
@@ -391,6 +415,21 @@ mod tests {
         assert_eq!(PixelFormat::Argb1555.from_argb(0x80FF_FFFF), 0xFFFF);
         assert_eq!(PixelFormat::Argb4444.from_argb(0x1234_5678), 0x1357);
         assert_eq!(PixelFormat::Xrgb8888.from_argb(0xFF12_3456), 0x0012_3456);
+        assert_eq!(PixelFormat::Rgb565.to_argb(0xFFFF), Some(0xFFFF_FFFF));
+        assert_eq!(PixelFormat::Rgb565.to_argb(0x8410), Some(0xFF84_8284));
+        assert_eq!(PixelFormat::Argb1555.to_argb(0x8000), Some(0xFF00_0000));
+        assert_eq!(PixelFormat::Argb1555.to_argb(0x7FFF), Some(0x00FF_FFFF));
+        assert_eq!(PixelFormat::Argb4444.to_argb(0x1357), Some(0x1133_5577));
+        assert_eq!(PixelFormat::Xrgb8888.to_argb(0x0012_3456), Some(0xFF12_3456));
+        assert_eq!(PixelFormat::Depth16.to_argb(0xFFFF), Some(0xFFFF_FFFF));
+        assert_eq!(PixelFormat::Indexed8.to_argb(7), None);
+        for format in
+            [PixelFormat::Rgb565, PixelFormat::Argb1555, PixelFormat::Argb4444, PixelFormat::Argb8888]
+        {
+            for raw in [0u32, 0x1234, 0x8001, 0xFFFF, 0xABCD] {
+                assert_eq!(format.from_argb(format.to_argb(raw).unwrap()), raw, "{format:?} {raw:#x}");
+            }
+        }
         assert_eq!(
             (PixelFormat::depth16(1.0), PixelFormat::depth16(0.0), PixelFormat::depth16(7.0)),
             (65535, 0, 65535)

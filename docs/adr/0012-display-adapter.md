@@ -29,6 +29,11 @@ as the game calls them, not by patching the game's renderer. What they report:
   `IDirect3D3`; all are offered on the same object. Interface identifiers of
   later DirectX versions are refused, as a DirectX 6 runtime would.
 - **A 16-bit z-buffer** is the one depth format.
+- **Texture formats**, in the order they are enumerated: RGB 565,
+  ARGB 1555, ARGB 4444, XRGB 8888 and ARGB 8888. No palettised, luminance,
+  bump or compressed formats. The game takes the first format that has the
+  depth and alpha it wants, so the order is part of the persona; which
+  order the cards of the time used is `UNVERIFIED`.
 
 Rule: **a capability is claimed only if the renderer implements it.** The game
 chooses its code paths from these words.

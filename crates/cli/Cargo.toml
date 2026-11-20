@@ -11,3 +11,4 @@ publish.workspace = true
 andy-recomp = { path = "../recomp" }
 andy-runtime = { path = "../runtime" }
 serde_json = "1"
+png = "0.17"

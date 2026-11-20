@@ -249,13 +249,10 @@ impl Machine {
         wparam: u32,
         words: [u32; N],
     ) -> Result<(u32, [u32; N]), Stop> {
-        let saved = self.cpu.regs[4];
-        let at = (saved - 4 * N as u32) & !3;
-        self.write_words(at, &words);
-        self.cpu.regs[4] = at;
-        let result = self.send_message(window, message, wparam, at);
-        self.cpu.regs[4] = saved;
-        let after = self.read_words(at);
+        let (result, after) = self.with_stack_words(&words, |m, at| {
+            let result = m.send_message(window, message, wparam, at);
+            (result, m.read_words(at))
+        });
         Ok((result?, after))
     }
 

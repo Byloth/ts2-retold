@@ -11,10 +11,16 @@ cargo run --release --bin andy -- boot --trace
 
 ## How far it gets
 
-**About 139.4 million instructions**, then it stops at
-`IDirect3DDevice3::EnumTextureFormats`: DirectDraw, the 3D device and
-DirectInput are set up, the game has drawn its debug font into a bitmap and
-is about to make a texture of it.
+**About 296.6 million instructions**, then it stops at its first
+`IDirect3DDevice3::DrawIndexedPrimitive`: everything is initialised, the
+first level's packet and textures are loaded, the trademark screen has been
+copied to the back buffer, and the game wants to draw its first textured
+quad (four transformed-and-lit vertices, six indices) on top of it.
+
+`andy boot --surfaces out/surfaces` writes every DirectDraw surface as a PNG
+at the stop: the back buffer shows the trademark screen and the textures
+their contents, so what the game has put on the surfaces so far is checked
+by eye.
 
 | Phase | What happens |
 |---|---|
@@ -34,7 +40,11 @@ is about to make a texture of it.
 | Surfaces and device | Primary surface with one back buffer, 16-bit z-buffer attached to it, `CreateDevice` (the x87 unit goes to single precision), a viewport covering the screen |
 | Input | `DirectInputCreateA` (version 5), the keyboard with its data format, acquired; joysticks enumerated (none) |
 | Render set-up | A material, three vertex buffers of 1000 vertices (two of transformed-and-lit vertices, one untransformed), render, light and texture-stage states |
-| Debug font | `CreateFontA("ariel", 20)`, a 256×256 DIB section, each character measured and drawn with `TextOutA`; then `EnumTextureFormats` — not implemented yet |
+| Debug font | `CreateFontA("ariel", 20)`, a 256×256 DIB section, each character measured and drawn with `TextOutA`, copied by hand into a 256×256 ARGB 1555 texture surface chosen through `EnumTextureFormats` |
+| Lights | A second initialisation pass repeats the render set-up, then four lights are created and added to the viewport |
+| Level 0 | Writes `Toy200.sav` and `toy2.cfg`, reads `rand.dat`, releases the duplicated sound buffers, loads `level00\level.raw` and `level00\level.ngn`; each texture is read as a bitmap into a DIB section (24-bit, or 8-bit with a colour table) and copied into a texture surface; three more materials |
+| Backdrop | `glueSetBackdrop()`: a 640×480 off-screen surface filled from an 8-bit bitmap through `GetDIBColorTable`, then `BltFast` to the back buffer |
+| First draw | Render states, `SetTexture`, `DrawIndexedPrimitive(TRIANGLELIST, TLVERTEX, 4 vertices, 6 indices)` — not implemented yet |
 
 ## The game's own log
 
@@ -110,7 +120,8 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-Texture formats and texture surfaces, then the first draw calls
-(`DrawIndexedPrimitive` with transformed-and-lit vertices) and `Flip`: the
-`Video` interface gains drawing, and the GPU backend (ADR 0012) is built
-against it.
+Drawing: the `Video` interface gains a draw call for transformed-and-lit
+triangles with the device's render and texture-stage states, and the GPU
+backend (ADR 0012) is built against it with off-screen rendering for tests.
+The game also keeps a vertex buffer of untransformed vertices and four
+lights, so Direct3D's own transformation and lighting will be needed too.

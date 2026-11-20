@@ -144,6 +144,33 @@ impl Machine {
             .all(|(n, &word)| self.memory.write(address + 4 * n as u32, 4, word).is_some())
     }
 
+    /// Runs `call` with a block of 32-bit words on the program's stack, the
+    /// way Windows passes a structure that exists only for the duration of
+    /// a callback. `call` receives the block's address.
+    pub(crate) fn with_stack_words<T>(
+        &mut self,
+        words: &[u32],
+        call: impl FnOnce(&mut Machine, u32) -> T,
+    ) -> T {
+        let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        self.with_stack_bytes(&bytes, call)
+    }
+
+    /// As [`Machine::with_stack_words`], for a block of bytes.
+    pub(crate) fn with_stack_bytes<T>(
+        &mut self,
+        bytes: &[u8],
+        call: impl FnOnce(&mut Machine, u32) -> T,
+    ) -> T {
+        let saved = self.cpu.regs[4];
+        let at = (saved - bytes.len() as u32) & !3;
+        self.memory.load(at, bytes).expect("the stack is mapped");
+        self.cpu.regs[4] = at;
+        let result = call(self, at);
+        self.cpu.regs[4] = saved;
+        result
+    }
+
     /// Writes a string and its terminator, truncating to `capacity` bytes.
     /// Returns the number of characters written, terminator excluded.
     pub(crate) fn put_string(&mut self, address: u32, capacity: u32, text: &[u8]) -> u32 {

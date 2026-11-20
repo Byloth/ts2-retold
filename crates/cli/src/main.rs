@@ -19,13 +19,15 @@ USAGE:
     andy info    [EXE]              Print the layout of the executable
     andy analyze [EXE] [--json OUT] Discover code and functions
     andy boot    [EXE] [--trace] [--limit N] [--args TEXT]
-                 [--stop-at ADDR] [--dump ADDR:LEN]...
+                 [--stop-at ADDR] [--dump ADDR:LEN]... [--surfaces DIR]
                                     Run the game in the interpreter until it
                                     stops, and report how far it got. --args
                                     is the game's own command line: -log
                                     makes it write its log, shown at the end.
                                     --stop-at halts before an instruction;
-                                    --dump prints guest memory at the end
+                                    --dump prints guest memory at the end;
+                                    --surfaces writes every DirectDraw
+                                    surface as a PNG file into DIR
                                     --with/--without ID switch a modification
     andy mods                       List the modifications (docs/MODIFICATIONS.md)
     andy difftest [EXE] --out FILE [--rounds N]
@@ -54,6 +56,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut mods = Modifications::default();
     let mut stop_at = None;
     let mut dumps = Vec::new();
+    let mut surfaces = None;
     let mut game_args = String::new();
     let mut limit = 2_000_000_000u64;
     let mut args = args.into_iter();
@@ -78,6 +81,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let text = args.next().ok_or("--dump needs ADDR:LEN")?;
                 let range = text.split_once(':').and_then(|(a, l)| Some((parse_hex(a)?, parse_hex(l)?)));
                 dumps.push(range.ok_or("--dump needs ADDR:LEN in hexadecimal")?);
+            }
+            "--surfaces" => {
+                surfaces = Some(PathBuf::from(args.next().ok_or("--surfaces needs a directory")?));
             }
             "--args" => game_args = args.next().ok_or("--args needs the command line text")?,
             "--limit" => {
@@ -145,6 +151,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 game_args,
                 stop_at,
                 dumps,
+                surfaces,
             },
         ),
         "difftest" => {
@@ -178,6 +185,7 @@ struct BootOptions {
     game_args: String,
     stop_at: Option<u32>,
     dumps: Vec<(u32, u32)>,
+    surfaces: Option<PathBuf>,
 }
 
 fn list_modifications() {
@@ -198,7 +206,7 @@ fn parse_hex(text: &str) -> Option<u32> {
 }
 
 fn boot(image: &Image, options: BootOptions) {
-    let BootOptions { mods, game_dir, trace, limit, game_args, stop_at, dumps } = options;
+    let BootOptions { mods, game_dir, trace, limit, game_args, stop_at, dumps, surfaces } = options;
     // The program reads the game directory and writes only to `out/run`.
     let write_dir = PathBuf::from("out/run");
     let log_path = write_dir.join("toy2.log");
@@ -273,6 +281,12 @@ fn boot(image: &Image, options: BootOptions) {
             None => println!("  not mapped"),
         }
     }
+    if let Some(directory) = surfaces {
+        match write_surfaces(&mut machine, &directory) {
+            Ok(count) => println!("\n{count} surfaces written to {}", directory.display()),
+            Err(error) => println!("\nsurfaces not written to {}: {error}", directory.display()),
+        }
+    }
     if matches!(stop, Stop::Fault(_) | Stop::Breakpoint) {
         let r = &machine.cpu.regs;
         println!(
@@ -280,6 +294,25 @@ fn boot(image: &Image, options: BootOptions) {
             r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]
         );
     }
+}
+
+/// Writes every DirectDraw surface as a PNG file. The files are derived
+/// from the game: they belong under `out/`, never in the repository.
+fn write_surfaces(machine: &mut Machine, directory: &Path) -> Result<usize, Box<dyn std::error::Error>> {
+    fs::create_dir_all(directory)?;
+    let images = machine.surface_images();
+    for image in &images {
+        let name = format!(
+            "surface-{:03}-{}x{}-{:?}-caps{:08x}.png",
+            image.index, image.width, image.height, image.format, image.caps
+        );
+        let file = std::io::BufWriter::new(fs::File::create(directory.join(name))?);
+        let mut encoder = png::Encoder::new(file, image.width, image.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header()?.write_image_data(&image.rgba)?;
+    }
+    Ok(images.len())
 }
 
 fn describe(stop: &Stop) -> String {

@@ -101,6 +101,20 @@ pub struct Surface {
     locked: bool,
 }
 
+/// What a surface holds, for inspection from outside the machine.
+#[derive(Debug, Clone)]
+pub struct SurfaceImage {
+    /// The surface's number, in order of creation.
+    pub index: usize,
+    pub width: u32,
+    pub height: u32,
+    pub format: PixelFormat,
+    /// Its `DDSCAPS` word.
+    pub caps: u32,
+    /// Rows of pixels, top first; red, green, blue and alpha bytes each.
+    pub rgba: Vec<u8>,
+}
+
 impl Surface {
     fn area(&self) -> Rect {
         Rect::whole(self.width, self.height)
@@ -146,6 +160,38 @@ impl Machine {
             locked: false,
         });
         index
+    }
+
+    /// The contents of every surface still in use, read from whichever of
+    /// its two homes is current, without changing either. Surfaces whose
+    /// pixels are palette indices are left out.
+    pub fn surface_images(&mut self) -> Vec<SurfaceImage> {
+        let mut images = Vec::new();
+        for index in 0..self.os.ddraw.surfaces.len() {
+            let surface = &self.os.ddraw.surfaces[index];
+            if surface.references == 0 || surface.format.to_argb(0).is_none() {
+                continue;
+            }
+            let (store, pitch, size) =
+                (surface.store, surface.pitch as usize, surface.format.bytes_per_pixel());
+            let (width, height, format, caps) = (surface.width, surface.height, surface.format, surface.caps);
+            let mut pixels = vec![0; surface.bytes() as usize];
+            if store.memory_current {
+                self.memory.read_bytes(store.memory, &mut pixels).expect("surface memory is mapped");
+            } else {
+                self.video.download(store.video, Rect::whole(width, height), pitch, &mut pixels);
+            }
+            let mut rgba = Vec::with_capacity((4 * width * height) as usize);
+            for row in pixels.chunks(pitch) {
+                for raw in row[..(width * size) as usize].chunks(size as usize) {
+                    let raw = raw.iter().rev().fold(0, |value, &byte| value << 8 | byte as u32);
+                    let [blue, green, red, alpha] = format.to_argb(raw).expect("checked above").to_le_bytes();
+                    rgba.extend_from_slice(&[red, green, blue, alpha]);
+                }
+            }
+            images.push(SurfaceImage { index, width, height, format, caps, rgba });
+        }
+        images
     }
 
     /// The surface behind an `IDirect3DTexture2` pointer.

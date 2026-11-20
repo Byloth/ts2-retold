@@ -3,6 +3,7 @@
 
 pub mod caps;
 pub mod device;
+pub mod light;
 pub mod material;
 pub mod vertex_buffer;
 pub mod viewport;
@@ -49,20 +50,13 @@ fn enum_devices(m: &mut Machine, a: &[u32]) -> HostResult {
             strings
         }
     };
-    // Both descriptions live on the program's stack during the callback.
-    let saved = m.cpu.regs[4];
-    let hardware = saved - 4 * caps::WORDS as u32;
-    let emulation = hardware - 4 * caps::WORDS as u32;
-    m.write_words(hardware, &caps::hardware());
-    m.write_words(emulation, &caps::emulation());
-    m.cpu.regs[4] = emulation;
-    let answer = m.call_guest(
-        callback,
-        &[strings.guid, strings.description, strings.name, hardware, emulation, context],
-    );
-    m.cpu.regs[4] = saved;
     // There is one device, so the answer (continue or stop) changes nothing.
-    answer?;
+    m.with_stack_words(&caps::hardware(), |m, hardware| {
+        m.with_stack_words(&caps::emulation(), |m, emulation| {
+            let arguments = [strings.guid, strings.description, strings.name, hardware, emulation, context];
+            m.call_guest(callback, &arguments)
+        })
+    })?;
     Ok(DD_OK)
 }
 
@@ -123,13 +117,7 @@ fn enum_z_buffer_formats(m: &mut Machine, a: &[u32]) -> HostResult {
     // DDPIXELFORMAT: size, flags, FourCC, depth bits, stencil bits, depth
     // mask, stencil mask, unused.
     let format = [32, DDPF_ZBUFFER, 0, 16, 0, 0xFFFF, 0, 0];
-    let saved = m.cpu.regs[4];
-    let at = saved - 32;
-    m.write_words(at, &format);
-    m.cpu.regs[4] = at;
-    let answer = m.call_guest(callback, &[at, context]);
-    m.cpu.regs[4] = saved;
-    answer?;
+    m.with_stack_words(&format, |m, at| m.call_guest(callback, &[at, context]))?;
     Ok(DD_OK)
 }
 
@@ -150,7 +138,7 @@ interface! { pub(crate) static DIRECT_3D_3 = "IDirect3D3";
     AddRef(1) => ddraw::add_ref,
     Release(1) => ddraw::release,
     EnumDevices(3) => enum_devices,
-    CreateLight(3),
+    CreateLight(3) => light::create_light,
     CreateMaterial(3) => material::create_material,
     CreateViewport(3) => viewport::create_viewport,
     FindDevice(3) => find_device,

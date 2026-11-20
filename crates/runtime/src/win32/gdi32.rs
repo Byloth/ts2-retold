@@ -10,6 +10,7 @@
 //! a round trip through one loses nothing here where it would on Windows.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::text::Font;
 use super::user32::Window;
@@ -29,6 +30,7 @@ const TRANSPARENT: u32 = 1;
 const OPAQUE: u32 = 2;
 const CLR_INVALID: u32 = u32::MAX;
 const CBM_INIT: u32 = 4;
+const DIB_RGB_COLORS: u32 = 0;
 const WHITE: u32 = 0x00FF_FFFF;
 const FW_DONTCARE: u32 = 0;
 const FW_NORMAL: u32 = 400;
@@ -46,9 +48,82 @@ fn swap_red_and_blue(color: u32) -> u32 {
 enum Pixels {
     /// A device-dependent bitmap: pixels held by the runtime, top row first.
     Device(Vec<u32>),
-    /// A DIB section: 24-bit pixels in the program's memory, where the
-    /// program may read and write them directly.
-    Section { bits: u32, stride: u32, bottom_up: bool },
+    /// A DIB section: pixels in the program's memory, where the program may
+    /// read and write them directly.
+    Section(Section),
+}
+
+#[derive(Debug, Clone)]
+struct Section {
+    /// Guest address of the pixels.
+    bits: u32,
+    /// Bytes from one row to the next.
+    stride: u32,
+    /// Whether the first stored row is the bottom one.
+    bottom_up: bool,
+    colors: Colors,
+}
+
+/// How the pixels of a DIB section encode colour.
+#[derive(Debug, Clone)]
+enum Colors {
+    /// Three bytes per pixel: blue, green, red.
+    Rgb24,
+    /// One byte per pixel, an index into a table of `0x00RRGGBB` colours.
+    Indexed8(Arc<[u32; 256]>),
+}
+
+impl Section {
+    /// Rows are padded to 32 bits.
+    fn stride(width: u32, depth: u32) -> u32 {
+        (width * depth).div_ceil(32) * 4
+    }
+
+    fn depth(&self) -> u32 {
+        match self.colors {
+            Colors::Rgb24 => 24,
+            Colors::Indexed8(_) => 8,
+        }
+    }
+
+    fn address(&self, height: i32, x: i32, y: i32) -> u32 {
+        let line = if self.bottom_up { height - 1 - y } else { y } as u32;
+        self.bits + line * self.stride + x as u32 * (self.depth() / 8)
+    }
+
+    fn read(&self, memory: &mut andy_cpu::memory::Memory, height: i32, x: i32, y: i32) -> u32 {
+        let at = self.address(height, x, y);
+        match &self.colors {
+            Colors::Rgb24 => memory.read(at, 3).unwrap_or(0),
+            Colors::Indexed8(table) => table[memory.read_u8(at).unwrap_or(0) as usize],
+        }
+    }
+
+    fn write(
+        &self,
+        memory: &mut andy_cpu::memory::Memory,
+        height: i32,
+        x: i32,
+        y: i32,
+        color: u32,
+    ) -> Option<()> {
+        let at = self.address(height, x, y);
+        match &self.colors {
+            Colors::Rgb24 => memory.load(at, &color.to_le_bytes()[..3]),
+            // The table's nearest colour, the first of them if several are
+            // equally near.
+            Colors::Indexed8(table) => {
+                let distance = |entry: &u32| {
+                    let channel =
+                        |shift: u32| ((entry >> shift & 0xFF) as i32 - (color >> shift & 0xFF) as i32).pow(2);
+                    channel(0) + channel(8) + channel(16)
+                };
+                let index =
+                    (0..256).min_by_key(|&index| distance(&table[index])).expect("a table has entries");
+                memory.load(at, &[index as u8])
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -163,7 +238,7 @@ impl Gdi {
         let bitmap = self.window_surfaces.get(&window)?;
         match &bitmap.pixels {
             Pixels::Device(pixels) => Some((pixels, bitmap.width, bitmap.height)),
-            Pixels::Section { .. } => None,
+            Pixels::Section(_) => None,
         }
     }
 }
@@ -254,11 +329,8 @@ impl Machine {
                 }
                 out[(row * width + column) as usize] = match &bitmap.pixels {
                     Pixels::Device(pixels) => pixels[(source_y * bitmap.width + source_x) as usize],
-                    Pixels::Section { bits, stride, bottom_up } => {
-                        let line = if *bottom_up { bitmap.height - 1 - source_y } else { source_y } as u32;
-                        let at = bits + line * stride + 3 * source_x as u32;
-                        // Stored blue, green, red.
-                        self.memory.read(at, 3).unwrap_or(0)
+                    Pixels::Section(section) => {
+                        section.read(&mut self.memory, bitmap.height, source_x, source_y)
                     }
                 };
             }
@@ -270,8 +342,8 @@ impl Machine {
     fn write_pixels(&mut self, context: u32, x: i32, y: i32, width: i32, pixels: &[u32]) -> Option<()> {
         let (bitmap_width, bitmap_height, section) = {
             let bitmap = self.target_bitmap(context)?;
-            let section = match bitmap.pixels {
-                Pixels::Section { bits, stride, bottom_up } => Some((bits, stride, bottom_up)),
+            let section = match &bitmap.pixels {
+                Pixels::Section(section) => Some(section.clone()),
                 Pixels::Device(_) => None,
             };
             (bitmap.width, bitmap.height, section)
@@ -286,7 +358,7 @@ impl Machine {
                 if target_x < 0 || target_x >= bitmap_width {
                     continue;
                 }
-                match section {
+                match &section {
                     None => {
                         if let Some(Bitmap { pixels: Pixels::Device(store), .. }) =
                             self.target_bitmap(context)
@@ -294,12 +366,8 @@ impl Machine {
                             store[(target_y * bitmap_width + target_x) as usize] = color;
                         }
                     }
-                    Some((bits, stride, bottom_up)) => {
-                        let line = if bottom_up { bitmap_height - 1 - target_y } else { target_y } as u32;
-                        let at = bits + line * stride + 3 * target_x as u32;
-                        for byte in 0..3 {
-                            self.memory.write(at + byte, 1, color >> (8 * byte))?;
-                        }
+                    Some(section) => {
+                        section.write(&mut self.memory, bitmap_height, target_x, target_y, color)?
                     }
                 }
             }
@@ -335,7 +403,7 @@ impl Machine {
         let pixels = if as_section {
             let bits = self.os.allocate(&mut self.memory, stride * rows);
             self.memory.load(bits, source).expect("block was just allocated");
-            Pixels::Section { bits, stride, bottom_up }
+            Pixels::Section(Section { bits, stride, bottom_up, colors: Colors::Rgb24 })
         } else {
             let mut pixels = Vec::with_capacity((width as u32 * rows) as usize);
             for row in 0..rows {
@@ -441,8 +509,8 @@ fn get_object(m: &mut Machine, a: &[u32]) -> u32 {
     let Some(bitmap) = m.os.gdi.bitmap(handle).map(|b| b.clone()) else {
         return 0;
     };
-    let (bits, stride, depth) = match bitmap.pixels {
-        Pixels::Section { bits, stride, .. } => (bits, stride, 24),
+    let (bits, stride, depth) = match &bitmap.pixels {
+        Pixels::Section(section) => (section.bits, section.stride, section.depth()),
         // Rows of a device-dependent bitmap are padded to 16 bits.
         Pixels::Device(_) => {
             let depth = m.os.user.display.bits_per_pixel;
@@ -457,8 +525,14 @@ fn get_object(m: &mut Machine, a: &[u32]) -> u32 {
     if capacity >= 84 && bits != 0 {
         // DIBSECTION: the BITMAP, a BITMAPINFOHEADER, three colour masks, a
         // section handle and an offset.
-        let header =
-            [40, bitmap.width as u32, bitmap.height as u32, 1 | 24 << 16, 0, stride * bitmap.height as u32];
+        let header = [
+            40,
+            bitmap.width as u32,
+            bitmap.height as u32,
+            1 | depth << 16,
+            0,
+            stride * bitmap.height as u32,
+        ];
         let mut words = [0u32; 21];
         words[..6].copy_from_slice(&basic);
         words[6..12].copy_from_slice(&header);
@@ -502,28 +576,52 @@ fn text_out(m: &mut Machine, context: u32, x: i32, y: i32, text: u32, count: u32
 fn create_dib_section(m: &mut Machine, a: &[u32]) -> HostResult {
     // Device context, BITMAPINFO, colour usage, where to put the address of
     // the bits, a file mapping and an offset into it.
-    let (info, bits_out, mapping) = (a[1], a[3], a[4]);
+    let (info, usage, bits_out, mapping) = (a[1], a[2], a[3], a[4]);
     let [size, width, height, planes_and_depth, compression]: [u32; 5] = m.read_words(info);
     let (width, height) = (width as i32, height as i32);
     if size != 40 || width <= 0 || height == 0 || planes_and_depth & 0xFFFF != 1 {
         return Ok(0);
     }
-    if planes_and_depth >> 16 != 24 || compression != 0 {
-        return not_implemented("CreateDIBSection of a bitmap that is not 24-bit uncompressed");
-    }
+    let depth = planes_and_depth >> 16;
+    let colors = match (depth, compression) {
+        (24, 0) => Colors::Rgb24,
+        (8, 0) if usage == DIB_RGB_COLORS => {
+            // The colour table follows the header: as many entries as the
+            // header's "colours used" says, or all 256; blue, green, red
+            // and a spare byte each.
+            let used = match m.memory.read(info + 32, 4) {
+                Some(0) => 256,
+                Some(count @ 1..=256) => count as usize,
+                _ => return Ok(0),
+            };
+            let mut table = [0; 256];
+            for (index, entry) in table.iter_mut().take(used).enumerate() {
+                let Some(color) = m.memory.read(info + 40 + 4 * index as u32, 4) else { return Ok(0) };
+                *entry = color & 0x00FF_FFFF;
+            }
+            Colors::Indexed8(Arc::new(table))
+        }
+        _ => {
+            let what = format!(
+                "CreateDIBSection of a {width} x {height} bitmap of {depth} bits, compression {compression}, \
+                 colour usage {usage}"
+            );
+            return not_implemented(&what);
+        }
+    };
     if mapping != 0 {
         return not_implemented("CreateDIBSection over a file mapping");
     }
     let rows = height.unsigned_abs();
-    let stride = (width as u32 * 3 + 3) & !3;
+    let stride = Section::stride(width as u32, depth);
     let Some(bytes) = stride.checked_mul(rows).filter(|&bytes| bytes <= 1 << 28) else { return Ok(0) };
     let bits = m.os.allocate(&mut m.memory, bytes);
     m.memory.load(bits, &vec![0; bytes as usize]).expect("block was just allocated");
     if bits_out != 0 && m.memory.write(bits_out, 4, bits).is_none() {
         return Ok(0);
     }
-    m.note(|| format!("{width} x {rows}, bits at {bits:#x}"));
-    let pixels = Pixels::Section { bits, stride, bottom_up: height > 0 };
+    m.note(|| format!("{width} x {rows} at {depth} bits, pixels at {bits:#x}"));
+    let pixels = Pixels::Section(Section { bits, stride, bottom_up: height > 0, colors });
     Ok(m.os.gdi.create(Object::Bitmap(Bitmap { width, height: rows as i32, pixels })))
 }
 
@@ -600,6 +698,18 @@ functions! { "GDI32.dll";
         m.os.gdi.create(Object::Font(FontObject { font, unsupported }))
     },
     CreateDIBSection(6) => create_dib_section,
+    GetDIBColorTable(4) => |m, a| {
+        // Device context, first entry, how many, where to: the colour table
+        // of the DIB section selected into the context. Returns how many
+        // entries were copied; a bitmap without a table has none.
+        let (first, count, out) = (a[1] as usize, a[2] as usize, a[3]);
+        let table = match m.target_bitmap(a[0]).map(|bitmap| &bitmap.pixels) {
+            Some(Pixels::Section(Section { colors: Colors::Indexed8(table), .. })) => table.clone(),
+            _ => return 0,
+        };
+        let entries = table.get(first..).map_or(&[][..], |rest| &rest[..count.min(rest.len())]);
+        if m.write_words(out, entries) { entries.len() as u32 } else { 0 }
+    },
     SelectObject(2) => select_object,
     DeleteObject(1) => |m, a| {
         // An object still selected into a device context cannot be deleted.
@@ -826,5 +936,45 @@ mod tests {
         let metrics = m.scratch(56);
         let function = crate::win32::lookup("GDI32.dll", "GetTextMetricsA").unwrap();
         assert!(matches!((function.handler)(&mut m, &[context, metrics]), Err(Stop::Unimplemented { .. })));
+    }
+
+    #[test]
+    fn an_indexed_section_reads_through_its_colour_table_and_writes_the_nearest_entry() {
+        let mut m = testing::machine();
+        // A 4x2 top-down 8-bit section with three colours: black, red, pale blue.
+        let info = m.scratch(40 + 4 * 3);
+        assert!(m.write_words(info, &[40, 4, -2i32 as u32, 1 | 8 << 16, 0, 0, 0, 0, 3, 0]));
+        assert!(m.write_words(info + 40, &[0, 0x00FF_0000, 0x0080_80FF]));
+        let bits_out = m.scratch(4);
+        let section = m.host("GDI32.dll", "CreateDIBSection", &[0, info, DIB_RGB_COLORS, bits_out, 0, 0]);
+        assert_ne!(section, 0);
+        let bits = m.memory.read(bits_out, 4).unwrap();
+        m.memory.load(bits, &[0, 1, 2, 1, 2, 2, 0, 0]).unwrap();
+
+        let out = m.scratch(84);
+        assert_eq!(m.host("GDI32.dll", "GetObjectA", &[section, 84, out]), 84);
+        let words: [u32; 8] = m.read_words(out);
+        assert_eq!(words[1..6], [4, 2, 4, 1 | 8 << 16, bits]);
+
+        let from = m.host("GDI32.dll", "CreateCompatibleDC", &[0]);
+        let to = m.host("GDI32.dll", "CreateCompatibleDC", &[0]);
+        let target = m.host("GDI32.dll", "CreateCompatibleBitmap", &[to, 4, 2]);
+        m.host("GDI32.dll", "SelectObject", &[from, section]);
+        m.host("GDI32.dll", "SelectObject", &[to, target]);
+        assert_eq!(m.host("GDI32.dll", "BitBlt", &[to, 0, 0, 4, 2, from, 0, 0, SRCCOPY]), 1);
+        assert_eq!(
+            m.read_pixels(to, 0, 0, 4, 2).unwrap(),
+            [0, 0x00FF_0000, 0x0080_80FF, 0x00FF_0000, 0x0080_80FF, 0x0080_80FF, 0, 0]
+        );
+
+        let table = m.scratch(16);
+        assert_eq!(m.host("GDI32.dll", "GetDIBColorTable", &[from, 1, 4, table]), 4);
+        assert_eq!(m.read_words::<4>(table), [0x00FF_0000, 0x0080_80FF, 0, 0]);
+        assert_eq!(m.host("GDI32.dll", "GetDIBColorTable", &[from, 254, 4, table]), 2);
+        assert_eq!(m.host("GDI32.dll", "GetDIBColorTable", &[to, 0, 4, table]), 0);
+
+        // Writing picks the nearest colour of the table.
+        m.write_pixels(from, 0, 0, 4, &[0x00F0_1010, 0x0090_90F0, 0x0010_0010, 0x00FF_FFFF]).unwrap();
+        assert_eq!(m.memory.dump(bits, 4).unwrap(), [1, 2, 0, 2]);
     }
 }

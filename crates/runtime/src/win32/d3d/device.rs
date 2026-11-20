@@ -2,6 +2,7 @@
 
 use super::IID_IDIRECT3DHALDEVICE;
 use crate::Machine;
+use crate::video::PixelFormat;
 use crate::win32::HostResult;
 use crate::win32::com::{E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
 use crate::win32::ddraw::surface::{DDSCAPS_3DDEVICE, DDSCAPS_ZBUFFER};
@@ -267,6 +268,30 @@ fn get_render_state(m: &mut Machine, a: &[u32]) -> u32 {
     if m.memory.write(a[2], 4, value).is_some() { DD_OK } else { DDERR_INVALIDPARAMS }
 }
 
+/// The formats a texture may have, in the order they are enumerated.
+pub(crate) const TEXTURE_FORMATS: [PixelFormat; 5] = [
+    PixelFormat::Rgb565,
+    PixelFormat::Argb1555,
+    PixelFormat::Argb4444,
+    PixelFormat::Xrgb8888,
+    PixelFormat::Argb8888,
+];
+
+/// `EnumTextureFormats`: calls back with each texture format until told to stop.
+fn enum_texture_formats(m: &mut Machine, a: &[u32]) -> HostResult {
+    let (callback, context) = (a[1], a[2]);
+    if m.device_index(a[0]).is_none() {
+        return Ok(DDERR_INVALIDOBJECT);
+    }
+    for format in TEXTURE_FORMATS {
+        let answer = m.with_stack_words(&format.to_words(), |m, at| m.call_guest(callback, &[at, context]));
+        if answer? != ddraw::DDENUMRET_OK {
+            break;
+        }
+    }
+    Ok(DD_OK)
+}
+
 fn set_light_state(m: &mut Machine, a: &[u32]) -> u32 {
     let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
     // Light states are numbered from 1.
@@ -337,7 +362,7 @@ interface! { static DEVICE_3 = "IDirect3DDevice3";
     AddViewport(2) => add_viewport,
     DeleteViewport(2),
     NextViewport(4),
-    EnumTextureFormats(3),
+    EnumTextureFormats(3) => enum_texture_formats,
     BeginScene(1) => begin_scene,
     EndScene(1) => end_scene,
     GetDirect3D(2),

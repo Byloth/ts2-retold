@@ -37,7 +37,7 @@ const DDSCL_FULLSCREEN: u32 = 0x0001;
 const DDSCL_NORMAL: u32 = 0x0008;
 const DDSCL_EXCLUSIVE: u32 = 0x0010;
 
-const DDENUMRET_OK: u32 = 1;
+pub(crate) const DDENUMRET_OK: u32 = 1;
 /// Refresh rate of every mode, in hertz.
 const DISPLAY_REFRESH_RATE: u32 = 60;
 const DDEDM_REFRESHRATES: u32 = 0x1;
@@ -97,6 +97,7 @@ pub struct State {
     pub(crate) devices: Vec<d3d::device::Device>,
     pub(crate) viewports: Vec<d3d::viewport::Viewport>,
     pub(crate) materials: Vec<d3d::material::Material>,
+    pub(crate) lights: Vec<d3d::light::Light>,
     pub(crate) vertex_buffers: Vec<d3d::vertex_buffer::VertexBuffer>,
     /// Whole-surface transfers from memory to the video backend, and back.
     /// The second kind is the expensive one.
@@ -344,13 +345,8 @@ fn enum_display_modes(m: &mut Machine, a: &[u32], description_words: usize) -> H
         let mut words = [0; surface_desc::WORDS_V2];
         words[..surface_desc::WORDS].copy_from_slice(&mode_description(mode, refresh_rate));
         words[surface_desc::SIZE] = 4 * description_words as u32;
-        // The description lives on the program's stack during the callback.
-        let saved = m.cpu.regs[4];
-        let at = saved - 4 * description_words as u32;
-        m.write_words(at, &words[..description_words]);
-        m.cpu.regs[4] = at;
-        let answer = m.call_guest(callback, &[at, context]);
-        m.cpu.regs[4] = saved;
+        let answer =
+            m.with_stack_words(&words[..description_words], |m, at| m.call_guest(callback, &[at, context]));
         if answer? != DDENUMRET_OK {
             break;
         }

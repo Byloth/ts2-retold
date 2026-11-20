@@ -1,7 +1,7 @@
 //! Viewports (`IDirect3DViewport3`): the rectangle of the render target a
 //! device draws into, and the way that rectangle is cleared.
 
-use super::device;
+use super::{device, light};
 use crate::video::{PixelFormat, Rect};
 use crate::win32::HostResult;
 use crate::win32::com::{E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
@@ -27,6 +27,8 @@ pub struct Viewport {
     data: Option<[u32; VIEWPORT2_WORDS]>,
     /// The device it was added to.
     pub(super) device: Option<usize>,
+    /// The lights added to it, in order.
+    pub(super) lights: Vec<usize>,
 }
 
 impl Viewport {
@@ -54,7 +56,13 @@ pub(super) fn create_viewport(m: &mut Machine, a: &[u32]) -> u32 {
     }
     let index = m.os.ddraw.viewports.len();
     let pointer = m.interface_pointer(&VIEWPORT_3, index as u32);
-    m.os.ddraw.viewports.push(Viewport { references: 1, pointer, data: None, device: None });
+    m.os.ddraw.viewports.push(Viewport {
+        references: 1,
+        pointer,
+        data: None,
+        device: None,
+        lights: Vec::new(),
+    });
     if m.memory.write(a[1], 4, pointer).is_some() { DD_OK } else { DDERR_INVALIDPARAMS }
 }
 
@@ -153,8 +161,14 @@ interface! { static VIEWPORT_3 = "IDirect3DViewport3";
     SetBackgroundDepth(2),
     GetBackgroundDepth(3),
     Clear(4),
-    AddLight(2),
-    DeleteLight(2),
+    AddLight(2) => |m, a| match m.viewport_index(a[0]) {
+        Some(index) => light::add_to_viewport(m, index, a[1]),
+        None => DDERR_INVALIDOBJECT,
+    },
+    DeleteLight(2) => |m, a| match m.viewport_index(a[0]) {
+        Some(index) => light::remove_from_viewport(m, index, a[1]),
+        None => DDERR_INVALIDOBJECT,
+    },
     NextLight(4),
     GetViewport2(2) => get_viewport2,
     SetViewport2(2) => set_viewport2,
