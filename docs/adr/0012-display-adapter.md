@@ -1,7 +1,7 @@
 # ADR 0012 — The display adapter the game sees
 
-Status: Accepted (2026-11-20). The renderer behind it is still an open
-decision (see the end).
+Status: Accepted (2026-11-20), including the renderer order chosen by the owner
+the same day.
 
 ## Decision
 
@@ -34,17 +34,27 @@ chooses its code paths from these words.
   modifications on top of this baseline (ADR 0004), not part of it.
 - The capability words are a contract for whatever renderer sits behind.
 
-## Open: the renderer
+## The renderer: GPU first
 
 The interfaces above end in two kinds of work: 2D surfaces the game locks and
 writes with the CPU, and triangles drawn into the same surfaces. Two orders of
-construction are possible:
+construction were considered: a deterministic software reference renderer
+first with the GPU renderer validated against it, or the GPU renderer
+directly. **The owner chose the GPU renderer directly** (`wgpu`, which serves
+native targets and WebGPU from one code base).
 
-1. a **software reference renderer** first (exact Direct3D 6 rasterisation
-   rules, deterministic, testable without a GPU, runs in the browser as is),
-   then a GPU renderer validated against it, the way generated code is
-   validated against the interpreter;
-2. a **GPU renderer** first (`wgpu`, for native and WebGPU), with the
-   CPU-written surfaces synchronised to it.
+What follows from it:
 
-Either way the GPU renderer is the one that ships. The choice is the owner's.
+- Every surface has two homes: memory the game can lock, and a GPU texture.
+  Each operation runs where the surface's current contents already are
+  (a blit onto a surface last drawn by the GPU is a GPU blit), and contents
+  move between the two only when an operation truly needs the other side.
+  Transfers from the GPU back to memory are the expensive direction and are
+  counted, so that a frame that needs one is visible in the statistics.
+- Without a reference renderer, correctness is checked by rendering off
+  screen, reading the image back and comparing: against images of the
+  original game supplied by the owner, and against stored images for
+  regression. Images depend on the GPU and driver; tests that compare images
+  allow for that or run on one named software Vulkan driver.
+- The runtime talks to the renderer through an interface of its own, so it
+  can still be built and tested, and the game booted, with no GPU at all.

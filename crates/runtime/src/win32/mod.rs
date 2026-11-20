@@ -12,6 +12,7 @@ mod advapi32;
 pub mod com;
 pub mod d3d;
 pub mod ddraw;
+pub mod dsound;
 mod gdi32;
 mod kernel32;
 mod ole32;
@@ -79,10 +80,21 @@ macro_rules! functions {
 }
 pub(crate) use functions;
 
+/// Names of the functions a DLL exports only by number.
+fn ordinal_name(dll: &str, name: &str) -> Option<&'static str> {
+    match (dll.to_ascii_uppercase().as_str(), name) {
+        ("DSOUND.DLL", "#1") => Some("DirectSoundCreate"),
+        ("DSOUND.DLL", "#2") => Some("DirectSoundEnumerateA"),
+        _ => None,
+    }
+}
+
 pub fn lookup(dll: &str, name: &str) -> Option<&'static Function> {
+    let name = ordinal_name(dll, name).unwrap_or(name);
     [
         kernel32::FUNCTIONS,
         ddraw::FUNCTIONS,
+        dsound::FUNCTIONS,
         advapi32::FUNCTIONS,
         user32::FUNCTIONS,
         gdi32::FUNCTIONS,

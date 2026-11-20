@@ -13,8 +13,8 @@ cargo run --release --bin andy -- boot --trace
 
 **About 120.4 million instructions and 730 host calls**, at about 55 million
 instructions per second in the interpreter, then it stops at
-`DSOUND DirectSoundEnumerateA`: graphics hardware has been examined and
-chosen, sound is next.
+`DSOUND DirectSoundCreate`: graphics hardware has been examined and chosen,
+the sound driver enumerated; creating the sound device is next.
 
 | Phase | What happens |
 |---|---|
@@ -27,7 +27,7 @@ chosen, sound is next.
 | "Examine machine" | Creates a helper window, enumerates DirectDraw drivers, creates DirectDraw, sets the cooperative level, reads capabilities and video memory, enumerates 18 display modes, obtains `IDirect3D2`, enumerates 3D devices |
 | "Select drivers" | Picks the primary driver, the hardware 3D device, full screen |
 | Disc | Reads `cd.txt` (base CD audio track) |
-| Sound | `DirectSoundEnumerateA` — not implemented yet |
+| Sound | Enumerates sound drivers; `DirectSoundCreate` — not implemented yet |
 
 ## The game's own log
 
@@ -87,5 +87,9 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-DirectSound and DirectInput enumeration, the mode-selection logic, then
-surfaces and the 3D device (ADR 0012).
+1. DirectSound objects and buffers (the game sets a cooperative level, creates
+   buffers and stops one during start-up), then DirectInput.
+2. Why the game selected an 8-bit mode.
+3. The game's main window, `SetDisplayMode`, the primary surface with its
+   back buffer and z-buffer, the 3D device: the first work for the GPU
+   renderer (ADR 0012).
