@@ -230,7 +230,6 @@ fn draw_state(device: &Device) -> Result<DrawState, Stop> {
         (STIPPLEDALPHA, "stippled alpha", &[0]),
         (STIPPLEENABLE, "stippling", &[0]),
         (EDGEANTIALIAS, "edge antialiasing", &[0]),
-        (ZBIAS, "a depth bias", &[0]),
         (STENCILENABLE, "stencil", &[0]),
         (WRAPU, "texture wrapping", &[0]),
         (WRAPV, "texture wrapping", &[0]),
@@ -246,6 +245,13 @@ fn draw_state(device: &Device) -> Result<DrawState, Stop> {
         (Some(_), 1) => Some(DepthState {
             compare: compare(states[ZFUNC], "depth function")?,
             write: states[ZWRITEENABLE] != 0,
+            // `ZBIAS` runs from 0 to 16. The adapter moves a triangle one
+            // step of its 16-bit depth per unit (what cards did with it
+            // varied; UNVERIFIED).
+            bias: match states[ZBIAS] {
+                bias @ 0..=16 => bias as u8,
+                other => return unsupported(format!("a depth bias of {other}")),
+            },
         }),
         _ => None,
     };
@@ -285,14 +291,15 @@ fn draw_state(device: &Device) -> Result<DrawState, Stop> {
 }
 
 /// Where the parts of a vertex are, from its flexible vertex format.
-struct Layout {
-    size: u32,
-    diffuse: Option<usize>,
-    specular: Option<usize>,
-    uv: Option<usize>,
+pub(super) struct Layout {
+    pub size: u32,
+    pub normal: Option<usize>,
+    pub diffuse: Option<usize>,
+    pub specular: Option<usize>,
+    pub uv: Option<usize>,
 }
 
-fn layout(format: u32) -> Option<Layout> {
+pub(super) fn layout(format: u32) -> Option<Layout> {
     let size = vertex_size(format)?;
     let mut offset = if format & D3DFVF_POSITION_MASK == D3DFVF_XYZRHW { 16 } else { 12 };
     let mut take = |present: bool, bytes: usize| {
@@ -300,12 +307,12 @@ fn layout(format: u32) -> Option<Layout> {
         offset += if present { bytes } else { 0 };
         at
     };
-    take(format & D3DFVF_NORMAL != 0, 12);
+    let normal = take(format & D3DFVF_NORMAL != 0, 12);
     take(format & D3DFVF_RESERVED1 != 0, 4);
     let diffuse = take(format & D3DFVF_DIFFUSE != 0, 4);
     let specular = take(format & D3DFVF_SPECULAR != 0, 4);
     let uv = take(format & D3DFVF_TEXCOUNT_MASK != 0, 8);
-    Some(Layout { size, diffuse, specular, uv })
+    Some(Layout { size, normal, diffuse, specular, uv })
 }
 
 /// Vertices the program transformed itself, as clip-space vertices.
@@ -371,10 +378,13 @@ struct Primitive {
     vertex_count: u32,
     /// `D3DDP_*`.
     flags: u32,
+    /// The vertex buffer the vertices are in and the first one used, when
+    /// they come from one.
+    buffer: Option<(usize, u32)>,
 }
 
 fn draw(m: &mut Machine, this: u32, primitive: Primitive, indices: Option<Vec<u16>>) -> HostResult {
-    let Primitive { kind: primitive, format, vertices, vertex_count, flags } = primitive;
+    let Primitive { kind: primitive, format, vertices, vertex_count, flags, buffer } = primitive;
     let Some(device_index) = m.device_index(this) else { return Ok(DDERR_INVALIDOBJECT) };
     if !(1..=6).contains(&primitive) {
         return Ok(D3DERR_INVALIDPRIMITIVETYPE);
@@ -436,7 +446,27 @@ fn draw(m: &mut Machine, this: u32, primitive: Primitive, indices: Option<Vec<u1
             color_key,
         });
     }
-    let vertices = transformed_vertices(&bytes, &layout, viewport);
+    let mut vertices = transformed_vertices(&bytes, &layout, viewport);
+    // Vertices Direct3D transformed into a buffer, and the program has not
+    // touched since, are drawn from their positions before the division by
+    // `w`, so that the backend can clip them (see `VertexBuffer`).
+    if let Some((buffer, first)) = buffer {
+        let buffer = &m.os.ddraw.vertex_buffers[buffer];
+        if buffer.remembered_viewport == Some(viewport) {
+            let remembered = &buffer.remembered[first as usize..][..vertices.len()];
+            for ((vertex, remembered), written) in
+                vertices.iter_mut().zip(remembered).zip(bytes.chunks_exact(layout.size as usize))
+            {
+                let current: [u32; 4] = std::array::from_fn(|n| {
+                    u32::from_le_bytes(written[4 * n..4 * n + 4].try_into().expect("four bytes"))
+                });
+                if let Some((numbers, clip)) = remembered.filter(|(numbers, _)| *numbers == current) {
+                    let _ = numbers;
+                    vertex.position = clip;
+                }
+            }
+        }
+    }
     m.note(|| format!("{} triangles, {state:?}", indices.len() / 3));
     if indices.is_empty() {
         return Ok(DD_OK);
@@ -463,7 +493,8 @@ fn draw(m: &mut Machine, this: u32, primitive: Primitive, indices: Option<Vec<u1
 
 /// `DrawPrimitive`: primitive type, vertex format, vertices, their count, flags.
 pub(super) fn draw_primitive(m: &mut Machine, a: &[u32]) -> HostResult {
-    let primitive = Primitive { kind: a[1], format: a[2], vertices: a[3], vertex_count: a[4], flags: a[5] };
+    let primitive =
+        Primitive { kind: a[1], format: a[2], vertices: a[3], vertex_count: a[4], flags: a[5], buffer: None };
     draw(m, a[0], primitive, None)
 }
 
@@ -476,7 +507,50 @@ pub(super) fn draw_indexed_primitive(m: &mut Machine, a: &[u32]) -> HostResult {
     }
     let Some(bytes) = m.memory.dump(indices, 2 * count) else { return Ok(DDERR_INVALIDPARAMS) };
     let indices = bytes.as_chunks::<2>().0.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
-    let primitive = Primitive { kind: a[1], format: a[2], vertices: a[3], vertex_count: a[4], flags: a[7] };
+    let primitive =
+        Primitive { kind: a[1], format: a[2], vertices: a[3], vertex_count: a[4], flags: a[7], buffer: None };
+    draw(m, a[0], primitive, Some(indices))
+}
+
+/// `DrawPrimitiveVB`: primitive type, vertex buffer, first vertex, count, flags.
+pub(super) fn draw_primitive_vb(m: &mut Machine, a: &[u32]) -> HostResult {
+    let Some(index) = m.vertex_buffer_index(a[2]) else { return Ok(DDERR_INVALIDOBJECT) };
+    let buffer = &m.os.ddraw.vertex_buffers[index];
+    let (first, count) = (a[3], a[4]);
+    if first.checked_add(count).is_none_or(|end| end > buffer.count) {
+        return Ok(DDERR_INVALIDPARAMS);
+    }
+    let Some(size) = vertex_size(buffer.format) else { return Ok(D3DERR_INVALIDVERTEXFORMAT) };
+    let primitive = Primitive {
+        kind: a[1],
+        format: buffer.format,
+        vertices: buffer.memory + first * size,
+        vertex_count: count,
+        flags: a[5],
+        buffer: Some((index, first)),
+    };
+    draw(m, a[0], primitive, None)
+}
+
+/// `DrawIndexedPrimitiveVB`: primitive type, vertex buffer, 16-bit indices
+/// into the whole of it, their count, flags.
+pub(super) fn draw_indexed_primitive_vb(m: &mut Machine, a: &[u32]) -> HostResult {
+    let (indices, count) = (a[3], a[4]);
+    let Some(index) = m.vertex_buffer_index(a[2]) else { return Ok(DDERR_INVALIDOBJECT) };
+    if count > D3DMAXNUMVERTICES {
+        return Ok(D3DERR_TOOMANYVERTICES);
+    }
+    let Some(bytes) = m.memory.dump(indices, 2 * count) else { return Ok(DDERR_INVALIDPARAMS) };
+    let indices = bytes.as_chunks::<2>().0.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
+    let buffer = &m.os.ddraw.vertex_buffers[index];
+    let primitive = Primitive {
+        kind: a[1],
+        format: buffer.format,
+        vertices: buffer.memory,
+        vertex_count: buffer.count,
+        flags: a[5],
+        buffer: Some((index, 0)),
+    };
     draw(m, a[0], primitive, Some(indices))
 }
 

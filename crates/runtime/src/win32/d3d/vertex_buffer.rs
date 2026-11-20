@@ -1,9 +1,13 @@
 //! Vertex buffers (`IDirect3DVertexBuffer`): arrays of vertices kept by
 //! Direct3D, which the program fills through a lock.
 
-use crate::Machine;
+use super::device::{self, PROJECTION, VIEW, WORLD};
+use super::{draw, lighting, viewport};
+use crate::video::Rect;
+use crate::win32::HostResult;
 use crate::win32::com::{E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
 use crate::win32::ddraw::{self, DD_OK, DDERR_INVALIDOBJECT, DDERR_INVALIDPARAMS};
+use crate::{Machine, Stop};
 
 const IID_IDIRECT3DVERTEXBUFFER: Guid =
     guid(0x7A503555, 0x4A83, 0x11D1, [0xA5, 0xDB, 0x00, 0xA0, 0xC9, 0x03, 0x67, 0xF8]);
@@ -61,6 +65,15 @@ pub struct VertexBuffer {
     /// Guest address of the vertices.
     pub memory: u32,
     locked: bool,
+    /// For each vertex `ProcessVertices` wrote here: the four numbers it
+    /// wrote, and the position before the division by `w`, as the video
+    /// backend takes it. Direct3D kept the like beside its buffers, so that
+    /// triangles reaching behind the viewer could still be clipped when
+    /// drawn. A vertex the program has since changed no longer matches the
+    /// numbers and is drawn from what the buffer holds.
+    pub(super) remembered: Vec<Option<([u32; 4], [f32; 4])>>,
+    /// The viewport rectangle the remembered positions are for.
+    pub(super) remembered_viewport: Option<Rect>,
 }
 
 impl Machine {
@@ -99,6 +112,8 @@ pub(super) fn create_vertex_buffer(m: &mut Machine, a: &[u32]) -> u32 {
         count,
         memory,
         locked: false,
+        remembered: vec![None; count as usize],
+        remembered_viewport: None,
     });
     if m.memory.write(out, 4, pointer).is_some() { DD_OK } else { DDERR_INVALIDPARAMS }
 }
@@ -154,6 +169,139 @@ fn unlock(m: &mut Machine, a: &[u32]) -> u32 {
     }
 }
 
+/// `ProcessVertices`: fills part of this buffer with the transformed
+/// vertices of another, as Direct3D transforms them for drawing.
+///
+/// A position is multiplied by the world, view and projection matrices of
+/// the device; the result is divided by its `w` and mapped from the
+/// viewport's clip volume to the viewport's rectangle; the fourth number
+/// written is `1 / w`. Colours and texture coordinates are copied. The
+/// arithmetic is in single precision in the order written here, and
+/// follows `process_vertices_strided` of Wine's Direct3D.
+///
+/// Nothing is clipped: a vertex behind the viewer gets the coordinates the
+/// formulas give it, and one with no `w` to divide by keeps its `w` of one.
+fn process_vertices(m: &mut Machine, a: &[u32]) -> HostResult {
+    const D3DVOP_TRANSFORM: u32 = 1;
+    // Asks for vertices outside the view to be marked for clipping. The
+    // marks are the remembered positions, which are kept in any case; what
+    // Direct3D wrote into the buffer for such a vertex is UNVERIFIED and
+    // is here what it writes for any other.
+    const D3DVOP_CLIP: u32 = 4;
+    const D3DVOP_LIGHT: u32 = 1 << 10;
+    let (operation, first, count, source, source_first, device_pointer, flags) =
+        (a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+    let unsupported = |what: String| {
+        Err(Stop::Unimplemented {
+            dll: "IDirect3DVertexBuffer".into(),
+            name: format!("ProcessVertices {what}"),
+        })
+    };
+    let (Some(target), Some(source)) = (m.vertex_buffer_index(a[0]), m.vertex_buffer_index(source)) else {
+        return Ok(DDERR_INVALIDOBJECT);
+    };
+    let Some(device) = m.device_index(device_pointer) else { return Ok(DDERR_INVALIDOBJECT) };
+    if operation & !(D3DVOP_CLIP | D3DVOP_LIGHT) != D3DVOP_TRANSFORM || flags != 0 {
+        return unsupported(format!("with operation {operation:#x} and flags {flags:#x}"));
+    }
+    let buffers = &m.os.ddraw.vertex_buffers;
+    let (to, from) = (&buffers[target], &buffers[source]);
+    let in_range =
+        |buffer: &VertexBuffer, start: u32| start.checked_add(count).is_some_and(|end| end <= buffer.count);
+    if !in_range(to, first) || !in_range(from, source_first) {
+        return Ok(DDERR_INVALIDPARAMS);
+    }
+    let (Some(out), Some(input)) = (draw::layout(to.format), draw::layout(from.format)) else {
+        return Ok(DDERR_INVALIDPARAMS);
+    };
+    if to.format & 0xE != D3DFVF_XYZRHW || from.format & 0xE != D3DFVF_XYZ {
+        return unsupported(format!("from format {:#x} to format {:#x}", from.format, to.format));
+    }
+    let (to_address, from_address) = (to.memory + first * out.size, from.memory + source_first * input.size);
+
+    let state = &m.os.ddraw.devices[device];
+    let Some(current) = state.current_viewport else {
+        return unsupported("without a current viewport".into());
+    };
+    let (Some(area), Some([clip_x, clip_y, clip_width, clip_height, min_z, max_z])) =
+        (viewport::area(m, current), viewport::clip_volume(m, current))
+    else {
+        return unsupported("with a viewport without dimensions".into());
+    };
+    let transforms = &state.transforms;
+    let matrix =
+        device::multiply(&device::multiply(&transforms[WORLD], &transforms[VIEW]), &transforms[PROJECTION]);
+
+    // Vertices are lit when asked, if they have normals and a material is
+    // selected; otherwise their colours are copied.
+    let lighting = match input.normal {
+        Some(_) if operation & D3DVOP_LIGHT != 0 => lighting::prepare(m, device)?,
+        _ => None,
+    };
+    let Some(vertices) = m.memory.dump(from_address, count * input.size) else {
+        return Ok(DDERR_INVALIDPARAMS);
+    };
+    let mut result = vec![0u8; (count * out.size) as usize];
+    let mut remembered = Vec::with_capacity(count as usize);
+    // Half a pixel, in the backend's clip space: a screen coordinate names
+    // a pixel's centre, the backend's viewport maps to pixel edges.
+    let (half_x, half_y) = (1.0 / area.width as f32, 1.0 / area.height as f32);
+    let float =
+        |bytes: &[u8], at: usize| f32::from_le_bytes(bytes[at..at + 4].try_into().expect("four bytes"));
+    for (vertex, written) in
+        vertices.chunks_exact(input.size as usize).zip(result.chunks_exact_mut(out.size as usize))
+    {
+        let p = [float(vertex, 0), float(vertex, 4), float(vertex, 8)];
+        let along = |column: usize| {
+            p[0] * matrix[column]
+                + p[1] * matrix[4 + column]
+                + p[2] * matrix[8 + column]
+                + matrix[12 + column]
+        };
+        let (mut x, mut y, mut z, w) = (along(0), along(1), along(2), along(3));
+        let clip = [
+            (x - clip_x * w) * 2.0 / clip_width - w + half_x * w,
+            w - (clip_y * w - y) * 2.0 / clip_height - half_y * w,
+            (z - min_z * w) / (max_z - min_z),
+            w,
+        ];
+        let rhw = if w != 0.0 { 1.0 / w } else { 1.0 };
+        x = (x * rhw - clip_x) / clip_width * area.width as f32 + area.x as f32;
+        y = (clip_y - y * rhw) / clip_height * area.height as f32 + area.y as f32;
+        z = (z * rhw - min_z) / (max_z - min_z);
+        for (n, value) in [x, y, z, rhw].into_iter().enumerate() {
+            written[4 * n..4 * n + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        remembered.push(Some(([x, y, z, rhw].map(f32::to_bits), clip)));
+        // A colour the source does not have is white for the diffuse one
+        // and black for the specular one.
+        let word = |at: usize| u32::from_le_bytes(vertex[at..at + 4].try_into().expect("four bytes"));
+        let (diffuse, specular) = match (&lighting, input.normal) {
+            (Some(lighting), Some(normal)) => {
+                let normal = [float(vertex, normal), float(vertex, normal + 4), float(vertex, normal + 8)];
+                lighting.light(p, normal, input.diffuse.map(word))
+            }
+            _ => (input.diffuse.map_or(0xFFFF_FFFF, word), input.specular.map_or(0, word)),
+        };
+        if let Some(at) = out.diffuse {
+            written[at..at + 4].copy_from_slice(&diffuse.to_le_bytes());
+        }
+        if let Some(at) = out.specular {
+            written[at..at + 4].copy_from_slice(&specular.to_le_bytes());
+        }
+        if let (Some(at), Some(from)) = (out.uv, input.uv) {
+            written[at..at + 8].copy_from_slice(&vertex[from..from + 8]);
+        }
+    }
+    let buffer = &mut m.os.ddraw.vertex_buffers[target];
+    if buffer.remembered_viewport != Some(area) {
+        buffer.remembered.fill(None);
+        buffer.remembered_viewport = Some(area);
+    }
+    buffer.remembered[first as usize..][..count as usize].copy_from_slice(&remembered);
+    Ok(if m.memory.load(to_address, &result).is_some() { DD_OK } else { DDERR_INVALIDPARAMS })
+}
+
 fn get_description(m: &mut Machine, a: &[u32]) -> u32 {
     let Some(index) = m.vertex_buffer_index(a[0]) else { return DDERR_INVALIDOBJECT };
     let buffer = &m.os.ddraw.vertex_buffers[index];
@@ -167,7 +315,7 @@ interface! { static VERTEX_BUFFER = "IDirect3DVertexBuffer";
     Release(1) => release,
     Lock(4) => lock,
     Unlock(1) => unlock,
-    ProcessVertices(7),
+    ProcessVertices(8) => process_vertices,
     GetVertexBufferDesc(2) => get_description,
     Optimize(3),
 }

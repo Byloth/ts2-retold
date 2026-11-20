@@ -302,6 +302,9 @@ pub struct DepthState {
     pub compare: Compare,
     /// Whether drawn pixels replace the depth already there.
     pub write: bool,
+    /// How many steps of the depth surface's resolution the triangles are
+    /// brought towards the viewer, to win against others in the same plane.
+    pub bias: u8,
 }
 
 /// Everything that decides how triangles become pixels.

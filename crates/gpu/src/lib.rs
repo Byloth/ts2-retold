@@ -603,15 +603,17 @@ impl Gpu {
         // With a depth surface attached every pipeline names its format;
         // one that does not use depth always passes and never writes.
         let depth_stencil = key.depth_attached.then(|| {
-            let (function, write) = key.depth.map_or((wgpu::CompareFunction::Always, false), |depth| {
-                (compare(depth.compare), depth.write)
-            });
+            let (function, write, bias) =
+                key.depth.map_or((wgpu::CompareFunction::Always, false, 0), |depth| {
+                    (compare(depth.compare), depth.write, depth.bias)
+                });
             wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(write),
                 depth_compare: Some(function),
                 stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+                // Towards the viewer, in steps of the depth format.
+                bias: wgpu::DepthBiasState { constant: -(bias as i32), ..Default::default() },
             }
         });
         let attributes =
@@ -1245,8 +1247,10 @@ mod tests {
         let depth = gpu.create_surface(8, 8, PixelFormat::Depth16);
         gpu.fill(target, Rect::whole(8, 8), 0);
         gpu.fill(depth, Rect::whole(8, 8), 0xFFFF);
-        let tested =
-            |write| DrawState { depth: Some(DepthState { compare: Compare::LessEqual, write }), ..opaque() };
+        let tested = |write| DrawState {
+            depth: Some(DepthState { compare: Compare::LessEqual, write, bias: 0 }),
+            ..opaque()
+        };
         // Near on the left half; far over everything is hidden behind it;
         // nearer still but without a depth test or write does not block
         // what comes after.

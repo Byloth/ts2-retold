@@ -11,11 +11,15 @@ cargo run --release --bin andy -- boot --trace
 
 ## How far it gets
 
-**About 1136 million instructions and 4170 frames**, then it stops at
-`IDirect3DDevice3::SetTransform`: after the movies and the title screen
+**It no longer stops by itself.** After the movies and the title screen
 ("PRESS JUMP"), which fades out when nobody presses anything, the game
-starts drawing in three dimensions and needs Direct3D's transformation and
-lighting.
+plays its demo: Andy's room in three dimensions, Buzz running, "DEMO MODE"
+and the energy display on top. Run to 1260 million instructions it has
+shown 4313 frames, the last 141 of the demo at about 4,500 triangles each
+(37 draw states in all).
+
+Known to be wrong in the picture: magenta patches on Buzz, and a white
+vertical streak above him. Nothing has been compared with the original yet.
 
 Before that it shows the trademark and rating screens with their fades,
 plays its introduction movies through DirectShow (ADR 0015) and draws the
@@ -60,7 +64,7 @@ by eye.
 | Loading screen | Each frame: `Clear2`, `BeginScene`, the backdrop copied with `BltFast`, `DrawIndexedPrimitive` (a strip of four transformed-and-lit vertices: "LOADING…"), `EndScene`, `Flip` |
 | Movies | `IDirectSound::Release`, `CoInitialize`, a multimedia stream per movie: `Initialize`, `AddMediaStream` for video and audio, `OpenFile` (`rtlibs\\acti.dll`, then the others of the introduction), `GetMediaStream`, `CreateSample`, `GetSurface`, `SetState`; per picture the sample's `Update`, `GetSurfaceDesc` and a stretching `Blt` to the back buffer, until `Update` reports the end |
 | Title screen | DirectSound again, the title backdrop and "PRESS JUMP" drawn as textured quads. The music is streamed: a looping buffer with `IDirectSoundNotify` positions, refilled by the stream thread from `audio\*.wav` each time an event is signalled |
-| First 3D scene | The title fades out; `SetTransform` — not implemented yet |
+| Demo | The title fades out and the demo level is drawn. Per object: `SetTransform` for the world matrix, `ProcessVertices` from a buffer of untransformed vertices into one of transformed ones (transform; often with clip, sometimes with lighting), `DrawIndexedPrimitiveVB`. Lights are set every frame; `ZBIAS` is used |
 
 ## The game's own log
 
@@ -136,7 +140,7 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-Direct3D's own transformation and lighting (`SetTransform`, untransformed
-vertices, materials and lights: ADR 0014). Then input, to press "jump" at
-the title; the Layer II audio decoder (movies are silent, like all sound so
-far); and a window to present in.
+The wrong pixels in the demo, and a comparison with the original. Then
+input, to press "jump" at the title and play; sound output with the Layer II
+audio decoder (movies are silent, like all sound so far); and a window to
+present in.

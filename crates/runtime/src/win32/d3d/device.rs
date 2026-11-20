@@ -34,11 +34,32 @@ pub struct Device {
     legacy_blending: bool,
     /// `D3DLIGHTSTATE` values by number: material handle, ambient light,
     /// colour model, fog mode and range.
-    light_states: [u32; LIGHT_STATES],
+    pub(super) light_states: [u32; LIGHT_STATES],
+    /// The world, view and projection matrices: sixteen floats each, row by
+    /// row. A point is a row vector multiplied by world, then view, then
+    /// projection.
+    pub(super) transforms: [Matrix; 3],
     /// The texture surface selected into each stage.
     pub(super) textures: [Option<usize>; STAGES],
     /// `D3DTEXTURESTAGESTATE` values of each stage, by number.
     pub(super) stage_states: [[u32; STAGE_STATES]; STAGES],
+}
+
+pub(super) type Matrix = [f32; 16];
+pub(super) const IDENTITY: Matrix =
+    [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+/// Indices into a device's transforms.
+pub(super) const WORLD: usize = 0;
+pub(super) const VIEW: usize = 1;
+pub(super) const PROJECTION: usize = 2;
+
+/// The product of two matrices: the transformation `a` followed by `b`.
+/// Single precision, each element the sum of its four products in order.
+pub(super) fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
+    std::array::from_fn(|n| {
+        let (row, column) = (n / 4, n % 4);
+        (0..4).fold(0.0, |sum, k| sum + a[4 * row + k] * b[4 * k + column])
+    })
 }
 
 const LIGHT_STATES: usize = 16;
@@ -162,6 +183,7 @@ pub(super) fn create_device(m: &mut Machine, a: &[u32]) -> HostResult {
         // A device older than DirectX 7 starts as if `TEXTUREMAPBLEND` had
         // just been set to "modulate".
         legacy_blending: true,
+        transforms: [IDENTITY; 3],
         light_states: default_light_states(),
         textures: [None; STAGES],
         stage_states: default_stage_states(),
@@ -410,6 +432,41 @@ fn enum_texture_formats(m: &mut Machine, a: &[u32]) -> HostResult {
     Ok(DD_OK)
 }
 
+/// `D3DTRANSFORMSTATE_*` as an index into the device's transforms.
+fn transform_index(state: u32) -> Option<usize> {
+    match state {
+        1 => Some(WORLD),
+        2 => Some(VIEW),
+        3 => Some(PROJECTION),
+        _ => None,
+    }
+}
+
+fn read_matrix(m: &mut Machine, address: u32) -> Option<Matrix> {
+    let mut bytes = [0u8; 64];
+    m.memory.read_bytes(address, &mut bytes)?;
+    Some(std::array::from_fn(|n| f32::from_le_bytes(bytes[4 * n..4 * n + 4].try_into().expect("four bytes"))))
+}
+
+/// `SetTransform` and `MultiplyTransform`: the second puts the given matrix
+/// before the one already there.
+fn set_transform(m: &mut Machine, a: &[u32], multiplied: bool) -> u32 {
+    let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
+    let (Some(which), Some(matrix)) = (transform_index(a[1]), read_matrix(m, a[2])) else {
+        return DDERR_INVALIDPARAMS;
+    };
+    let slot = &mut m.os.ddraw.devices[index].transforms[which];
+    *slot = if multiplied { multiply(&matrix, slot) } else { matrix };
+    DD_OK
+}
+
+fn get_transform(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
+    let Some(which) = transform_index(a[1]) else { return DDERR_INVALIDPARAMS };
+    let words = m.os.ddraw.devices[index].transforms[which].map(f32::to_bits);
+    if m.write_words(a[2], &words) { DD_OK } else { DDERR_INVALIDPARAMS }
+}
+
 fn set_light_state(m: &mut Machine, a: &[u32]) -> u32 {
     let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
     // Light states are numbered from 1.
@@ -513,17 +570,17 @@ interface! { static DEVICE_3 = "IDirect3DDevice3";
     SetRenderState(3) => set_render_state,
     GetLightState(3) => get_light_state,
     SetLightState(3) => set_light_state,
-    SetTransform(3),
-    GetTransform(3),
-    MultiplyTransform(3),
+    SetTransform(3) => |m, a| set_transform(m, a, false),
+    GetTransform(3) => get_transform,
+    MultiplyTransform(3) => |m, a| set_transform(m, a, true),
     DrawPrimitive(6) => draw::draw_primitive,
     DrawIndexedPrimitive(8) => draw::draw_indexed_primitive,
     SetClipStatus(2),
     GetClipStatus(2),
     DrawPrimitiveStrided(6),
     DrawIndexedPrimitiveStrided(8),
-    DrawPrimitiveVB(6),
-    DrawIndexedPrimitiveVB(6),
+    DrawPrimitiveVB(6) => draw::draw_primitive_vb,
+    DrawIndexedPrimitiveVB(6) => draw::draw_indexed_primitive_vb,
     ComputeSphereVisibility(6),
     GetTexture(3),
     SetTexture(3) => set_texture,

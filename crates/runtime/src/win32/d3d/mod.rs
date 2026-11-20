@@ -5,6 +5,7 @@ pub mod caps;
 pub mod device;
 mod draw;
 pub mod light;
+mod lighting;
 pub mod material;
 pub mod vertex_buffer;
 pub mod viewport;

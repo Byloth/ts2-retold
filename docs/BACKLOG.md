@@ -52,10 +52,17 @@ out of here into the roadmap or an ADR when work on them starts.
   surface's format (ADR 0014); the original's 16-bit banding and dithering
   are not reproduced. A faithful path would quantise and dither in the
   shader and blend at 16 bits.
+- **Direct3D's transformation and lighting are unverified against the
+  original** (`d3d/vertex_buffer.rs`, `d3d/lighting.rs`): they follow
+  Wine's model for devices older than DirectX 7. Open points: what
+  `COLORVERTEX` replaces (here the material's diffuse colour only), what
+  `ProcessVertices` writes for a vertex outside the view when asked to
+  clip, and how far one unit of `ZBIAS` moves a triangle. Spot lights and
+  parallel-point lights stop the machine.
 - **Draw states not implemented** stop the machine by name: fog, a second
   texture stage, wireframe and point fill, points and lines, depth bias,
-  stencil, the texture factor, border addressing, `DrawPrimitiveVB` and
-  untransformed vertices (Direct3D's transformation and lighting).
+  stencil, the texture factor, border addressing, and untransformed
+  vertices passed straight to a draw call.
 - **A run starts from what the previous one wrote.** `andy boot` keeps
   `out/run` (saves, `toy2.cfg`) between runs, as an installed game would,
   so two runs are identical only if that directory is. Tests and replays

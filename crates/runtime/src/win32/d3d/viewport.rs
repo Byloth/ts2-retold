@@ -51,6 +51,14 @@ pub(super) fn area(m: &Machine, viewport: usize) -> Option<Rect> {
     m.os.ddraw.viewports[viewport].area()
 }
 
+/// The clip volume of a viewport: the x of its left edge, the y of its top
+/// edge, its width and height, and the z of its near and far planes, in the
+/// coordinates the projection produces.
+pub(super) fn clip_volume(m: &Machine, viewport: usize) -> Option<[f32; 6]> {
+    let words = m.os.ddraw.viewports[viewport].data?;
+    Some(std::array::from_fn(|n| f32::from_bits(words[5 + n])))
+}
+
 /// `IDirect3D3::CreateViewport`.
 pub(super) fn create_viewport(m: &mut Machine, a: &[u32]) -> u32 {
     if a[2] != 0 {

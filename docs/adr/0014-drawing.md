@@ -51,6 +51,16 @@ transformation came with DirectX 7.
    surfaces, counts triangles and keeps the last batch. Tests of the layers
    above the backend use it; pictures need the GPU backend.
 
+## How the game uses it (found 2026-11-20)
+
+The game transforms through `IDirect3DVertexBuffer::ProcessVertices`, from
+buffers of untransformed vertices into buffers of transformed ones, and
+draws those with `DrawIndexedPrimitiveVB`. A buffer filled that way keeps,
+beside what the program can see, each vertex's position before the
+division by `w`, as Direct3D's own buffers did: drawn from it, a triangle
+that reaches behind the viewer is clipped by the backend. A vertex the
+program has changed since is drawn from the buffer's visible contents.
+
 ## The adapter's own behaviour
 
 - **Perspective correction is always on.** `TEXTUREPERSPECTIVE` starts off
