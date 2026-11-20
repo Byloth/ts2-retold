@@ -33,7 +33,8 @@ No copyleft and no noncommercial-only license is in the tree.
 
 | Code | License | Used for |
 |---|---|---|
-| pl_mpeg (Dominic Szablewski, <https://github.com/phoboslab/pl_mpeg>) | MIT; notice in `crates/mpeg/LICENSE-pl_mpeg` | `crates/mpeg` is a port of it to Rust: MPEG-1 demultiplexer and video decoder, Layer II audio to follow. Its tables are converted by `tools/mpeg_tables.py`. |
+| pl_mpeg (Dominic Szablewski, <https://github.com/phoboslab/pl_mpeg>) | MIT; notice in `crates/mpeg/LICENSE-pl_mpeg` | `crates/mpeg` is a port of it to Rust: MPEG-1 demultiplexer, video decoder and Layer II audio decoder (the last with the requantisation corrected, ADR 0015). Its tables are converted by `tools/mpeg_tables.py` and `tools/mpeg_audio_tables.py`. |
+| kjmp2 (Martin J. Fiedler, <http://keyj.emphy.de/kjmp2/>) | zlib license (read from the header of `kjmp2.c` 1.1, 2026-11-21); notice in `crates/mpeg/LICENSE-kjmp2` | pl_mpeg's audio decoder is based on it, so the port is an altered version of it too, and says so. |
 
 ## Bundled data
 
@@ -55,6 +56,7 @@ No copyleft and no noncommercial-only license is in the tree.
 
 | Wine `wingdi.h` (9.0) | LGPL-2.1 | Layout of `TEXTMETRICA` and GDI constant values. Kept in the git-ignored `ref/win`. Facts only, nothing transcribed. |
 | Wine `dlls/ddraw/device.c` (9.0) | LGPL-2.1 | How the DirectX 5 render states act on texture stage 0 (ADR 0014), a behaviour Wine established by tests on Windows. Kept in the git-ignored `ref/wine`. The rules are re-expressed, no code is copied. |
+| Wine `include/amstream.idl` (9.0) | LGPL-2.1 | The values of the `AMMSF_*` flags. Kept in the git-ignored `ref/wine`. Facts only, nothing transcribed. |
 | WSLg's PulseAudio `src/modules/rdp/module-rdp-sink.c` (microsoft/pulseaudio-mirror, branch `working`) | LGPL-2.1 | Read to understand the stall of WSLg's sound (`docs/BACKLOG.md`). Kept in the git-ignored `ref/wslg`. Nothing is taken from it. |
 
 ## External projects consulted, not used

@@ -55,10 +55,11 @@ USAGE:
                                     --seconds closes the window after N
                                     seconds of the machine's clock
     andy mods                       List the modifications (docs/MODIFICATIONS.md)
-    andy movie FILE --yuv OUT [--pictures N]
+    andy movie FILE [--yuv OUT [--pictures N]] [--pcm OUT]
                                     Decode a movie of the game and write its
-                                    pictures as planar YUV 4:2:0, to compare
-                                    with another decoder
+                                    pictures as planar YUV 4:2:0, or its
+                                    sound as two channels of 32-bit floats,
+                                    to compare with another decoder
     andy difftest [EXE] --out FILE [--rounds N]
                                     Write differential test cases for every
                                     distinct instruction in the executable
@@ -92,6 +93,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut frame_step = 1u64;
     let mut input = None;
     let mut yuv = None;
+    let mut pcm = None;
     let mut pictures = u64::MAX;
     let mut game_args = String::new();
     let mut limit = 2_000_000_000u64;
@@ -123,6 +125,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--input" => input = Some(PathBuf::from(args.next().ok_or("--input needs a file")?)),
             "--frames" => frames = Some(PathBuf::from(args.next().ok_or("--frames needs a directory")?)),
             "--yuv" => yuv = Some(PathBuf::from(args.next().ok_or("--yuv needs a path")?)),
+            "--pcm" => pcm = Some(PathBuf::from(args.next().ok_or("--pcm needs a path")?)),
             "--pictures" => {
                 pictures = args.next().and_then(|n| n.parse().ok()).ok_or("--pictures needs a number")?;
             }
@@ -158,7 +161,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
     if command == "movie" {
         let file = positional.get(1).ok_or("movie needs a file")?;
-        return movie(Path::new(file), &yuv.ok_or("movie needs --yuv OUT")?, pictures);
+        if yuv.is_none() && pcm.is_none() {
+            return Err("movie needs --yuv OUT or --pcm OUT".into());
+        }
+        return movie(Path::new(file), yuv.as_deref(), pcm.as_deref(), pictures);
     }
     let exe = match positional.get(1) {
         Some(path) => PathBuf::from(path),
@@ -491,12 +497,42 @@ fn write_surfaces(machine: &mut Machine, directory: &Path) -> Result<usize, Box<
 
 /// Decodes a movie and writes its pictures one after another as planar
 /// YUV 4:2:0, the form other decoders can write too.
-fn movie(file: &Path, out: &Path, limit: u64) -> Result<(), String> {
+fn movie(file: &Path, yuv: Option<&Path>, pcm: Option<&Path>, limit: u64) -> Result<(), String> {
     use std::io::Write;
     let bytes = fs::read(file).map_err(|error| format!("{}: {error}", file.display()))?;
     let streams = andy_mpeg::demux::demux(bytes).ok_or("not an MPEG-1 system stream")?;
-    println!("video stream  {} bytes, {} time stamps", streams.video.bytes.len(), streams.video.times.len());
-    println!("audio stream  {} bytes, {} time stamps", streams.audio.bytes.len(), streams.audio.times.len());
+    let first = |stream: &andy_mpeg::demux::Stream| stream.times.first().map_or(f64::NAN, |&(_, time)| time);
+    println!(
+        "video stream  {} bytes, {} time stamps, the first {:.3} s",
+        streams.video.bytes.len(),
+        streams.video.times.len(),
+        first(&streams.video)
+    );
+    println!(
+        "audio stream  {} bytes, {} time stamps, the first {:.3} s",
+        streams.audio.bytes.len(),
+        streams.audio.times.len(),
+        first(&streams.audio)
+    );
+    if let Some(out) = pcm {
+        let mut decoder = andy_mpeg::audio::Decoder::new(streams.audio.bytes).ok_or("no Layer II audio")?;
+        println!("sound         {} Hz, {} channel(s)", decoder.rate(), decoder.channels());
+        let mut writer = std::io::BufWriter::new(fs::File::create(out).map_err(|error| error.to_string())?);
+        let started = std::time::Instant::now();
+        let mut frames = 0u64;
+        while let Some(samples) = decoder.decode() {
+            for sample in samples.as_flattened() {
+                writer.write_all(&sample.to_le_bytes()).map_err(|error| error.to_string())?;
+            }
+            frames += 1;
+        }
+        let (seconds, sound) = (
+            started.elapsed().as_secs_f64(),
+            frames as f64 * andy_mpeg::audio::FRAME as f64 / decoder.rate() as f64,
+        );
+        println!("decoded       {frames} frames, {sound:.2} s of sound, in {seconds:.2} s");
+    }
+    let Some(out) = yuv else { return Ok(()) };
     let mut decoder =
         andy_mpeg::video::Decoder::new(streams.video.bytes).map_err(|error| format!("{error:?}"))?;
     let (width, height, rate) = (decoder.width(), decoder.height(), decoder.rate());

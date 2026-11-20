@@ -68,8 +68,8 @@ watch itself assumes nothing about WSLg.
 
 ## Consequences
 
-- Effects and music are heard. Movies stay silent until the Layer II
-  decoder exists (ADR 0015).
+- Effects and music are heard, and the movies' sound, which joins the
+  same mix (ADR 0015).
 - `--sound` gives a file that can be compared between runs and builds.
 - The straight-line rate conversion is one of the things the cards of the
   time did; which the original setup did is `UNVERIFIED`.

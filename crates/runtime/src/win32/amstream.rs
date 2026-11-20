@@ -7,8 +7,13 @@
 //! sample's surface. The clock is the machine's own, started when the stream
 //! is set running, so a movie plays the same in every run.
 //!
-//! **The audio is not played**: the Layer II decoder does not exist yet.
+//! **The sound** is not asked for by the program at all: it adds the audio
+//! stream with "the default renderer", which plays it by itself for as
+//! long as the stream runs. Here that renderer is the runtime's mixer
+//! (ADR 0019): while a stream runs, its movie's sound is part of the mix,
+//! at the pace of the same clock the pictures are due by.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use andy_mpeg::video::Decoder;
@@ -16,6 +21,7 @@ use andy_mpeg::video::Decoder;
 use super::HostResult;
 use super::com::{E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
 use super::ddraw::surface::{DDSCAPS_OFFSCREENPLAIN, DDSCAPS_SYSTEMMEMORY};
+use crate::audio::OUTPUT_RATE;
 use crate::files::Disposition;
 use crate::threads::Waiting;
 use crate::video::PixelFormat;
@@ -53,6 +59,9 @@ const MSPID_PRIMARY_VIDEO: Guid =
     guid(0xA35FF56A, 0x9FDA, 0x11D0, [0x8F, 0xDF, 0x00, 0xC0, 0x4F, 0xD9, 0x18, 0x9D]);
 const MSPID_PRIMARY_AUDIO: Guid =
     guid(0xA35FF56B, 0x9FDA, 0x11D0, [0x8F, 0xDF, 0x00, 0xC0, 0x4F, 0xD9, 0x18, 0x9D]);
+/// `AMMSF_ADDDEFAULTRENDERER`: the stream plays through a renderer of its
+/// own instead of giving its samples to the program.
+const AMMSF_ADDDEFAULTRENDERER: u32 = 1;
 const STREAMTYPE_READ: u32 = 0;
 const STREAMSTATE_STOP: u32 = 0;
 const STREAMSTATE_RUN: u32 = 1;
@@ -67,6 +76,104 @@ struct Movie {
     decoder: Decoder,
     /// How many pictures have been delivered.
     delivered: u64,
+    /// Its sound, if it has any and the program asked for it to be played.
+    sound: Option<Sound>,
+}
+
+/// Where the playing of a movie's sound is: the samples decoded and not
+/// yet played, and the start, where sound and pictures may not begin at
+/// the same moment.
+#[derive(Debug, Clone, PartialEq)]
+struct Track {
+    /// Samples a second.
+    rate: u32,
+    /// Decoded samples, the first of them the one being played.
+    pending: VecDeque<[f32; 2]>,
+    /// How far the playing is from the first pending sample to the second.
+    between: f64,
+    /// Frames of the mix that pass before the sound begins, if it begins
+    /// after the first picture.
+    lead: u64,
+    /// Samples left out at the start, if it begins before the first picture.
+    skip: u64,
+    ended: bool,
+}
+
+impl Track {
+    /// A track at its start. `offset` is when the sound begins, in seconds
+    /// after the first picture (negative: before it).
+    fn new(rate: u32, offset: f64) -> Track {
+        Track {
+            rate,
+            pending: VecDeque::new(),
+            between: 0.0,
+            lead: (offset.max(0.0) * OUTPUT_RATE as f64).round() as u64,
+            skip: ((-offset).max(0.0) * rate as f64).round() as u64,
+            ended: false,
+        }
+    }
+
+    /// Adds the next stretch of the sound to `out`, a stretch of the mix.
+    /// `more` gives the next decoded samples, or nothing at the end.
+    /// Between two samples the value is taken on the straight line from
+    /// one to the other, as the mixer does for sound buffers; at the mix's
+    /// own rate the samples are played as they are.
+    fn mix_into(&mut self, out: &mut [[f32; 2]], mut more: impl FnMut() -> Option<Vec<[f32; 2]>>) {
+        let step = self.rate as f64 / OUTPUT_RATE as f64;
+        for mixed in out {
+            if self.lead > 0 {
+                self.lead -= 1;
+                continue;
+            }
+            while self.pending.len() < 2 && !self.ended {
+                match more() {
+                    Some(samples) => {
+                        let skipped = (self.skip as usize).min(samples.len());
+                        self.skip -= skipped as u64;
+                        self.pending.extend(&samples[skipped..]);
+                    }
+                    None => self.ended = true,
+                }
+            }
+            let Some(&from) = self.pending.front() else { return };
+            // After the last sample comes silence.
+            let to = self.pending.get(1).copied().unwrap_or_default();
+            let between = self.between as f32;
+            mixed[0] += from[0] + (to[0] - from[0]) * between;
+            mixed[1] += from[1] + (to[1] - from[1]) * between;
+            self.between += step;
+            while self.between >= 1.0 && self.pending.pop_front().is_some() {
+                self.between -= 1.0;
+            }
+        }
+    }
+}
+
+/// A movie's sound: its stream, the decoder and the playing.
+struct Sound {
+    /// The audio stream, kept to start again from.
+    stream: Arc<[u8]>,
+    decoder: andy_mpeg::audio::Decoder,
+    /// When the sound begins, in seconds after the first picture.
+    offset: f64,
+    track: Track,
+}
+
+impl Sound {
+    fn new(stream: Arc<[u8]>, offset: f64) -> Option<Sound> {
+        let decoder = andy_mpeg::audio::Decoder::new(stream.clone())?;
+        let track = Track::new(decoder.rate(), offset);
+        Some(Sound { stream, decoder, offset, track })
+    }
+
+    fn rewind(&mut self) {
+        *self = Sound::new(self.stream.clone(), self.offset).expect("the stream was decoded before");
+    }
+
+    fn mix_into(&mut self, out: &mut [[f32; 2]]) {
+        let decoder = &mut self.decoder;
+        self.track.mix_into(out, || decoder.decode().map(|samples| samples.to_vec()));
+    }
 }
 
 impl std::fmt::Debug for Movie {
@@ -113,6 +220,21 @@ struct Sample {
 pub struct State {
     streams: Vec<Stream>,
     samples: Vec<Sample>,
+}
+
+impl State {
+    /// Adds the sound of the movies that are running to `out`, a stretch
+    /// of the mix. Called by the mixer as the machine's clock advances.
+    pub(crate) fn mix_into(&mut self, out: &mut [[f32; 2]]) {
+        for stream in &mut self.streams {
+            if stream.references == 0 || !stream.audio || stream.started_ms.is_none() {
+                continue;
+            }
+            if let Some(sound) = stream.movie.as_mut().and_then(|movie| movie.sound.as_mut()) {
+                sound.mix_into(out);
+            }
+        }
+    }
 }
 
 fn not_implemented(what: String) -> Stop {
@@ -197,12 +319,18 @@ fn initialize(m: &mut Machine, a: &[u32]) -> HostResult {
 fn add_media_stream(m: &mut Machine, a: &[u32]) -> HostResult {
     // The object the stream draws on or plays through, its purpose, flags,
     // where to put the new stream.
-    let (purpose, out) = (a[2], a[4]);
+    let (object, purpose, flags, out) = (a[1], a[2], a[3], a[4]);
     let Some(purpose) = m.read_guid(purpose) else { return Ok(E_POINTER) };
     let Some(stream) = m.media_stream(a[0]) else { return Ok(E_INVALIDARG) };
     match purpose {
         MSPID_PRIMARY_VIDEO => stream.video = true,
-        MSPID_PRIMARY_AUDIO => stream.audio = true,
+        // The sound is only known played by its own renderer.
+        MSPID_PRIMARY_AUDIO if object == 0 && flags == AMMSF_ADDDEFAULTRENDERER => stream.audio = true,
+        MSPID_PRIMARY_AUDIO => {
+            return Err(not_implemented(format!(
+                "an audio stream without the default renderer (flags {flags:#x})"
+            )));
+        }
         _ => return Ok(E_INVALIDARG),
     }
     if out != 0 {
@@ -230,14 +358,29 @@ fn open_file(m: &mut Machine, a: &[u32]) -> HostResult {
     };
     let bytes = m.os.files.read(file, u32::MAX).map(<[u8]>::to_vec).unwrap_or_default();
     m.os.files.close(file);
-    let video: Option<Arc<[u8]>> = andy_mpeg::demux::demux(bytes).map(|streams| streams.video.bytes.into());
+    let streams = andy_mpeg::demux::demux(bytes);
+    // When the sound begins, counted from the first picture.
+    let first = |stream: &andy_mpeg::demux::Stream| stream.times.first().map(|&(_, time)| time);
+    let offset = streams
+        .as_ref()
+        .and_then(|streams| Some(first(&streams.audio)? - first(&streams.video)?))
+        .unwrap_or(0.0);
+    let (video, audio): (Option<Arc<[u8]>>, Option<Arc<[u8]>>) = match streams {
+        Some(streams) => (Some(streams.video.bytes.into()), Some(streams.audio.bytes.into())),
+        None => (None, None),
+    };
     let Some((video, Ok(decoder))) = video.map(|video| (video.clone(), Decoder::new(video))) else {
         return Err(not_implemented(format!("the movie {name}, which is not an MPEG-1 system stream")));
     };
+    // A movie without sound, or one whose sound nothing was asked to play.
+    let wants_sound = m.media_stream(a[0]).is_some_and(|stream| stream.audio);
+    let sound =
+        audio.filter(|audio| wants_sound && !audio.is_empty()).and_then(|audio| Sound::new(audio, offset));
+    m.mix_sound();
     let (rate, size) = (decoder.rate(), (decoder.width(), decoder.height()));
     m.note(|| format!("{name:?}: {} x {}, {}/{} pictures per second", size.0, size.1, rate.0, rate.1));
     let stream = m.media_stream(a[0]).expect("checked above");
-    stream.movie = Some(Movie { video, decoder, delivered: 0 });
+    stream.movie = Some(Movie { video, decoder, delivered: 0, sound });
     Ok(S_OK)
 }
 
@@ -280,6 +423,8 @@ fn get_media_stream(m: &mut Machine, a: &[u32]) -> HostResult {
 }
 
 fn set_state(m: &mut Machine, a: &[u32]) -> HostResult {
+    // What was heard up to now is mixed before anything changes.
+    m.mix_sound();
     let now = m.clock_ms();
     let Some(stream) = m.media_stream(a[0]) else { return Ok(E_INVALIDARG) };
     match a[1] {
@@ -300,6 +445,7 @@ fn set_state(m: &mut Machine, a: &[u32]) -> HostResult {
 /// `Seek`: to a time in units of 100 nanoseconds. Only the start can be
 /// sought.
 fn seek(m: &mut Machine, a: &[u32]) -> HostResult {
+    m.mix_sound();
     let now = m.clock_ms();
     let Some(stream) = m.media_stream(a[0]) else { return Ok(E_INVALIDARG) };
     if (a[1], a[2]) != (0, 0) {
@@ -308,6 +454,9 @@ fn seek(m: &mut Machine, a: &[u32]) -> HostResult {
     if let Some(movie) = &mut stream.movie {
         movie.decoder = Decoder::new(movie.video.clone()).expect("the stream was decoded before");
         movie.delivered = 0;
+        if let Some(sound) = &mut movie.sound {
+            sound.rewind();
+        }
         stream.started_ms = stream.started_ms.map(|_| now);
     }
     Ok(S_OK)
@@ -327,13 +476,16 @@ interface! { static MULTI_MEDIA_STREAM = "IAMMultiMediaStream";
         stream.references += 1;
         stream.references
     }),
-    Release(1) => |m, a| m.media_stream(a[0]).map_or(0, |stream| {
-        stream.references -= 1;
-        if stream.references == 0 {
-            stream.movie = None;
-        }
-        stream.references
-    }),
+    Release(1) => |m, a| {
+        m.mix_sound();
+        m.media_stream(a[0]).map_or(0, |stream| {
+            stream.references -= 1;
+            if stream.references == 0 {
+                stream.movie = None;
+            }
+            stream.references
+        })
+    },
     GetInformation(3) => get_information,
     GetMediaStream(3) => get_media_stream,
     EnumMediaStreams(3),
@@ -507,4 +659,64 @@ interface! { static STREAM_SAMPLE = "IDirectDrawStreamSample";
     CompletionStatus(3),
     GetSurface(3) => get_surface,
     SetRect(2),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A rising line cut into pieces of four samples, `count` of them.
+    fn pieces(count: usize) -> impl FnMut() -> Option<Vec<[f32; 2]>> {
+        let mut given = 0;
+        move || {
+            (given < count).then(|| {
+                given += 1;
+                (4 * (given - 1)..4 * given).map(|at| [at as f32, -(at as f32)]).collect()
+            })
+        }
+    }
+
+    #[test]
+    fn a_track_at_the_rate_of_the_mix_is_played_as_it_is() {
+        let mut track = Track::new(OUTPUT_RATE, 0.0);
+        let mut out = vec![[1.0; 2]; 6];
+        let mut more = pieces(2);
+        track.mix_into(&mut out, &mut more);
+        // Added to what is in the mix already.
+        assert_eq!(out, [[1.0, 1.0], [2.0, 0.0], [3.0, -1.0], [4.0, -2.0], [5.0, -3.0], [6.0, -4.0]]);
+        // It goes on where it was, and after its end adds nothing.
+        let mut out = vec![[0.0; 2]; 4];
+        track.mix_into(&mut out, &mut more);
+        assert_eq!(out, [[6.0, -6.0], [7.0, -7.0], [0.0; 2], [0.0; 2]]);
+        assert!(track.ended);
+    }
+
+    #[test]
+    fn sound_that_begins_before_or_after_the_first_picture() {
+        // Three frames of the mix after the first picture: silence first.
+        let mut track = Track::new(OUTPUT_RATE, 3.0 / OUTPUT_RATE as f64);
+        let mut out = vec![[0.0; 2]; 5];
+        track.mix_into(&mut out, pieces(2));
+        assert_eq!(out.iter().map(|frame| frame[0]).collect::<Vec<_>>(), [0.0, 0.0, 0.0, 0.0, 1.0]);
+        // Six samples before it: those are left out, across two pieces.
+        let mut track = Track::new(OUTPUT_RATE, -6.0 / OUTPUT_RATE as f64);
+        let mut out = vec![[0.0; 2]; 3];
+        track.mix_into(&mut out, pieces(3));
+        assert_eq!(out.iter().map(|frame| frame[0]).collect::<Vec<_>>(), [6.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn a_track_at_another_rate_is_drawn_out_or_pressed_together() {
+        // Half the rate of the mix: every sample and the value half way
+        // to the next.
+        let mut track = Track::new(OUTPUT_RATE / 2, 0.0);
+        let mut out = vec![[0.0; 2]; 5];
+        track.mix_into(&mut out, pieces(1));
+        assert_eq!(out.iter().map(|frame| frame[0]).collect::<Vec<_>>(), [0.0, 0.5, 1.0, 1.5, 2.0]);
+        // Twice the rate: every other sample.
+        let mut track = Track::new(OUTPUT_RATE * 2, 0.0);
+        let mut out = vec![[0.0; 2]; 3];
+        track.mix_into(&mut out, pieces(2));
+        assert_eq!(out.iter().map(|frame| frame[0]).collect::<Vec<_>>(), [0.0, 2.0, 4.0]);
+    }
 }

@@ -172,5 +172,5 @@ CONFIG : Base CD track is 2.
 ## Next
 
 A comparison with the original, pictures and sound, when the owner can
-supply them. The Layer II audio decoder for the movies, which are still
-silent (effects and music are heard, ADR 0019).
+supply them (effects, music and the movies' sound are heard, ADR 0019
+and ADR 0015).

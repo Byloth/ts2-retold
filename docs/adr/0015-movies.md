@@ -50,3 +50,36 @@ with ffmpeg's. On `acti.dll` (300 pictures) and `l 03 bo.dll` (all 3196)
 the picture counts are equal and the difference never falls below 52 dB:
 the first pictures are identical and the rest differ by the rounding of
 the inverse transform, which the standard leaves free within a tolerance.
+
+## The sound (2026-11-21)
+
+The audio decoder (`crates/mpeg/src/audio.rs`) is the port of pl_mpeg's,
+which follows kjmp2 by Martin J. Fiedler, with one deliberate difference.
+The port was first made exact: its output equalled pl_mpeg's, compiled
+from `ref/mpeg`, byte for byte on three movies. Compared with ffmpeg that
+output was wrong by more than rounding: 10 to 35 dB below the signal, and
+quieter by 2 to 9 percent overall. The cause is the requantisation:
+a sample coded with `n` levels stands for `(2 * code - (n - 1)) / n`
+(the standard's `C * (s + D)`), and pl_mpeg's integer arithmetic divides
+by `n + 1`, making every subband quieter by `n / (n + 1)`, most where
+the quantiser is coarsest, which is where a low bit rate puts most of
+the sound. It also scales its output by 64/65. This decoder requantises
+as the standard says, in floating point, and keeps pl_mpeg's tables,
+frame reading and filter bank (the transform and the tables are
+converted by `tools/mpeg_audio_tables.py`).
+
+Verification: `andy movie FILE --pcm OUT` writes the decoded sound.
+Against ffmpeg's floating-point decoder (`mp2float`) on `dlogo.dll`,
+`acti.dll`, `l 01 in.dll` and `1st trailer.dll` (224, 128 and 64 kbit/s;
+two channels and one) the frame counts are equal, the gain is 1.000000
+and the difference is 115 to 122 dB below the signal in every frame.
+A frame built by hand is decoded in the crate's tests.
+
+The movies' sound is 44,100 samples a second, the rate of the runtime's
+mix (ADR 0019), so it is played sample for sample: in a recording of the
+boot the first movie's twelve seconds equal the decoder's output exactly.
+The program does not ask for the sound; it adds the audio stream with
+the default renderer, which here is the mixer, for as long as the stream
+runs. Sound and pictures start from the same moment of the machine's
+clock, shifted by the difference of their first time stamps (80 ms in
+`dlogo.dll`, none in the others looked at).

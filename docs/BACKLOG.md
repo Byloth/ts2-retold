@@ -105,13 +105,17 @@ out of here into the roadmap or an ADR when work on them starts.
   blocks the game frees, and the runtime's own blocks (surface memory,
   DIB sections, vertex buffers), are never returned. A long session will
   need a real allocator.
-- **Movies are silent.** Their pictures are decoded and shown
-  (`crates/mpeg`, ADR 0015); the Layer II audio decoder is not written yet
-  and there is no sound output for it to feed. Only seeking to the start
-  and synchronous `Update` are implemented.
+- **Movies** (ADR 0015): pictures and sound are decoded and played. Only
+  seeking to the start and synchronous `Update` are implemented; an audio
+  stream the program reads itself (without the default renderer) stops
+  the machine by name. A picture that is late is delivered late, never
+  dropped: DirectShow would drop pictures to stay with the clock
+  (`UNVERIFIED` how), which matters only if the game falls behind, and on
+  the machine's clock it does not (each of the opening movies takes
+  exactly its length).
 - **Sound** (ADR 0019) is mixed and heard, on Linux through a PulseAudio
-  server. Still to do: a sound device on Windows and in the browser; the
-  movies' sound; a listening comparison with the original (rate conversion
+  server. Still to do: a sound device on Windows and in the browser; a
+  listening comparison with the original (rate conversion
   is a straight line between samples, the original setup's is
   `UNVERIFIED`); 3D sound and the other DirectSound interfaces stop the
   machine by name. When the game starts in the window its clock runs

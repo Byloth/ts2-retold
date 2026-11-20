@@ -355,6 +355,8 @@ impl Machine {
                     memory.dump(start + offset, len).unwrap_or_else(|| vec![0; len as usize])
                 });
             }
+            // The movies play their sound through the same mix.
+            self.os.amstream.mix_into(&mut mixed);
             // Louder than the output can carry is cut off at its limits.
             let frames: Vec<Frame> = mixed
                 .iter()
