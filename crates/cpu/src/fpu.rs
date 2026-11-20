@@ -161,10 +161,7 @@ impl Fpu {
     }
 
     pub fn init(&mut self) {
-        *self = Fpu {
-            inexact_model: self.inexact_model,
-            ..Fpu::default()
-        };
+        *self = Fpu { inexact_model: self.inexact_model, ..Fpu::default() };
     }
 
     pub fn rounding(&self) -> Rounding {
@@ -289,11 +286,7 @@ impl Fpu {
                 quotient += 1.0;
             }
         }
-        let low = if quotient.is_finite() {
-            (quotient.round() % 8.0) as u32
-        } else {
-            0
-        };
+        let low = if quotient.is_finite() { (quotient.round() % 8.0) as u32 } else { 0 };
         // C0 C3 C1 hold quotient bits 2, 1, 0; C2 clear means "reduction complete".
         self.c = [low & 4 != 0, low & 1 != 0, false, low & 2 != 0];
         self.set_st(0, rem);
@@ -430,11 +423,7 @@ pub fn f80_to_f64(mantissa: u64, sign_exponent: u16) -> f64 {
     let negative = sign_exponent & 0x8000 != 0;
     let exponent = (sign_exponent & 0x7FFF) as i32;
     let magnitude = if exponent == 0x7FFF {
-        if mantissa << 1 == 0 {
-            f64::INFINITY
-        } else {
-            f64::NAN
-        }
+        if mantissa << 1 == 0 { f64::INFINITY } else { f64::NAN }
     } else if mantissa == 0 {
         0.0
     } else {
@@ -451,21 +440,14 @@ pub fn f64_to_f80(value: f64) -> (u64, u16) {
     let exponent = ((bits >> 52) & 0x7FF) as i32;
     let fraction = bits & ((1 << 52) - 1);
     if exponent == 0x7FF {
-        let payload = if fraction == 0 {
-            0
-        } else {
-            fraction << 11 | 1 << 62
-        };
+        let payload = if fraction == 0 { 0 } else { fraction << 11 | 1 << 62 };
         return (1 << 63 | payload, sign | 0x7FFF);
     }
     if exponent == 0 && fraction == 0 {
         return (0, sign);
     }
-    let (mut mantissa, mut unbiased) = if exponent == 0 {
-        (fraction << 11, -1022)
-    } else {
-        ((fraction | 1 << 52) << 11, exponent - 1023)
-    };
+    let (mut mantissa, mut unbiased) =
+        if exponent == 0 { (fraction << 11, -1022) } else { ((fraction | 1 << 52) << 11, exponent - 1023) };
     let shift = mantissa.leading_zeros();
     mantissa <<= shift;
     unbiased -= shift as i32;
@@ -490,30 +472,15 @@ mod tests {
 
     #[test]
     fn single_precision_rounding_matches_f32_inside_its_range() {
-        for value in [
-            1.0 / 3.0,
-            16777217.0,
-            0.1,
-            -123456.789,
-            1e-30,
-            3.5e37,
-            f64::from(f32::MAX),
-        ] {
-            assert_eq!(
-                round_to_24_bits(value, Rounding::Nearest),
-                value as f32 as f64,
-                "{value}"
-            );
+        for value in [1.0 / 3.0, 16777217.0, 0.1, -123456.789, 1e-30, 3.5e37, f64::from(f32::MAX)] {
+            assert_eq!(round_to_24_bits(value, Rounding::Nearest), value as f32 as f64, "{value}");
         }
         // Outside the f32 range the exponent is kept instead of overflowing.
         let big = round_to_24_bits(1e300 / 3.0, Rounding::Nearest);
         assert!(big.is_finite() && (big - 1e300 / 3.0).abs() < 1e293);
         let tie = 1.0 + 2f64.powi(-24);
         assert_eq!(round_to_24_bits(tie, Rounding::Nearest), 1.0); // tie to even
-        assert_eq!(
-            round_to_24_bits(1.0 + 3.0 * 2f64.powi(-24), Rounding::Nearest),
-            1.0 + 2f64.powi(-22)
-        );
+        assert_eq!(round_to_24_bits(1.0 + 3.0 * 2f64.powi(-24), Rounding::Nearest), 1.0 + 2f64.powi(-22));
         assert_eq!(round_to_24_bits(tie, Rounding::Up), 1.0 + 2f64.powi(-23));
         assert_eq!(round_to_24_bits(-tie, Rounding::Up), -1.0);
         assert_eq!(round_to_24_bits(-tie, Rounding::Down), -1.0 - 2f64.powi(-23));
@@ -522,28 +489,16 @@ mod tests {
 
     #[test]
     fn directed_rounding_is_exact() {
-        let chop = Fpu {
-            control: 0x0E7F,
-            ..Fpu::default()
-        };
-        let up = Fpu {
-            control: 0x0A7F,
-            ..Fpu::default()
-        };
-        let down = Fpu {
-            control: 0x067F,
-            ..Fpu::default()
-        };
+        let chop = Fpu { control: 0x0E7F, ..Fpu::default() };
+        let up = Fpu { control: 0x0A7F, ..Fpu::default() };
+        let down = Fpu { control: 0x067F, ..Fpu::default() };
         // The double nearest to 1/3 lies below 1/3.
         let third = 1.0f64 / 3.0;
         assert_eq!(chop.clone().binary(FBin::Div, 1.0, 3.0), third);
         assert_eq!(up.clone().binary(FBin::Div, 1.0, 3.0), third.next_up());
         assert_eq!(down.clone().binary(FBin::Div, -1.0, 3.0), (-third).next_down());
         // 0.1 + 0.2 rounds up to 0.30000000000000004 in nearest mode.
-        assert_eq!(
-            chop.clone().binary(FBin::Add, 0.1, 0.2),
-            (0.1f64 + 0.2).next_down()
-        );
+        assert_eq!(chop.clone().binary(FBin::Add, 0.1, 0.2), (0.1f64 + 0.2).next_down());
         assert_eq!(up.clone().binary(FBin::Add, 0.1, 0.2), 0.1 + 0.2);
         assert!(down.clone().binary(FBin::Sub, 2.5, 2.5).is_sign_negative());
         assert!(chop.clone().binary(FBin::Sub, 2.5, 2.5).is_sign_positive());
@@ -571,22 +526,9 @@ mod tests {
 
     #[test]
     fn extended_format_round_trips() {
-        for value in [
-            0.0,
-            -0.0,
-            1.0,
-            -2.5,
-            1e-310,
-            f64::MAX,
-            f64::MIN_POSITIVE,
-            f64::INFINITY,
-        ] {
+        for value in [0.0, -0.0, 1.0, -2.5, 1e-310, f64::MAX, f64::MIN_POSITIVE, f64::INFINITY] {
             let (mantissa, sign_exponent) = f64_to_f80(value);
-            assert_eq!(
-                f80_to_f64(mantissa, sign_exponent).to_bits(),
-                value.to_bits(),
-                "{value}"
-            );
+            assert_eq!(f80_to_f64(mantissa, sign_exponent).to_bits(), value.to_bits(), "{value}");
         }
         assert_eq!(f64_to_f80(1.0), (1 << 63, 16383));
         assert!(f80_to_f64(f64_to_f80(f64::NAN).0, 0x7FFF).is_nan());
@@ -623,17 +565,9 @@ mod tests {
                 fpu.push(y as f64 / 1024.0);
                 fpu.push(x as f64 / 1024.0);
                 fpu.remainder(nearest);
-                assert_eq!(
-                    fpu.st(0),
-                    remainder as f64 / 1024.0,
-                    "{x} rem {y}, nearest {nearest}"
-                );
+                assert_eq!(fpu.st(0), remainder as f64 / 1024.0, "{x} rem {y}, nearest {nearest}");
                 let low = quotient as u32 & 7;
-                assert_eq!(
-                    fpu.c,
-                    [low & 4 != 0, low & 1 != 0, false, low & 2 != 0],
-                    "{x} rem {y}"
-                );
+                assert_eq!(fpu.c, [low & 4 != 0, low & 1 != 0, false, low & 2 != 0], "{x} rem {y}");
             }
         }
     }

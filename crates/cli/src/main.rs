@@ -8,6 +8,7 @@ use andy_recomp::analysis::{self, Analysis, EntryKind};
 use andy_recomp::pe::{Image, ResourceId, resource_type};
 use andy_recomp::{builds, difftest};
 use andy_runtime::files::Files;
+use andy_runtime::mods::{CATALOGUE, Modifications};
 use andy_runtime::os::Os;
 use andy_runtime::{Machine, Stop};
 
@@ -25,6 +26,8 @@ USAGE:
                                     makes it write its log, shown at the end.
                                     --stop-at halts before an instruction;
                                     --dump prints guest memory at the end
+                                    --with/--without ID switch a modification
+    andy mods                       List the modifications (docs/MODIFICATIONS.md)
     andy difftest [EXE] --out FILE [--rounds N]
                                     Write differential test cases for every
                                     distinct instruction in the executable
@@ -48,6 +51,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut out = None;
     let mut rounds = 3u32;
     let mut trace = false;
+    let mut mods = Modifications::default();
     let mut stop_at = None;
     let mut dumps = Vec::new();
     let mut game_args = String::new();
@@ -62,29 +66,25 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--json" => json = Some(PathBuf::from(args.next().ok_or("--json needs a path")?)),
             "--out" => out = Some(PathBuf::from(args.next().ok_or("--out needs a path")?)),
             "--trace" => trace = true,
+            "--with" | "--without" => {
+                let id = args.next().ok_or("--with and --without need a modification identifier")?;
+                mods.set(&id, arg == "--with")?;
+            }
             "--stop-at" => {
                 let text = args.next().ok_or("--stop-at needs an address")?;
                 stop_at = Some(parse_hex(&text).ok_or("--stop-at needs a hexadecimal address")?);
             }
             "--dump" => {
                 let text = args.next().ok_or("--dump needs ADDR:LEN")?;
-                let range = text
-                    .split_once(':')
-                    .and_then(|(a, l)| Some((parse_hex(a)?, parse_hex(l)?)));
+                let range = text.split_once(':').and_then(|(a, l)| Some((parse_hex(a)?, parse_hex(l)?)));
                 dumps.push(range.ok_or("--dump needs ADDR:LEN in hexadecimal")?);
             }
             "--args" => game_args = args.next().ok_or("--args needs the command line text")?,
             "--limit" => {
-                limit = args
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .ok_or("--limit needs a number")?;
+                limit = args.next().and_then(|n| n.parse().ok()).ok_or("--limit needs a number")?;
             }
             "--rounds" => {
-                rounds = args
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .ok_or("--rounds needs a number")?;
+                rounds = args.next().and_then(|n| n.parse().ok()).ok_or("--rounds needs a number")?;
             }
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other}\n\n{USAGE}"));
@@ -95,6 +95,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let Some(command) = positional.first() else {
         return Err(USAGE.into());
     };
+    if command == "mods" {
+        list_modifications();
+        return Ok(());
+    }
     let exe = match positional.get(1) {
         Some(path) => PathBuf::from(path),
         None => {
@@ -109,11 +113,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     println!("sha256    {}", builds::sha256_hex(&bytes));
     match builds::identify(&bytes) {
         Some(build) => {
-            let status = if build.confirmed_retail {
-                "retail"
-            } else {
-                "provisional, not yet compared with a disc"
-            };
+            let status =
+                if build.confirmed_retail { "retail" } else { "provisional, not yet compared with a disc" };
             println!("build     {} - {} ({status})", build.id, build.description);
         }
         None => println!("build     UNKNOWN - addresses and patches are not valid for this file"),
@@ -137,6 +138,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "boot" => boot(
             &image,
             BootOptions {
+                mods,
                 game_dir: exe.parent().map(Path::to_path_buf),
                 trace,
                 limit,
@@ -169,6 +171,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 }
 
 struct BootOptions {
+    mods: Modifications,
     game_dir: Option<PathBuf>,
     trace: bool,
     limit: u64,
@@ -177,19 +180,25 @@ struct BootOptions {
     dumps: Vec<(u32, u32)>,
 }
 
+fn list_modifications() {
+    for entry in CATALOGUE {
+        let default = if entry.enabled_by_default { "on" } else { "off" };
+        let simulation = if entry.affects_simulation {
+            "affects the simulation"
+        } else {
+            "does not affect the simulation"
+        };
+        println!("{} ({:?}, {default} by default, {simulation})", entry.id, entry.class);
+        println!("    {}", entry.summary);
+    }
+}
+
 fn parse_hex(text: &str) -> Option<u32> {
     u32::from_str_radix(text.trim_start_matches("0x"), 16).ok()
 }
 
 fn boot(image: &Image, options: BootOptions) {
-    let BootOptions {
-        game_dir,
-        trace,
-        limit,
-        game_args,
-        stop_at,
-        dumps,
-    } = options;
+    let BootOptions { mods, game_dir, trace, limit, game_args, stop_at, dumps } = options;
     // The program reads the game directory and writes only to `out/run`.
     let write_dir = PathBuf::from("out/run");
     let log_path = write_dir.join("toy2.log");
@@ -197,6 +206,7 @@ fn boot(image: &Image, options: BootOptions) {
     let files = Files::new(game_dir, Some(write_dir));
     let mut os = Os::new(files);
     os.command_line_arguments = game_args;
+    os.mods = mods;
     let mut machine = Machine::load(image, os);
     machine.breakpoint = stop_at;
     if trace {
@@ -208,19 +218,14 @@ fn boot(image: &Image, options: BootOptions) {
 
     if let Some(calls) = machine.trace.take() {
         println!();
+        if machine.trace_dropped > 0 {
+            println!("  ({} earlier host calls not shown)", machine.trace_dropped);
+        }
         for call in &calls {
             let args: Vec<String> = call.args.iter().map(|a| format!("{a:#x}")).collect();
-            let note = call
-                .note
-                .as_deref()
-                .map(|n| format!("   ; {n}"))
-                .unwrap_or_default();
+            let note = call.note.as_deref().map(|n| format!("   ; {n}")).unwrap_or_default();
             let indent = "  ".repeat(call.depth as usize);
-            let thread = if call.thread == 0 {
-                String::new()
-            } else {
-                format!("[thread {}] ", call.thread)
-            };
+            let thread = if call.thread == 0 { String::new() } else { format!("[thread {}] ", call.thread) };
             println!(
                 "  {:#010x}  {indent}{thread}{}({}) = {:#x}{note}",
                 call.caller,
@@ -234,10 +239,7 @@ fn boot(image: &Image, options: BootOptions) {
     counts.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
     let total: u64 = counts.iter().map(|(_, count)| count).sum();
     println!("\ninstructions executed  {}", machine.cpu.instructions);
-    println!(
-        "speed                  {:.1} million/s",
-        machine.cpu.instructions as f64 / elapsed / 1e6
-    );
+    println!("speed                  {:.1} million/s", machine.cpu.instructions as f64 / elapsed / 1e6);
     println!("host calls             {total} ({} distinct)", counts.len());
     for (name, count) in counts.iter().take(12) {
         println!("  {count:>8}  {name}");
@@ -251,10 +253,7 @@ fn boot(image: &Image, options: BootOptions) {
         None => println!("x87 model inexact      never"),
     }
     let missing = machine.os.files.log.iter().filter(|(_, found)| !found).count();
-    println!(
-        "files opened           {} ({missing} not found)",
-        machine.os.files.log.len()
-    );
+    println!("files opened           {} ({missing} not found)", machine.os.files.log.len());
     if let Ok(log) = fs::read_to_string(&log_path) {
         println!("\nthe game's own log (toy2.log)");
         for line in log.lines() {
@@ -288,11 +287,9 @@ fn describe(stop: &Stop) -> String {
         Stop::Exit(code) => format!("the program exited with code {code}"),
         Stop::Fault(fault) => format!("fault: {fault:?}"),
         Stop::Unimplemented { dll, name } => format!("not implemented yet: {dll} {name}"),
-        Stop::CallbackStack {
-            address,
-            expected,
-            actual,
-        } => format!("callback {address:#x} returned with esp {actual:#x}, expected {expected:#x}"),
+        Stop::CallbackStack { address, expected, actual } => {
+            format!("callback {address:#x} returned with esp {actual:#x}, expected {expected:#x}")
+        }
         Stop::Budget => "instruction limit reached".into(),
         Stop::Breakpoint => "breakpoint".into(),
         Stop::Deadlock => "every thread is waiting and nothing can wake one".into(),
@@ -323,12 +320,7 @@ fn info(image: &Image) {
             ResourceId::Id(id) => resource_type::name(*id).to_string(),
             ResourceId::Name(name) => name.clone(),
         };
-        println!(
-            "  {kind:<13} {:<16} {:>6} bytes at {:#010x}",
-            r.name.to_string(),
-            r.size,
-            r.va
-        );
+        println!("  {kind:<13} {:<16} {:>6} bytes at {:#010x}", r.name.to_string(), r.size, r.va);
     }
     println!("\nimports");
     let mut dll = "";
@@ -342,11 +334,7 @@ fn info(image: &Image) {
 }
 
 fn percent(part: u32, whole: u32) -> f64 {
-    if whole == 0 {
-        0.0
-    } else {
-        100.0 * part as f64 / whole as f64
-    }
+    if whole == 0 { 0.0 } else { 100.0 * part as f64 / whole as f64 }
 }
 
 fn report(a: &Analysis) {
@@ -359,10 +347,7 @@ fn report(a: &Analysis) {
         ("data", b.data),
         ("UNKNOWN", b.unknown),
     ] {
-        println!(
-            "  {label:<13} {count:>8} bytes  {:>6.2}%",
-            percent(count, a.code_len)
-        );
+        println!("  {label:<13} {count:>8} bytes  {:>6.2}%", percent(count, a.code_len));
     }
 
     let count = |kind| a.functions.iter().filter(|f| f.kind == kind).count();
@@ -376,22 +361,12 @@ fn report(a: &Analysis) {
     println!("shared instructions     {}", a.shared_instructions);
     println!("direct calls            {}", a.direct_calls);
     println!("indirect calls          {}", a.indirect_calls);
-    println!(
-        "jump tables             {} ({} entries)",
-        a.jump_tables, a.jump_table_entries
-    );
+    println!("jump tables             {} ({} entries)", a.jump_tables, a.jump_table_entries);
     println!("unresolved indirect jmp {}", a.unresolved_indirect_jumps.len());
     let certain = a.conflicts.iter().filter(|c| !c.speculative).count();
-    println!(
-        "conflicts               {} ({certain} on certain paths)",
-        a.conflicts.len()
-    );
+    println!("conflicts               {} ({certain} on certain paths)", a.conflicts.len());
     println!("unknown gaps            {}", a.unknown_gaps.len());
 
-    let used = a
-        .imports
-        .iter()
-        .filter(|i| i.call_sites + i.jump_sites + i.other_refs > 0)
-        .count();
+    let used = a.imports.iter().filter(|i| i.call_sites + i.jump_sites + i.other_refs > 0).count();
     println!("imports referenced      {used} of {}", a.imports.len());
 }

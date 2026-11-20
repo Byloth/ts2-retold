@@ -13,9 +13,10 @@ sponsored by Disney, Pixar, Activision or Traveller's Tales.
 
 **Status: early. An interpreter implements every instruction the game uses,
 verified against an independent emulator on 1.8 million cases, and the game's
-own code boots in it: C runtime, installation check, settings, window, and the
-examination of the display adapter and 3D device through DirectDraw and
-Direct3D. Nothing is drawn or playable yet.**
+own code boots in it: C runtime, settings, DirectDraw and Direct3D device
+enumeration, DirectSound with its 61 sound effects loaded, the streaming
+thread, up to the point where it sets the display mode. Nothing is drawn or
+playable yet.**
 
 ```sh
 export TS2_GAME_DIR="/path/to/your/installed/game"
@@ -46,6 +47,8 @@ game and recompile it locally on your machine.
 - [`docs/CODE-DISCOVERY.md`](docs/CODE-DISCOVERY.md) — what the recompiler's analysis finds in the executable
 - [`docs/SEMANTICS.md`](docs/SEMANTICS.md) — instruction semantics and how they are verified
 - [`docs/BOOT.md`](docs/BOOT.md) — how far the game currently boots
+- [`docs/MODIFICATIONS.md`](docs/MODIFICATIONS.md) — everything the port does differently from the original
+- [`docs/BACKLOG.md`](docs/BACKLOG.md) — deferred work and known gaps
 - [`docs/adr/`](docs/adr/) — architecture decision records
 
 ## Support

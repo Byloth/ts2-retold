@@ -137,20 +137,14 @@ fn max_stack_index(i: &Instruction) -> u32 {
 }
 
 fn memory_operand_address(i: &Instruction, regs: &[u32; 8]) -> Option<u32> {
-    (0..i.op_count())
-        .any(|n| i.op_kind(n) == OpKind::Memory)
-        .then(|| {
-            let reg = |r: Register| {
-                if r == Register::None {
-                    0
-                } else {
-                    regs[r.full_register32().number()]
-                }
-            };
-            reg(i.memory_base())
-                .wrapping_add(reg(i.memory_index()).wrapping_mul(i.memory_index_scale()))
-                .wrapping_add(i.memory_displacement32())
-        })
+    (0..i.op_count()).any(|n| i.op_kind(n) == OpKind::Memory).then(|| {
+        let reg = |r: Register| {
+            if r == Register::None { 0 } else { regs[r.full_register32().number()] }
+        };
+        reg(i.memory_base())
+            .wrapping_add(reg(i.memory_index()).wrapping_mul(i.memory_index_scale()))
+            .wrapping_add(i.memory_displacement32())
+    })
 }
 
 #[derive(Debug, Default)]
@@ -192,10 +186,7 @@ pub fn generate(
         }
 
         for _ in 0..rounds {
-            let mut cpu = Cpu {
-                eip: va,
-                ..Cpu::default()
-            };
+            let mut cpu = Cpu { eip: va, ..Cpu::default() };
             for reg in &mut cpu.regs {
                 *reg = rng.word();
             }

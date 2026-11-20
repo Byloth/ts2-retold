@@ -4,7 +4,9 @@ Fan project: static recompilation (x86 → Rust) of the PC version of Toy Story 
 (the 1999 action game by Traveller's Tales), targeting the browser (WASM +
 WebGPU) and native Windows, followed by catalogued enhancements and
 multiplayer. Full brief: `docs/BRIEF.md` (amended by the ADRs).
-Recon findings: `docs/RECON.md`. Decisions: `docs/adr/`. Analysis results:
+Recon findings: `docs/RECON.md`. Decisions: `docs/adr/`. Deferred work and
+known gaps: `docs/BACKLOG.md`. The catalogue of modifications:
+`docs/MODIFICATIONS.md` (keep it in step with `crates/runtime/src/mods.rs`). Analysis results:
 `docs/CODE-DISCOVERY.md`. Instruction semantics and their verification:
 `docs/SEMANTICS.md`.
 
@@ -94,7 +96,8 @@ cargo run --release --bin andy -- difftest --out out/difftest.jsonl --rounds 40
 
 # Run the game in the interpreter; lists host calls and where it stops.
 # --args "-log" turns on the game's own log, printed at the end.
-cargo run --release --bin andy -- boot --trace --args "-log"
+# Always give --limit: a looping game otherwise runs for 2 billion instructions.
+cargo run --release --bin andy -- boot --trace --limit 400000000 --args "-log"
 ```
 
 `.venv` is created with `python3 -m venv .venv && .venv/bin/pip install unicorn==2.1.4`.

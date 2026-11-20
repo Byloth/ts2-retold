@@ -11,6 +11,9 @@ use std::collections::VecDeque;
 use andy_recomp::pe::{ResourceId, resource_type};
 
 use super::{HostResult, functions};
+use crate::game;
+use crate::mods::SKIP_MODE_SELECT;
+use crate::threads::{INFINITE, Waiting};
 use crate::{Machine, Stop};
 
 pub const WM_CREATE: u32 = 0x0001;
@@ -34,6 +37,10 @@ pub const WM_NCDESTROY: u32 = 0x0082;
 pub const WM_NCCALCSIZE: u32 = 0x0083;
 pub const WM_NCACTIVATE: u32 = 0x0086;
 pub const WM_QUERYENDSESSION: u32 = 0x0011;
+pub const WM_KEYDOWN: u32 = 0x0100;
+const VK_SPACE: u32 = 0x20;
+/// Class of the game's start-up "Screen Mode Select" window, upper-cased.
+const MODE_SELECT_CLASS: &[u8] = b"SCREEN MODE SELECT";
 
 const WS_VISIBLE: u32 = 0x1000_0000;
 const CW_USEDEFAULT: u32 = 0x8000_0000;
@@ -74,6 +81,9 @@ pub struct Window {
     pub visible: bool,
     alive: bool,
     needs_paint: bool,
+    /// Set by the `skip-mode-select` modification on the window it answers
+    /// on the user's behalf.
+    hidden_by_modification: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,11 +106,7 @@ pub struct Display {
 impl Default for Display {
     fn default() -> Self {
         // A common desktop of the game's time.
-        Display {
-            width: 1024,
-            height: 768,
-            bits_per_pixel: 16,
-        }
+        Display { width: 1024, height: 768, bits_per_pixel: 16 }
     }
 }
 
@@ -113,35 +119,33 @@ pub struct User {
     quit: Option<u32>,
     /// Window that is active and has the keyboard focus, or 0.
     pub active: u32,
+    /// The `skip-mode-select` modification delivered its key press and owes
+    /// the window an empty queue before the next one.
+    confirmation_delivered: bool,
     /// `ShowCursor` display count; the cursor shows while it is >= 0.
     pub cursor_count: i32,
     pub display: Display,
 }
 
 impl User {
-    fn window(&self, handle: u32) -> Option<&Window> {
+    /// Whether a window that a modification keeps off the screen is open.
+    pub fn has_window_hidden_by_modification(&self) -> bool {
+        self.windows.iter().any(|window| window.alive && window.hidden_by_modification)
+    }
+
+    pub(crate) fn window(&self, handle: u32) -> Option<&Window> {
         let index = handle.checked_sub(FIRST_WINDOW)? / 4;
-        self.windows
-            .get(index as usize)
-            .filter(|w| w.alive && w.handle == handle)
+        self.windows.get(index as usize).filter(|w| w.alive && w.handle == handle)
     }
 
     fn window_mut(&mut self, handle: u32) -> Option<&mut Window> {
         let index = handle.checked_sub(FIRST_WINDOW)? / 4;
-        self.windows
-            .get_mut(index as usize)
-            .filter(|w| w.alive && w.handle == handle)
+        self.windows.get_mut(index as usize).filter(|w| w.alive && w.handle == handle)
     }
 
     /// Queues a message, as `PostMessage` does.
     pub fn post(&mut self, window: u32, message: u32, wparam: u32, lparam: u32, time: u32) {
-        self.queue.push_back(Message {
-            window,
-            message,
-            wparam,
-            lparam,
-            time,
-        });
+        self.queue.push_back(Message { window, message, wparam, lparam, time });
     }
 }
 
@@ -192,21 +196,12 @@ impl Frame {
         }
         let mut top = border;
         if style & WS_CAPTION == WS_CAPTION {
-            top += if ex_style & WS_EX_TOOLWINDOW != 0 {
-                SMALL_CAPTION
-            } else {
-                CAPTION
-            };
+            top += if ex_style & WS_EX_TOOLWINDOW != 0 { SMALL_CAPTION } else { CAPTION };
         }
         if has_menu {
             top += MENU;
         }
-        Frame {
-            left: border,
-            top,
-            right: border,
-            bottom: border,
-        }
+        Frame { left: border, top, right: border, bottom: border }
     }
 }
 
@@ -224,32 +219,31 @@ impl Window {
     }
 }
 
+/// What `ShowWindow` is asked to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Show {
+    Hide,
+    Normal,
+    Maximized,
+}
+
 fn pack(low: i32, high: i32) -> u32 {
     (low as u32 & 0xFFFF) | (high as u32) << 16
 }
 
 fn not_implemented(what: String) -> HostResult {
-    Err(Stop::Unimplemented {
-        dll: "USER32.dll".into(),
-        name: what,
-    })
+    Err(Stop::Unimplemented { dll: "USER32.dll".into(), name: what })
 }
 
 /// A resource name argument: a small integer or a pointer to a string.
 fn resource_id(m: &mut Machine, value: u32) -> ResourceId {
-    if value < 0x1_0000 {
-        ResourceId::Id(value as u16)
-    } else {
-        ResourceId::Name(m.text(value))
-    }
+    if value < 0x1_0000 { ResourceId::Id(value as u16) } else { ResourceId::Name(m.text(value)) }
 }
 
 /// Index of a resource of the given type, if the executable has it.
 fn find_resource(m: &mut Machine, kind: u16, name: u32) -> Option<usize> {
     let name = resource_id(m, name);
-    m.os.resources
-        .iter()
-        .position(|r| r.kind.matches(&ResourceId::Id(kind)) && r.name.matches(&name))
+    m.os.resources.iter().position(|r| r.kind.matches(&ResourceId::Id(kind)) && r.name.matches(&name))
 }
 
 impl Machine {
@@ -288,42 +282,17 @@ impl Machine {
         if name.is_empty() || self.os.user.classes.iter().any(|c| c.name == name) {
             return 0;
         }
-        self.note(|| {
-            format!(
-                "class {:?}, procedure {:#x}",
-                String::from_utf8_lossy(&name),
-                words[1]
-            )
-        });
-        self.os.user.classes.push(Class {
-            name,
-            procedure: words[1],
-            background: words[7],
-        });
+        self.note(|| format!("class {:?}, procedure {:#x}", String::from_utf8_lossy(&name), words[1]));
+        self.os.user.classes.push(Class { name, procedure: words[1], background: words[7] });
         // Class atoms start at 0xC000.
         0xC000 + self.os.user.classes.len() as u32 - 1
     }
 
     fn create_window(&mut self, a: &[u32]) -> HostResult {
-        let [
-            ex_style,
-            class_name,
-            title,
-            style,
-            x,
-            y,
-            width,
-            height,
-            parent,
-            menu,
-            instance,
-            param,
-        ] = *<&[u32; 12]>::try_from(a).expect("CreateWindowExA takes twelve arguments");
+        let [ex_style, class_name, title, style, x, y, width, height, parent, menu, instance, param] =
+            *<&[u32; 12]>::try_from(a).expect("CreateWindowExA takes twelve arguments");
         let class = if class_name < 0x1_0000 {
-            class_name
-                .checked_sub(0xC000)
-                .map(|n| n as usize)
-                .filter(|&n| n < self.os.user.classes.len())
+            class_name.checked_sub(0xC000).map(|n| n as usize).filter(|&n| n < self.os.user.classes.len())
         } else {
             let wanted = self.bytes(class_name).to_ascii_uppercase();
             self.os.user.classes.iter().position(|c| c.name == wanted)
@@ -337,17 +306,10 @@ impl Machine {
         let display = self.os.user.display;
         let overlapped = style & (WS_POPUP | WS_CHILD) == 0;
         let choose = |value: u32, chosen: u32| {
-            if value == CW_USEDEFAULT {
-                if overlapped { chosen as i32 } else { 0 }
-            } else {
-                value as i32
-            }
+            if value == CW_USEDEFAULT { if overlapped { chosen as i32 } else { 0 } } else { value as i32 }
         };
         let (x, y) = (choose(x, display.width / 8), choose(y, display.height / 8));
-        let (width, height) = (
-            choose(width, display.width * 3 / 4),
-            choose(height, display.height * 3 / 4),
-        );
+        let (width, height) = (choose(width, display.width * 3 / 4), choose(height, display.height * 3 / 4));
         let handle = FIRST_WINDOW + 4 * self.os.user.windows.len() as u32;
         let window = Window {
             handle,
@@ -368,6 +330,8 @@ impl Machine {
             alive: true,
             needs_paint: false,
             frame: Frame::of(style, ex_style, menu != 0),
+            hidden_by_modification: self.os.mods.is_enabled(SKIP_MODE_SELECT)
+                && self.os.user.classes[class].name == MODE_SELECT_CLASS,
         };
         self.note(|| {
             format!(
@@ -379,6 +343,12 @@ impl Machine {
                 window.y
             )
         });
+        if window.hidden_by_modification {
+            // Forget the choices saved in the settings file, which index
+            // lists that depend on the machine they were made on. The
+            // window then starts from the game's own defaults.
+            let _ = self.memory.write(game::SAVED_DISPLAY_DRIVER, 4, u32::MAX);
+        }
         let (wx, wy, ww, wh) = (window.x, window.y, window.width, window.height);
         self.os.user.windows.push(window);
 
@@ -414,7 +384,7 @@ impl Machine {
             return Ok(0);
         }
         if style & WS_VISIBLE != 0 {
-            self.show_window(handle, true)?;
+            self.show_window(handle, Show::Normal)?;
         }
         Ok(handle)
     }
@@ -438,40 +408,76 @@ impl Machine {
         Ok(true)
     }
 
-    /// Shows or hides a window, with the messages Windows sends for it.
-    /// Returns whether the window was visible before.
-    fn show_window(&mut self, handle: u32, show: bool) -> Result<bool, Stop> {
+    /// Shows, hides or maximises a window, with the messages Windows sends
+    /// for it. Returns whether the window was visible before.
+    fn show_window(&mut self, handle: u32, show: Show) -> Result<bool, Stop> {
         let Some(window) = self.os.user.window(handle) else {
             return Ok(false);
         };
         let was_visible = window.visible;
-        let (x, y, width, height) = (window.x, window.y, window.width, window.height);
-        if show == was_visible {
+        let visible = show != Show::Hide;
+        let old = (window.x, window.y, window.width, window.height);
+        let frame = window.frame;
+        let mut new = old;
+        if show == Show::Maximized {
+            // The window is asked how large it may get; by default it covers
+            // the screen with its frame pushed off the edges.
+            let display = self.os.user.display;
+            let size = (
+                display.width as i32 + frame.left + frame.right,
+                display.height as i32 + frame.top + frame.bottom,
+            );
+            let limits = [
+                0,
+                0,
+                size.0 as u32,
+                size.1 as u32,
+                -frame.left as u32,
+                -frame.top as u32,
+                MIN_TRACK.0 as u32,
+                MIN_TRACK.1 as u32,
+                size.0 as u32,
+                size.1 as u32,
+            ];
+            let (_, limits) = self.send_with_struct(handle, WM_GETMINMAXINFO, 0, limits)?;
+            new = (limits[4] as i32, limits[5] as i32, limits[2] as i32, limits[3] as i32);
+        }
+        if visible == was_visible && new == old {
             return Ok(was_visible);
         }
-        self.send_message(handle, WM_SHOWWINDOW, show as u32, 0)?;
+        if visible != was_visible {
+            self.send_message(handle, WM_SHOWWINDOW, visible as u32, 0)?;
+        }
         // WINDOWPOS: window, insert-after, x, y, cx, cy, flags.
         const SWP_NOSIZE_NOMOVE: u32 = 0x0003;
         const SWP_SHOWWINDOW: u32 = 0x0040;
         const SWP_HIDEWINDOW: u32 = 0x0080;
-        let flags = SWP_NOSIZE_NOMOVE | if show { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW };
-        let position = [handle, 0, x as u32, y as u32, width as u32, height as u32, flags];
+        let mut flags = if new == old { SWP_NOSIZE_NOMOVE } else { 0 };
+        if visible != was_visible {
+            flags |= if visible { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW };
+        }
+        let position = [handle, 0, new.0 as u32, new.1 as u32, new.2 as u32, new.3 as u32, flags];
         self.send_with_struct(handle, WM_WINDOWPOSCHANGING, 0, position)?;
         if let Some(window) = self.os.user.window_mut(handle) {
-            window.visible = show;
-            window.needs_paint = show;
+            (window.x, window.y, window.width, window.height) = new;
+            window.visible = visible;
+            window.needs_paint = visible;
         }
-        if show {
+        if visible && !was_visible {
             self.activate(handle)?;
-        } else if self.os.user.active == handle {
+        } else if !visible && self.os.user.active == handle {
             self.deactivate()?;
         }
         self.send_with_struct(handle, WM_WINDOWPOSCHANGED, 0, position)?;
-        if show {
-            // A window learns its size and position the first time it is shown.
+        if visible && (!was_visible || new != old) {
+            // A window learns its size and position when it is first shown
+            // and whenever they change.
+            const SIZE_RESTORED: u32 = 0;
+            const SIZE_MAXIMIZED: u32 = 2;
+            let kind = if show == Show::Maximized { SIZE_MAXIMIZED } else { SIZE_RESTORED };
             if let Some(window) = self.os.user.window(handle) {
                 let ((cx, cy), (cw, ch)) = (window.client_origin(), window.client_size());
-                self.send_message(handle, WM_SIZE, 0, pack(cw, ch))?;
+                self.send_message(handle, WM_SIZE, kind, pack(cw, ch))?;
                 self.send_message(handle, WM_MOVE, 0, pack(cx, cy))?;
             }
         }
@@ -531,32 +537,34 @@ impl Machine {
                 time: self.os.now_ms,
             });
         }
-        let window = user
-            .windows
-            .iter()
-            .find(|w| w.alive && w.visible && w.needs_paint)?;
-        Some(Message {
-            window: window.handle,
-            message: WM_PAINT,
-            wparam: 0,
-            lparam: 0,
-            time: self.os.now_ms,
-        })
+        let now = self.os.now_ms;
+        if let Some(window) = user.windows.iter().find(|w| w.alive && w.visible && w.needs_paint) {
+            return Some(Message {
+                window: window.handle,
+                message: WM_PAINT,
+                wparam: 0,
+                lparam: 0,
+                time: now,
+            });
+        }
+        // The skipped mode-select window is answered for the user: it is
+        // told that the space bar, its "confirm" key, went down. Between two
+        // key presses the queue is reported empty once, because the window
+        // only acts on a key after it has drained its messages.
+        let skipped = user.windows.iter().find(|w| w.alive && w.hidden_by_modification)?.handle;
+        if user.confirmation_delivered {
+            user.confirmation_delivered = false;
+            return None;
+        }
+        user.confirmation_delivered = remove;
+        Some(Message { window: skipped, message: WM_KEYDOWN, wparam: VK_SPACE, lparam: 1, time: now })
     }
 
     fn write_message(&mut self, address: u32, message: &Message) {
         // MSG: window, message, wParam, lParam, time, cursor x, cursor y.
         self.write_words(
             address,
-            &[
-                message.window,
-                message.message,
-                message.wparam,
-                message.lparam,
-                message.time,
-                0,
-                0,
-            ],
+            &[message.window, message.message, message.wparam, message.lparam, message.time, 0, 0],
         );
     }
 
@@ -634,7 +642,15 @@ functions! { "USER32.dll";
     CreateWindowExA(12) => |m, a| m.create_window(a),
     DestroyWindow(1) => |m, a| -> HostResult { Ok(m.destroy_window(a[0], true)? as u32) },
     DefWindowProcA(4) => |m, a| m.default_window_procedure(a),
-    ShowWindow(2) => |m, a| -> HostResult { Ok(m.show_window(a[0], a[1] != 0)? as u32) },
+    ShowWindow(2) => |m, a| -> HostResult {
+        let show = match a[1] {
+            0 => Show::Hide,
+            1 | 5 => Show::Normal, // SW_SHOWNORMAL, SW_SHOW
+            3 => Show::Maximized,
+            other => return not_implemented(format!("ShowWindow({other})")),
+        };
+        Ok(m.show_window(a[0], show)? as u32)
+    },
     UpdateWindow(1) => |m, a| -> HostResult {
         let pending = m.os.user.window(a[0]).is_some_and(|w| w.visible && w.needs_paint);
         if pending {
@@ -670,8 +686,8 @@ functions! { "USER32.dll";
                 m.write_message(a[0], &message);
                 Ok((message.message != WM_QUIT) as u32)
             }
-            // Blocking with nothing that could ever arrive: needs the host event loop.
-            None => not_implemented("GetMessageA on an empty queue".into()),
+            // Nothing can arrive until there is input from the host.
+            None => m.wait(Waiting::Time, INFINITE),
         }
     },
     // Key messages produce character messages once keyboard input exists.
@@ -685,13 +701,47 @@ functions! { "USER32.dll";
         let Some(window) = m.os.user.window_mut(a[0]) else { return 0 };
         window.needs_paint = false;
         let (width, height) = window.client_size();
-        let (width, height) = (width as u32, height as u32);
-        let context = a[0] | 1;
+        let context = m.window_context(a[0]);
         let _ = m.memory.load(a[1], &[0; 64]);
-        m.write_words(a[1], &[context, 0, 0, 0, width, height]);
+        m.write_words(a[1], &[context, 0, 0, 0, width as u32, height as u32]);
         context
     },
-    EndPaint(2) => |_, _| 1,
+    EndPaint(2) => |m, a| {
+        let context = m.memory.read(a[1], 4).unwrap_or(0);
+        m.delete_context(context);
+        1
+    },
+    GetDC(1) => |m, a| -> HostResult {
+        if m.os.user.window(a[0]).is_none() {
+            return not_implemented("GetDC of the screen".into());
+        }
+        Ok(m.window_context(a[0]))
+    },
+    ReleaseDC(2) => |m, a| m.delete_context(a[1]) as u32,
+    InvalidateRect(3) => |m, a| {
+        // The whole client area is repainted whatever rectangle is given.
+        match m.os.user.window_mut(a[0]) {
+            Some(window) => {
+                window.needs_paint = true;
+                1
+            }
+            None => 0,
+        }
+    },
+    LoadImageA(6) => |m, a| -> HostResult {
+        // Instance, name, type, width, height, flags.
+        const IMAGE_BITMAP: u32 = 0;
+        const LR_LOADFROMFILE: u32 = 0x0010;
+        const LR_CREATEDIBSECTION: u32 = 0x2000;
+        let flags = a[5];
+        if a[2] != IMAGE_BITMAP || flags & LR_LOADFROMFILE == 0 || a[3] != 0 || a[4] != 0 {
+            return not_implemented("LoadImageA other than a whole bitmap from a file".into());
+        }
+        let path = m.text(a[1]);
+        let handle = m.load_bitmap_file(&path, flags & LR_CREATEDIBSECTION != 0)?;
+        m.note(|| format!("{path:?}{}", if handle == 0 { " -> failed" } else { "" }));
+        Ok(handle)
+    },
     ShowCursor(1) => |m, a| {
         m.os.user.cursor_count += if a[0] != 0 { 1 } else { -1 };
         m.os.user.cursor_count as u32
@@ -712,16 +762,27 @@ functions! { "USER32.dll";
         let rect = [0, 0, width as u32, height as u32];
         m.write_words(a[1], &rect) as u32
     },
+    SetRect(5) => |m, a| m.write_words(a[0], &a[1..5]) as u32,
     AdjustWindowRect(3) => |m, a| adjust_window_rect(m, a[0], a[1], 0, a[2] != 0),
     AdjustWindowRectEx(4) => |m, a| adjust_window_rect(m, a[0], a[1], a[3], a[2] != 0),
     GetSystemMetrics(1) => |m, a| -> HostResult {
-        const SM_CXSCREEN: u32 = 0;
-        const SM_CYSCREEN: u32 = 1;
-        match a[0] {
-            SM_CXSCREEN => Ok(m.os.user.display.width),
-            SM_CYSCREEN => Ok(m.os.user.display.height),
-            other => not_implemented(format!("GetSystemMetrics({other})")),
-        }
+        // Windows 98 with its default appearance and the taskbar at the
+        // bottom of the screen.
+        const TASKBAR_HEIGHT: u32 = 28;
+        const CAPTION_HEIGHT: u32 = 19;
+        let display = m.os.user.display;
+        Ok(match a[0] {
+            0 => display.width,                                     // SM_CXSCREEN
+            1 => display.height,                                    // SM_CYSCREEN
+            4 | 15 => CAPTION_HEIGHT,                               // SM_CYCAPTION, SM_CYMENU
+            5 | 6 => 1,                                             // SM_CXBORDER, SM_CYBORDER
+            7 | 8 => 3,                                             // SM_CXDLGFRAME, SM_CYDLGFRAME
+            16 => display.width,                                    // SM_CXFULLSCREEN
+            17 => display.height - TASKBAR_HEIGHT - CAPTION_HEIGHT, // SM_CYFULLSCREEN
+            32 | 33 => 4,                                           // SM_CXFRAME, SM_CYFRAME
+            45 | 46 => 2,                                           // SM_CXEDGE, SM_CYEDGE
+            other => return not_implemented(format!("GetSystemMetrics({other})")),
+        })
     },
     SystemParametersInfoA(4) => |m, a| -> HostResult {
         // The program tells Windows 98 that a screen saver is running, the
@@ -763,36 +824,15 @@ mod tests {
         const WS_CAPTION: u32 = 0x00C0_0000;
         const WS_EX_CLIENTEDGE: u32 = 0x0200;
         // A resizable window: 4-pixel sizing frame, 19-pixel caption.
-        assert_eq!(
-            Frame::of(WS_OVERLAPPEDWINDOW, 0, false),
-            Frame {
-                left: 4,
-                top: 23,
-                right: 4,
-                bottom: 4
-            }
-        );
+        assert_eq!(Frame::of(WS_OVERLAPPEDWINDOW, 0, false), Frame { left: 4, top: 23, right: 4, bottom: 4 });
         assert_eq!(Frame::of(WS_OVERLAPPEDWINDOW, 0, true).top, 42);
         // A full-screen pop-up has no frame at all.
         assert_eq!(Frame::of(WS_POPUP, 0, false), Frame::default());
         // A fixed-size captioned window: 3-pixel frame.
-        assert_eq!(
-            Frame::of(WS_CAPTION, 0, false),
-            Frame {
-                left: 3,
-                top: 22,
-                right: 3,
-                bottom: 3
-            }
-        );
+        assert_eq!(Frame::of(WS_CAPTION, 0, false), Frame { left: 3, top: 22, right: 3, bottom: 3 });
         assert_eq!(
             Frame::of(WS_POPUP, WS_EX_CLIENTEDGE, false),
-            Frame {
-                left: 2,
-                top: 2,
-                right: 2,
-                bottom: 2
-            }
+            Frame { left: 2, top: 2, right: 2, bottom: 2 }
         );
     }
 }

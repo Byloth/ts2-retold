@@ -7,7 +7,9 @@ use andy_cpu::memory::Memory;
 use andy_recomp::pe::Resource;
 
 use crate::files::{Files, INSTALL_DIR};
+use crate::mods::Modifications;
 use crate::win32::com::Com;
+use crate::win32::gdi32::Gdi;
 use crate::win32::user32::User;
 use crate::win32::{ddraw, dsound, winmm};
 
@@ -42,6 +44,9 @@ pub struct Os {
     /// The executable's resources (their data is in guest memory).
     pub resources: Vec<Resource>,
     pub user: User,
+    pub gdi: Gdi,
+    /// The modifications switched on for this run.
+    pub mods: Modifications,
     pub(crate) com: Com,
     pub(crate) ddraw: ddraw::State,
     pub(crate) dsound: dsound::State,
@@ -53,12 +58,7 @@ pub struct Os {
 
 impl Os {
     pub fn new(files: Files) -> Os {
-        Os {
-            heap_next: HEAP_START,
-            virtual_next: VIRTUAL_START,
-            files,
-            ..Os::default()
-        }
+        Os { heap_next: HEAP_START, virtual_next: VIRTUAL_START, files, ..Os::default() }
     }
 
     /// The handle of the process heap.
@@ -86,9 +86,7 @@ impl Os {
         }
         let block = self.heap_next + HEAP_HEADER;
         memory.map(self.heap_next, total);
-        memory
-            .write(self.heap_next, 4, size)
-            .expect("block was just mapped");
+        memory.write(self.heap_next, 4, size).expect("block was just mapped");
         self.heap_next += total;
         block
     }

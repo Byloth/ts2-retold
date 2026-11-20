@@ -122,10 +122,7 @@ impl Image {
         if r.u16(opt, "optional header")? != PE32_MAGIC {
             return Err(PeError::Unsupported("not a PE32 optional header".into()));
         }
-        let linker_version = (
-            r.u8(opt + 2, "optional header")?,
-            r.u8(opt + 3, "optional header")?,
-        );
+        let linker_version = (r.u8(opt + 2, "optional header")?, r.u8(opt + 3, "optional header")?);
         let entry_rva = r.u32(opt + 16, "optional header")?;
         let base = r.u32(opt + 28, "optional header")?;
         let dir_count = r.u32(opt + 92, "optional header")? as usize;
@@ -150,24 +147,14 @@ impl Image {
             let raw_ptr = r.u32(at + 20, "section table")? as usize;
             let flags = r.u32(at + 36, "section table")?;
             // A zero virtual size means "use the raw size" (old linkers).
-            let virtual_size = if declared_vsize == 0 {
-                raw_size
-            } else {
-                declared_vsize
-            };
+            let virtual_size = if declared_vsize == 0 { raw_size } else { declared_vsize };
             let init_len = raw_size.min(virtual_size) as usize;
             let data = r.bytes(raw_ptr, init_len, "section data")?.to_vec();
             let va = base
                 .checked_add(rva)
                 .filter(|va| va.checked_add(virtual_size).is_some())
                 .ok_or_else(|| PeError::Unsupported(format!("section {name} wraps the address space")))?;
-            sections.push(Section {
-                name,
-                va,
-                virtual_size,
-                flags,
-                data,
-            });
+            sections.push(Section { name, va, virtual_size, flags, data });
         }
 
         let mut image = Image {
@@ -204,13 +191,9 @@ impl Image {
             if name_rva == 0 {
                 return Ok(());
             }
-            let dll = self
-                .c_string(self.base.wrapping_add(name_rva))
-                .ok_or(PeError::Truncated(WHAT))?;
+            let dll = self.c_string(self.base.wrapping_add(name_rva)).ok_or(PeError::Truncated(WHAT))?;
             // The lookup table survives binding; fall back to the IAT without one.
-            let thunks = self
-                .base
-                .wrapping_add(if lookup_rva != 0 { lookup_rva } else { iat_rva });
+            let thunks = self.base.wrapping_add(if lookup_rva != 0 { lookup_rva } else { iat_rva });
             for index in 0u32.. {
                 let thunk = self.need_u32(thunks + index * 4, WHAT)?;
                 if thunk == 0 {
@@ -224,11 +207,7 @@ impl Image {
                     ImportName::Name(self.c_string(va).ok_or(PeError::Truncated(WHAT))?)
                 };
                 let iat_va = self.base.wrapping_add(iat_rva).wrapping_add(index * 4);
-                self.imports.push(Import {
-                    dll: dll.clone(),
-                    name,
-                    iat_va,
-                });
+                self.imports.push(Import { dll: dll.clone(), name, iat_va });
             }
             descriptor += 20;
         }
@@ -245,9 +224,7 @@ impl Image {
                 if block_size == 0 {
                     break; // zero padding at the end of the directory
                 }
-                return Err(PeError::Unsupported(format!(
-                    "relocation block of size {block_size}"
-                )));
+                return Err(PeError::Unsupported(format!("relocation block of size {block_size}")));
             }
             for at in (block + 8..block + block_size).step_by(2) {
                 let entry = u16::from_le_bytes([
@@ -257,8 +234,7 @@ impl Image {
                 match entry >> 12 {
                     REL_BASED_ABSOLUTE => {}
                     REL_BASED_HIGHLOW => {
-                        self.relocs
-                            .push(self.base.wrapping_add(page).wrapping_add((entry & 0xFFF) as u32));
+                        self.relocs.push(self.base.wrapping_add(page).wrapping_add((entry & 0xFFF) as u32));
                     }
                     other => {
                         return Err(PeError::Unsupported(format!("relocation type {other}")));
@@ -367,9 +343,7 @@ impl Image {
         let counts = self.need_u32(directory + 12, WHAT)?;
         let count = (counts & 0xFFFF) + (counts >> 16);
         if count > 0x1_0000 {
-            return Err(PeError::Unsupported(
-                "resource directory with too many entries".into(),
-            ));
+            return Err(PeError::Unsupported("resource directory with too many entries".into()));
         }
         let mut entries = Vec::with_capacity(count as usize);
         for n in 0..count {
@@ -398,12 +372,7 @@ impl Image {
         const WHAT: &str = "resource directory";
         let counts = self.need_u32(directory + 12, WHAT)?;
         let count = (counts & 0xFFFF) + (counts >> 16);
-        for (n, (id, _)) in self
-            .resource_entries(root, directory)?
-            .iter()
-            .enumerate()
-            .take(count as usize)
-        {
+        for (n, (id, _)) in self.resource_entries(root, directory)?.iter().enumerate().take(count as usize) {
             if id == wanted {
                 let target = self.need_u32(directory + 16 + 8 * n as u32 + 4, WHAT)?;
                 return Ok(root.wrapping_add(target & 0x7FFF_FFFF));
@@ -415,9 +384,7 @@ impl Image {
     /// Finds a resource by type and name, in any language. Names compare
     /// without regard to case, as the resource functions do.
     pub fn resource(&self, kind: &ResourceId, name: &ResourceId) -> Option<&Resource> {
-        self.resources
-            .iter()
-            .find(|r| r.kind.matches(kind) && r.name.matches(name))
+        self.resources.iter().find(|r| r.kind.matches(kind) && r.name.matches(name))
     }
 }
 
@@ -491,9 +458,7 @@ struct Reader<'a>(&'a [u8]);
 
 impl<'a> Reader<'a> {
     fn bytes(&self, at: usize, len: usize, what: &'static str) -> Result<&'a [u8], PeError> {
-        at.checked_add(len)
-            .and_then(|end| self.0.get(at..end))
-            .ok_or(PeError::Truncated(what))
+        at.checked_add(len).and_then(|end| self.0.get(at..end)).ok_or(PeError::Truncated(what))
     }
 
     fn u8(&self, at: usize, what: &'static str) -> Result<u8, PeError> {
@@ -518,10 +483,7 @@ mod tests {
     #[test]
     fn rejects_garbage() {
         assert_eq!(Image::parse(b"").unwrap_err(), PeError::Truncated("DOS header"));
-        assert_eq!(
-            Image::parse(&[0u8; 64]).unwrap_err(),
-            PeError::BadMagic("DOS signature")
-        );
+        assert_eq!(Image::parse(&[0u8; 64]).unwrap_err(), PeError::BadMagic("DOS signature"));
         let mut dos = vec![0u8; 0x80];
         dos[0] = b'M';
         dos[1] = b'Z';
@@ -568,16 +530,9 @@ mod tests {
                 size: 3,
             }]
         );
-        let found = image.resource(
-            &ResourceId::Id(resource_type::DIALOG),
-            &ResourceId::Name("main".into()),
-        );
+        let found = image.resource(&ResourceId::Id(resource_type::DIALOG), &ResourceId::Name("main".into()));
         assert_eq!(found.map(|r| r.va), Some(0x40_2080));
-        assert!(
-            image
-                .resource(&ResourceId::Id(4), &ResourceId::Name("main".into()))
-                .is_none()
-        );
+        assert!(image.resource(&ResourceId::Id(4), &ResourceId::Name("main".into())).is_none());
     }
 
     #[test]

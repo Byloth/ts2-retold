@@ -53,12 +53,7 @@ pub enum Disposition {
 
 impl Files {
     pub fn new(game_dir: Option<PathBuf>, write_dir: Option<PathBuf>) -> Files {
-        Files {
-            game_dir,
-            write_dir,
-            next_handle: 0x100,
-            ..Files::default()
-        }
+        Files { game_dir, write_dir, next_handle: 0x100, ..Files::default() }
     }
 
     /// Turns a path as the program wrote it into components relative to the
@@ -149,11 +144,7 @@ impl Files {
         self.injected.remove(&name.to_ascii_lowercase());
         if let Some(root) = &self.write_dir {
             let _ = fs::remove_file(Self::written_path(root, &name));
-            let in_game_dir = self
-                .game_dir
-                .as_ref()
-                .and_then(|game| Self::resolve(game, &parts))
-                .is_some();
+            let in_game_dir = self.game_dir.as_ref().and_then(|game| Self::resolve(game, &parts)).is_some();
             if in_game_dir {
                 let marker = Self::deletion_marker(root, &name);
                 if let Some(parent) = marker.parent() {
@@ -177,13 +168,7 @@ impl Files {
                 (None, _) => Vec::new(),
             };
             let created = disposition == Disposition::CreateAlways;
-            Some(OpenFile {
-                name: parts.join("/"),
-                data,
-                position: 0,
-                writable,
-                dirty: created,
-            })
+            Some(OpenFile { name: parts.join("/"), data, position: 0, writable, dirty: created })
         });
         self.log.push((guest_path.to_string(), file.is_some()));
         let file = file?;
@@ -244,16 +229,10 @@ mod tests {
     #[test]
     fn paths_are_confined_to_the_install_directory() {
         let parts = |path| Files::components(path).map(|p| p.join("/"));
-        assert_eq!(
-            parts("C:\\TOY2\\data\\LEVEL01\\level.ngn").as_deref(),
-            Some("data/LEVEL01/level.ngn")
-        );
+        assert_eq!(parts("C:\\TOY2\\data\\LEVEL01\\level.ngn").as_deref(), Some("data/LEVEL01/level.ngn"));
         assert_eq!(parts("c:\\toy2\\toy2.cfg").as_deref(), Some("toy2.cfg"));
         assert_eq!(parts("toy2.err").as_deref(), Some("toy2.err"));
-        assert_eq!(
-            parts(".\\data\\..\\validate.tta").as_deref(),
-            Some("validate.tta")
-        );
+        assert_eq!(parts(".\\data\\..\\validate.tta").as_deref(), Some("validate.tta"));
         assert_eq!(parts("..\\secret"), None);
         assert_eq!(parts("D:\\validate.tta"), None);
         assert_eq!(parts("\\\\.\\vwin32"), None);
@@ -268,56 +247,35 @@ mod tests {
         fs::write(game.join("Data").join("Level.BIN"), b"original").unwrap();
 
         let mut files = Files::new(Some(game.clone()), Some(write.clone()));
-        let handle = files
-            .open("C:\\TOY2\\DATA\\level.bin", false, Disposition::OpenExisting)
-            .unwrap();
+        let handle = files.open("C:\\TOY2\\DATA\\level.bin", false, Disposition::OpenExisting).unwrap();
         assert_eq!(files.read(handle, 4), Some(&b"orig"[..]));
         assert_eq!(files.read(handle, 100), Some(&b"inal"[..]));
         assert!(files.write(handle, b"x").is_none());
         assert!(files.close(handle));
         assert_eq!(files.open("missing.dat", false, Disposition::OpenExisting), None);
         files.inject("Extra.INI", b"LOG".to_vec());
-        let handle = files
-            .open("C:\\TOY2\\extra.ini", false, Disposition::OpenExisting)
-            .unwrap();
+        let handle = files.open("C:\\TOY2\\extra.ini", false, Disposition::OpenExisting).unwrap();
         assert_eq!(files.read(handle, 10), Some(&b"LOG"[..]));
 
-        let handle = files
-            .open("data\\level.bin", true, Disposition::CreateAlways)
-            .unwrap();
+        let handle = files.open("data\\level.bin", true, Disposition::CreateAlways).unwrap();
         files.write(handle, b"changed").unwrap();
         files.close(handle);
-        assert_eq!(
-            fs::read(game.join("Data").join("Level.BIN")).unwrap(),
-            b"original"
-        );
+        assert_eq!(fs::read(game.join("Data").join("Level.BIN")).unwrap(), b"original");
         // The new copy shadows the original from now on.
-        let handle = files
-            .open("DATA\\LEVEL.BIN", false, Disposition::OpenExisting)
-            .unwrap();
+        let handle = files.open("DATA\\LEVEL.BIN", false, Disposition::OpenExisting).unwrap();
         assert_eq!(files.read(handle, 100), Some(&b"changed"[..]));
         files.close(handle);
 
         // Deleting hides the original without touching it, until the file is written again.
         assert!(files.delete("data\\level.bin"));
         assert!(!files.delete("data\\level.bin"));
-        assert_eq!(
-            files.open("data\\level.bin", false, Disposition::OpenExisting),
-            None
-        );
-        assert_eq!(
-            fs::read(game.join("Data").join("Level.BIN")).unwrap(),
-            b"original"
-        );
-        let handle = files
-            .open("data\\level.bin", true, Disposition::OpenAlways)
-            .unwrap();
+        assert_eq!(files.open("data\\level.bin", false, Disposition::OpenExisting), None);
+        assert_eq!(fs::read(game.join("Data").join("Level.BIN")).unwrap(), b"original");
+        let handle = files.open("data\\level.bin", true, Disposition::OpenAlways).unwrap();
         assert_eq!(files.read(handle, 100), Some(&b""[..]));
         files.write(handle, b"new").unwrap();
         files.close(handle);
-        let handle = files
-            .open("data\\level.bin", false, Disposition::OpenExisting)
-            .unwrap();
+        let handle = files.open("data\\level.bin", false, Disposition::OpenExisting).unwrap();
         assert_eq!(files.read(handle, 100), Some(&b"new"[..]));
         fs::remove_dir_all(root).unwrap();
     }

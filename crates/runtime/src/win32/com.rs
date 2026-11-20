@@ -28,10 +28,7 @@ pub type Guid = [u8; 16];
 /// Builds a GUID from the usual `{d1-d2-d3-d4[0..2]-d4[2..8]}` notation.
 pub const fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> Guid {
     let (a, b, c) = (d1.to_le_bytes(), d2.to_le_bytes(), d3.to_le_bytes());
-    [
-        a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6],
-        d4[7],
-    ]
+    [a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]]
 }
 
 pub const IID_IUNKNOWN: Guid = guid(0, 0, 0, [0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
@@ -47,14 +44,10 @@ impl Machine {
         if let Some(&table) = self.os.com.tables.get(interface.name) {
             return table;
         }
-        let table = self
-            .os
-            .allocate(&mut self.memory, 4 * interface.methods.len() as u32);
+        let table = self.os.allocate(&mut self.memory, 4 * interface.methods.len() as u32);
         for (slot, method) in interface.methods.iter().enumerate() {
             let stub = self.host_function_address(method);
-            self.memory
-                .write(table + 4 * slot as u32, 4, stub)
-                .expect("table was just allocated");
+            self.memory.write(table + 4 * slot as u32, 4, stub).expect("table was just allocated");
         }
         self.os.com.tables.insert(interface.name, table);
         table
@@ -64,20 +57,14 @@ impl Machine {
     pub(crate) fn interface_pointer(&mut self, interface: &'static Interface, index: u32) -> u32 {
         let table = self.method_table(interface);
         let pointer = self.os.allocate(&mut self.memory, 8);
-        self.memory
-            .write(pointer, 4, table)
-            .expect("pointer was just allocated");
-        self.memory
-            .write(pointer + 4, 4, index)
-            .expect("pointer was just allocated");
+        self.memory.write(pointer, 4, table).expect("pointer was just allocated");
+        self.memory.write(pointer + 4, 4, index).expect("pointer was just allocated");
         pointer
     }
 
     /// The object number behind an interface pointer the program passed.
     pub(crate) fn object_index(&mut self, pointer: u32) -> Option<usize> {
-        self.memory
-            .read(pointer.wrapping_add(4), 4)
-            .map(|index| index as usize)
+        self.memory.read(pointer.wrapping_add(4), 4).map(|index| index as usize)
     }
 
     pub(crate) fn read_guid(&mut self, address: u32) -> Option<Guid> {
@@ -114,10 +101,7 @@ macro_rules! method {
     }};
     ($interface:literal, $method:ident) => {{
         fn handler(_: &mut $crate::Machine, _: &[u32]) -> $crate::win32::HostResult {
-            Err($crate::Stop::Unimplemented {
-                dll: $interface.into(),
-                name: stringify!($method).into(),
-            })
+            Err($crate::Stop::Unimplemented { dll: $interface.into(), name: stringify!($method).into() })
         }
         handler
     }};

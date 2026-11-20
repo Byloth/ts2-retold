@@ -60,15 +60,8 @@ pub enum Flag {
 }
 
 impl Flag {
-    pub const ALL: [Flag; 7] = [
-        Flag::Carry,
-        Flag::Parity,
-        Flag::Adjust,
-        Flag::Zero,
-        Flag::Sign,
-        Flag::Direction,
-        Flag::Overflow,
-    ];
+    pub const ALL: [Flag; 7] =
+        [Flag::Carry, Flag::Parity, Flag::Adjust, Flag::Zero, Flag::Sign, Flag::Direction, Flag::Overflow];
 
     /// Bit position in EFLAGS.
     pub fn bit(self) -> u32 {
@@ -262,11 +255,7 @@ fn is_zero<B: Backend>(b: &mut B, x: B::V) -> B::V {
 }
 
 fn truncate<B: Backend>(b: &mut B, x: B::V, size: Size) -> B::V {
-    if size == Size::B4 {
-        x
-    } else {
-        and_imm(b, x, size.mask())
-    }
+    if size == Size::B4 { x } else { and_imm(b, x, size.mask()) }
 }
 
 fn sign_extend<B: Backend>(b: &mut B, x: B::V, size: Size) -> B::V {
@@ -285,10 +274,7 @@ fn gpr(register: Register) -> Option<(usize, Size, bool)> {
     if !(register.is_gpr8() || register.is_gpr16() || register.is_gpr32()) {
         return None;
     }
-    let high = matches!(
-        register,
-        Register::AH | Register::CH | Register::DH | Register::BH
-    );
+    let high = matches!(register, Register::AH | Register::CH | Register::DH | Register::BH);
     Some((register.full_register32().number(), size, high))
 }
 
@@ -548,14 +534,8 @@ fn keep_flags_if<B: Backend>(b: &mut B, unchanged: B::V, flags: &[Flag], old: &[
     }
 }
 
-const ARITHMETIC_FLAGS: [Flag; 6] = [
-    Flag::Carry,
-    Flag::Parity,
-    Flag::Adjust,
-    Flag::Zero,
-    Flag::Sign,
-    Flag::Overflow,
-];
+const ARITHMETIC_FLAGS: [Flag; 6] =
+    [Flag::Carry, Flag::Parity, Flag::Adjust, Flag::Zero, Flag::Sign, Flag::Overflow];
 
 // ---------------------------------------------------------------------------
 // Integer instructions
@@ -793,17 +773,9 @@ fn multiply_wide<B: Backend>(b: &mut B, i: &Instruction, signed: bool) {
             b.bin(Bin::Ne, high, expected)
         }
         Size::B2 | Size::B1 => {
-            let accumulator = if size == Size::B2 {
-                Register::AX
-            } else {
-                Register::AL
-            };
+            let accumulator = if size == Size::B2 { Register::AX } else { Register::AL };
             let x = read_register(b, accumulator);
-            let (x, y) = if signed {
-                (sign_extend(b, x, size), sign_extend(b, y, size))
-            } else {
-                (x, y)
-            };
+            let (x, y) = if signed { (sign_extend(b, x, size), sign_extend(b, y, size)) } else { (x, y) };
             let product = b.bin(Bin::Mul, x, y);
             let low = truncate(b, product, size);
             if size == Size::B2 {
@@ -826,11 +798,8 @@ fn multiply_wide<B: Backend>(b: &mut B, i: &Instruction, signed: bool) {
 /// Two- and three-operand `imul`: truncated signed product.
 fn multiply_truncated<B: Backend>(b: &mut B, i: &Instruction) {
     let size = operand_size(b, i, 0);
-    let (x, y) = if i.op_count() == 3 {
-        (read(b, i, 1), read(b, i, 2))
-    } else {
-        (read(b, i, 0), read(b, i, 1))
-    };
+    let (x, y) =
+        if i.op_count() == 3 { (read(b, i, 1), read(b, i, 2)) } else { (read(b, i, 0), read(b, i, 1)) };
     let (result, overflow) = if size == Size::B4 {
         let low = b.bin(Bin::Mul, x, y);
         let high = b.bin(Bin::MulHighS, x, y);
@@ -1008,11 +977,7 @@ fn float_arithmetic<B: Backend>(b: &mut B, i: &Instruction, op: FBin, reversed: 
         let source = stack_index(i.op_register(1));
         (destination, b.st(destination), b.st(source))
     };
-    let result = if reversed {
-        b.fbin(op, y, x)
-    } else {
-        b.fbin(op, x, y)
-    };
+    let result = if reversed { b.fbin(op, y, x) } else { b.fbin(op, x, y) };
     b.set_st(destination, result);
     if pop {
         b.fpop();
@@ -1119,11 +1084,7 @@ fn float<B: Backend>(b: &mut B, i: &Instruction) -> bool {
         }
         Fpatan | Fyl2x => {
             let (x, y) = (b.st(1), b.st(0));
-            let op = if i.mnemonic() == Fpatan {
-                FBin::Atan2
-            } else {
-                FBin::Yl2x
-            };
+            let op = if i.mnemonic() == Fpatan { FBin::Atan2 } else { FBin::Yl2x };
             let result = b.fbin(op, x, y);
             b.fpop();
             b.set_st(0, result);
@@ -1204,11 +1165,7 @@ pub fn step<B: Backend>(b: &mut B, i: &Instruction) {
             // A 16-bit operand moves the stack pointer by 2.
             let size = operand_size(b, i, 0);
             let value = read(b, i, 0);
-            if size == Size::B1 {
-                b.trap(Trap::Unsupported)
-            } else {
-                push_sized(b, value, size)
-            }
+            if size == Size::B1 { b.trap(Trap::Unsupported) } else { push_sized(b, value, size) }
         }
         Pop => {
             let size = operand_size(b, i, 0);
@@ -1231,11 +1188,7 @@ pub fn step<B: Backend>(b: &mut B, i: &Instruction) {
         }
         Sahf => {
             let ah = read_register(b, Register::AH);
-            set_eflags(
-                b,
-                ah,
-                &[Flag::Carry, Flag::Parity, Flag::Adjust, Flag::Zero, Flag::Sign],
-            );
+            set_eflags(b, ah, &[Flag::Carry, Flag::Parity, Flag::Adjust, Flag::Zero, Flag::Sign]);
         }
         Leave => {
             let frame = b.reg(EBP);
@@ -1311,11 +1264,7 @@ pub fn step<B: Backend>(b: &mut B, i: &Instruction) {
             b.call(target, i.next_ip() as u32);
         }
         Ret => {
-            let extra = if i.op_count() == 1 {
-                i.immediate(0) as u32
-            } else {
-                0
-            };
+            let extra = if i.op_count() == 1 { i.immediate(0) as u32 } else { 0 };
             b.ret(extra);
         }
 

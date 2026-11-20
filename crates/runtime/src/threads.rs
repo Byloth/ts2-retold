@@ -99,16 +99,8 @@ pub struct Threads {
 
 impl Threads {
     pub(crate) fn new() -> Threads {
-        let main = Thread {
-            cpu: Cpu::default(),
-            callback_depth: 0,
-            state: State::Ready,
-            wait: None,
-        };
-        Threads {
-            threads: vec![main],
-            ..Threads::default()
-        }
+        let main = Thread { cpu: Cpu::default(), callback_depth: 0, state: State::Ready, wait: None };
+        Threads { threads: vec![main], ..Threads::default() }
     }
 
     pub fn current(&self) -> usize {
@@ -130,18 +122,12 @@ impl Threads {
 
     pub(crate) fn object(&mut self, handle: u32) -> Option<&mut Object> {
         let offset = handle.checked_sub(FIRST_HANDLE)?;
-        self.objects
-            .get_mut((offset / 4) as usize)
-            .filter(|_| offset % 4 == 0)?
-            .as_mut()
+        self.objects.get_mut((offset / 4) as usize).filter(|_| offset % 4 == 0)?.as_mut()
     }
 
     /// Closes a handle; false if it is not one of ours.
     pub(crate) fn close(&mut self, handle: u32) -> bool {
-        match handle
-            .checked_sub(FIRST_HANDLE)
-            .map(|offset| (offset / 4) as usize)
-        {
+        match handle.checked_sub(FIRST_HANDLE).map(|offset| (offset / 4) as usize) {
             Some(index) if index < self.objects.len() => self.objects[index].take().is_some(),
             _ => false,
         }
@@ -160,10 +146,7 @@ impl Threads {
     /// semaphore gives up one count.
     fn acquire(&mut self, handle: u32) {
         match self.object(handle) {
-            Some(Object::Event {
-                manual_reset: false,
-                signaled,
-            }) => *signaled = false,
+            Some(Object::Event { manual_reset: false, signaled }) => *signaled = false,
             Some(Object::Semaphore { count, .. }) => *count -= 1,
             _ => {}
         }
@@ -246,35 +229,17 @@ impl Machine {
         let block = THREAD_BLOCKS + index * 0x1000;
         self.memory.map(stack_top - THREAD_STACK_SIZE, THREAD_STACK_SIZE);
         self.memory.map(block, 0x1000);
-        for (offset, value) in [
-            (0x00, u32::MAX),
-            (0x04, stack_top),
-            (0x08, stack_top - THREAD_STACK_SIZE),
-            (0x18, block),
-        ] {
-            self.memory
-                .write(block + offset, 4, value)
-                .expect("thread block was just mapped");
+        for (offset, value) in
+            [(0x00, u32::MAX), (0x04, stack_top), (0x08, stack_top - THREAD_STACK_SIZE), (0x18, block)]
+        {
+            self.memory.write(block + offset, 4, value).expect("thread block was just mapped");
         }
-        let mut cpu = Cpu {
-            eip: entry,
-            fs_base: block,
-            ..Cpu::default()
-        };
+        let mut cpu = Cpu { eip: entry, fs_base: block, ..Cpu::default() };
         cpu.fpu.control = self.cpu.fpu.control;
         cpu.regs[4] = stack_top - 0x100;
-        self.memory
-            .write(cpu.regs[4], 4, crate::THREAD_EXIT)
-            .expect("stack was just mapped");
-        self.memory
-            .write(cpu.regs[4] + 4, 4, argument)
-            .expect("stack was just mapped");
-        self.threads.threads.push(Thread {
-            cpu,
-            callback_depth: 0,
-            state: State::Ready,
-            wait: None,
-        });
+        self.memory.write(cpu.regs[4], 4, crate::THREAD_EXIT).expect("stack was just mapped");
+        self.memory.write(cpu.regs[4] + 4, 4, argument).expect("stack was just mapped");
+        self.threads.threads.push(Thread { cpu, callback_depth: 0, state: State::Ready, wait: None });
         self.threads.create_object(Object::Thread(index as usize))
     }
 
@@ -386,10 +351,7 @@ impl Machine {
                 return Ok(WAIT_TIMEOUT);
             }
             let thread = &mut self.threads.threads[current];
-            thread.wait = Some(Wait {
-                what: what.clone(),
-                deadline_ms: deadline,
-            });
+            thread.wait = Some(Wait { what: what.clone(), deadline_ms: deadline });
             thread.state = State::Waiting;
             if self.callback_depth == 0 {
                 return Err(Stop::WouldBlock);

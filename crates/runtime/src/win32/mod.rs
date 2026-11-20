@@ -13,7 +13,7 @@ pub mod com;
 pub mod d3d;
 pub mod ddraw;
 pub mod dsound;
-mod gdi32;
+pub mod gdi32;
 pub(crate) mod kernel32;
 mod ole32;
 pub mod user32;
@@ -113,9 +113,7 @@ pub(crate) const ERROR_CALL_NOT_IMPLEMENTED: u32 = 120;
 impl Machine {
     /// A NUL-terminated string, for display.
     pub(crate) fn text(&mut self, address: u32) -> String {
-        self.memory
-            .c_string(address, 4096)
-            .unwrap_or_else(|| format!("<bad pointer {address:#x}>"))
+        self.memory.c_string(address, 4096).unwrap_or_else(|| format!("<bad pointer {address:#x}>"))
     }
 
     /// The bytes of a NUL-terminated string, terminator excluded.

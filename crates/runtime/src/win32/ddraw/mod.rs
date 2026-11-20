@@ -15,6 +15,8 @@ pub const DD_OK: u32 = S_OK;
 pub const DDERR_INVALIDPARAMS: u32 = E_INVALIDARG;
 pub const DDERR_INVALIDOBJECT: u32 = dd_error(130);
 pub const DDERR_INVALIDMODE: u32 = dd_error(120);
+pub const DDERR_NOTFOUND: u32 = dd_error(255);
+pub const DDERR_INVALIDDIRECTDRAWGUID: u32 = dd_error(561);
 pub const DDERR_NOEXCLUSIVEMODE: u32 = dd_error(225);
 pub const DDERR_EXCLUSIVEMODEALREADYSET: u32 = dd_error(581);
 
@@ -22,24 +24,12 @@ const fn dd_error(code: u32) -> u32 {
     0x8876_0000 | code
 }
 
-const IID_IDIRECTDRAW: Guid = guid(
-    0x6C14DB80,
-    0xA733,
-    0x11CE,
-    [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60],
-);
-const IID_IDIRECTDRAW4: Guid = guid(
-    0x9C59509A,
-    0x39BD,
-    0x11D1,
-    [0x8C, 0x4A, 0x00, 0xC0, 0x4F, 0xD9, 0x30, 0xC5],
-);
-const IID_IDIRECTDRAW2: Guid = guid(
-    0xB3A6F3E0,
-    0x2B43,
-    0x11CF,
-    [0xA2, 0xDE, 0x00, 0xAA, 0x00, 0xB9, 0x33, 0x56],
-);
+const IID_IDIRECTDRAW: Guid =
+    guid(0x6C14DB80, 0xA733, 0x11CE, [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60]);
+const IID_IDIRECTDRAW4: Guid =
+    guid(0x9C59509A, 0x39BD, 0x11D1, [0x8C, 0x4A, 0x00, 0xC0, 0x4F, 0xD9, 0x30, 0xC5]);
+const IID_IDIRECTDRAW2: Guid =
+    guid(0xB3A6F3E0, 0x2B43, 0x11CF, [0xA2, 0xDE, 0x00, 0xAA, 0x00, 0xB9, 0x33, 0x56]);
 
 const DDSCL_FULLSCREEN: u32 = 0x0001;
 const DDSCL_NORMAL: u32 = 0x0008;
@@ -117,11 +107,7 @@ pub fn display_modes() -> impl Iterator<Item = Display> {
         (1600, 1200),
     ];
     [8, 16, 32].into_iter().flat_map(|bits_per_pixel| {
-        SIZES.into_iter().map(move |(width, height)| Display {
-            width,
-            height,
-            bits_per_pixel,
-        })
+        SIZES.into_iter().map(move |(width, height)| Display { width, height, bits_per_pixel })
     })
 }
 
@@ -156,11 +142,7 @@ fn mode_description(mode: Display, refresh_rate: u32) -> [u32; surface_desc::WOR
 impl Machine {
     fn direct_draw(&mut self, this: u32) -> Option<&mut DirectDraw> {
         let index = self.object_index(this)?;
-        self.os
-            .ddraw
-            .objects
-            .get_mut(index)
-            .filter(|object| object.references > 0)
+        self.os.ddraw.objects.get_mut(index).filter(|object| object.references > 0)
     }
 }
 
@@ -170,10 +152,8 @@ fn driver_strings(m: &mut Machine) -> (u32, u32) {
     if let Some(strings) = m.os.ddraw.driver_strings {
         return strings;
     }
-    let strings = (
-        m.os.string(&mut m.memory, b"Primary Display Driver"),
-        m.os.string(&mut m.memory, b"display"),
-    );
+    let strings =
+        (m.os.string(&mut m.memory, b"Primary Display Driver"), m.os.string(&mut m.memory, b"display"));
     m.os.ddraw.driver_strings = Some(strings);
     strings
 }
@@ -197,12 +177,17 @@ functions! { "DDRAW.dll";
         Ok(DD_OK)
     },
     DirectDrawCreate(3) => |m, a| {
-        // The first argument selects the adapter: null for the primary one, or
-        // the small values 1 and 2 for "hardware only" and "emulation only".
-        // There is no other adapter to name by GUID.
+        // The first argument selects the adapter: null for the primary one,
+        // the small values 1 and 2 for "hardware only" and "emulation only",
+        // or a pointer to an adapter's GUID. The game passes a pointer to an
+        // all-zero GUID for the primary adapter, which DirectDraw accepts
+        // like a null pointer. No other adapter exists to be named.
         let (selector, out, outer) = (a[0], a[1], a[2]);
-        if outer != 0 || selector > 2 {
+        if outer != 0 {
             return DDERR_INVALIDPARAMS;
+        }
+        if selector > 2 && m.read_guid(selector) != Some([0; 16]) {
+            return DDERR_INVALIDDIRECTDRAWGUID;
         }
         let index = m.os.ddraw.objects.len() as u32;
         let pointer = m.interface_pointer(&DIRECT_DRAW, index);
@@ -332,11 +317,7 @@ fn enum_display_modes(m: &mut Machine, a: &[u32], description_words: usize) -> H
     }
     // Without the flag, modes that differ only in refresh rate are one mode
     // and the rate is reported as 0, "the adapter's default".
-    let refresh_rate = if flags & DDEDM_REFRESHRATES != 0 {
-        DISPLAY_REFRESH_RATE
-    } else {
-        0
-    };
+    let refresh_rate = if flags & DDEDM_REFRESHRATES != 0 { DISPLAY_REFRESH_RATE } else { 0 };
     for mode in display_modes() {
         let mut words = [0; surface_desc::WORDS_V2];
         words[..surface_desc::WORDS].copy_from_slice(&mode_description(mode, refresh_rate));
@@ -366,11 +347,7 @@ fn get_display_mode(m: &mut Machine, a: &[u32], description_words: usize) -> u32
     let mut words = [0; surface_desc::WORDS_V2];
     words[..surface_desc::WORDS].copy_from_slice(&mode_description(m.os.user.display, DISPLAY_REFRESH_RATE));
     words[surface_desc::SIZE] = 4 * description_words as u32;
-    if m.write_words(a[1], &words[..description_words]) {
-        DD_OK
-    } else {
-        DDERR_INVALIDPARAMS
-    }
+    if m.write_words(a[1], &words[..description_words]) { DD_OK } else { DDERR_INVALIDPARAMS }
 }
 
 fn format_guid(g: &Guid) -> String {
@@ -475,13 +452,8 @@ interface! { static DIRECT_DRAW_4 = "IDirectDraw4";
 }
 
 /// The interfaces of a DirectDraw object. Direct3D is an aspect of it.
-static INTERFACES: [&super::com::Interface; 5] = [
-    &DIRECT_DRAW,
-    &DIRECT_DRAW_2,
-    &DIRECT_DRAW_4,
-    &DIRECT_3D_2,
-    &DIRECT_3D_3,
-];
+static INTERFACES: [&super::com::Interface; 5] =
+    [&DIRECT_DRAW, &DIRECT_DRAW_2, &DIRECT_DRAW_4, &DIRECT_3D_2, &DIRECT_3D_3];
 
 #[cfg(test)]
 mod tests {
@@ -491,27 +463,10 @@ mod tests {
     fn mode_descriptions_are_well_formed() {
         let modes: Vec<Display> = display_modes().collect();
         assert_eq!(modes.len(), 33);
-        assert_eq!(
-            modes[0],
-            Display {
-                width: 320,
-                height: 200,
-                bits_per_pixel: 8
-            }
-        );
-        let words = mode_description(
-            Display {
-                width: 800,
-                height: 600,
-                bits_per_pixel: 16,
-            },
-            0,
-        );
+        assert_eq!(modes[0], Display { width: 320, height: 200, bits_per_pixel: 8 });
+        let words = mode_description(Display { width: 800, height: 600, bits_per_pixel: 16 }, 0);
         assert_eq!(words[surface_desc::SIZE], 108);
-        assert_eq!(
-            (words[surface_desc::WIDTH], words[surface_desc::HEIGHT]),
-            (800, 600)
-        );
+        assert_eq!((words[surface_desc::WIDTH], words[surface_desc::HEIGHT]), (800, 600));
         assert_eq!(words[surface_desc::PITCH], 1600);
         assert_eq!(
             words[surface_desc::PIXEL_FORMAT..][..8],
@@ -525,14 +480,8 @@ mod tests {
     fn guids_have_the_memory_layout_of_the_headers() {
         assert_eq!(
             IID_IDIRECTDRAW2,
-            [
-                0xE0, 0xF3, 0xA6, 0xB3, 0x43, 0x2B, 0xCF, 0x11, 0xA2, 0xDE, 0x00, 0xAA, 0x00, 0xB9, 0x33,
-                0x56
-            ]
+            [0xE0, 0xF3, 0xA6, 0xB3, 0x43, 0x2B, 0xCF, 0x11, 0xA2, 0xDE, 0x00, 0xAA, 0x00, 0xB9, 0x33, 0x56]
         );
-        assert_eq!(
-            format_guid(&IID_IDIRECTDRAW),
-            "{6c14db80-a733-11ce-a521-0020af0be560}"
-        );
+        assert_eq!(format_guid(&IID_IDIRECTDRAW), "{6c14db80-a733-11ce-a521-0020af0be560}");
     }
 }

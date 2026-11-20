@@ -40,9 +40,7 @@ pub struct Cpu {
 
 impl Cpu {
     pub fn eflags(&self) -> u32 {
-        Flag::ALL
-            .iter()
-            .fold(2, |value, &flag| value | self.flags[flag as usize] << flag.bit())
+        Flag::ALL.iter().fold(2, |value, &flag| value | self.flags[flag as usize] << flag.bit())
     }
 
     pub fn set_eflags(&mut self, value: u32) {
@@ -56,12 +54,7 @@ impl Cpu {
     /// On a fault `eip` still points at the instruction; registers and memory
     /// may hold part of its effect.
     pub fn execute(&mut self, memory: &mut Memory, instruction: &Instruction) -> Result<(), Fault> {
-        let mut run = Run {
-            next: instruction.next_ip() as u32,
-            cpu: self,
-            memory,
-            fault: None,
-        };
+        let mut run = Run { next: instruction.next_ip() as u32, cpu: self, memory, fault: None };
         sem::step(&mut run, instruction);
         let (next, fault) = (run.next, run.fault);
         match fault {
@@ -112,10 +105,7 @@ impl Run<'_> {
         match self.memory.read(address, len) {
             Some(value) => value,
             None => {
-                self.fail(Fault::Memory {
-                    address,
-                    write: false,
-                });
+                self.fail(Fault::Memory { address, write: false });
                 0
             }
         }
@@ -228,10 +218,7 @@ impl Backend for Run<'_> {
                 _ => None,
             }
         } else {
-            match (
-                dividend.checked_div(divisor as u64),
-                dividend.checked_rem(divisor as u64),
-            ) {
+            match (dividend.checked_div(divisor as u64), dividend.checked_rem(divisor as u64)) {
                 (Some(quotient), Some(remainder)) if quotient <= mask => Some((quotient, remainder)),
                 _ => None,
             }
@@ -266,12 +253,9 @@ impl Backend for Run<'_> {
     fn cpuid(&mut self) {
         // A Pentium II, the class of machine the game was written for.
         let (eax, ebx, ecx, edx) = match self.cpu.regs[0] {
-            0 => (
-                1,
-                u32::from_le_bytes(*b"Genu"),
-                u32::from_le_bytes(*b"ntel"),
-                u32::from_le_bytes(*b"ineI"),
-            ),
+            0 => {
+                (1, u32::from_le_bytes(*b"Genu"), u32::from_le_bytes(*b"ntel"), u32::from_le_bytes(*b"ineI"))
+            }
             _ => (0x0000_0633, 0, 0, 0x0080_F9FF),
         };
         self.cpu.regs[0] = eax;
@@ -437,10 +421,7 @@ mod tests {
         memory.map(CODE, 0x1000);
         memory.map(STACK - 0x1000, 0x2000);
         memory.load(CODE, code).unwrap();
-        let mut cpu = Cpu {
-            eip: CODE,
-            ..Cpu::default()
-        };
+        let mut cpu = Cpu { eip: CODE, ..Cpu::default() };
         cpu.regs[4] = STACK;
         setup(&mut cpu);
         let end = CODE + code.len() as u32;
@@ -490,10 +471,7 @@ mod tests {
         let mut memory = Memory::new(Unmapped::Fault);
         memory.map(CODE, 0x1000);
         memory.load(CODE, &[0xF7, 0xF9]).unwrap();
-        let mut cpu = Cpu {
-            eip: CODE,
-            ..Cpu::default()
-        };
+        let mut cpu = Cpu { eip: CODE, ..Cpu::default() };
         assert_eq!(cpu.step(&mut memory), Err(Fault::Divide));
         cpu.regs[0] = 0x8000_0000;
         cpu.regs[2] = 0xFFFF_FFFF;
@@ -516,10 +494,7 @@ mod tests {
         memory.map(STACK, 0x1000);
         memory.load(CODE, &code).unwrap();
         memory.write(STACK, 4, 2.5f32.to_bits()).unwrap();
-        let mut cpu = Cpu {
-            eip: CODE,
-            ..Cpu::default()
-        };
+        let mut cpu = Cpu { eip: CODE, ..Cpu::default() };
         cpu.fpu.control = 0x0F7F; // truncate, as `_ftol` sets it
         for _ in 0..3 {
             cpu.step(&mut memory).unwrap();
@@ -533,16 +508,7 @@ mod tests {
         let mut memory = Memory::new(Unmapped::Fault);
         memory.map(CODE, 0x1000);
         memory.load(CODE, &[0xA1, 0x00, 0x00, 0x50, 0x00]).unwrap(); // mov eax, [0x500000]
-        let mut cpu = Cpu {
-            eip: CODE,
-            ..Cpu::default()
-        };
-        assert_eq!(
-            cpu.step(&mut memory),
-            Err(Fault::Memory {
-                address: 0x50_0000,
-                write: false
-            })
-        );
+        let mut cpu = Cpu { eip: CODE, ..Cpu::default() };
+        assert_eq!(cpu.step(&mut memory), Err(Fault::Memory { address: 0x50_0000, write: false }));
     }
 }

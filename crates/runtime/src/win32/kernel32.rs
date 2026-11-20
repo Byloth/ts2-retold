@@ -42,9 +42,7 @@ fn movable_block(m: &mut Machine, handle: u32) -> Option<&mut MovableBlock> {
     if offset % 8 != 0 {
         return None;
     }
-    m.os.movable_blocks
-        .get_mut((offset / 8) as usize)
-        .filter(|block| block.pointer != 0)
+    m.os.movable_blocks.get_mut((offset / 8) as usize).filter(|block| block.pointer != 0)
 }
 
 functions! { "KERNEL32.dll";

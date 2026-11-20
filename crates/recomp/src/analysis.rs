@@ -183,11 +183,7 @@ impl<'a> Discovery<'a> {
     }
 
     fn conflict(&mut self, at: u32, kind: ConflictKind, confidence: Confidence) {
-        self.conflicts.push(Conflict {
-            at,
-            kind,
-            speculative: confidence == Confidence::Speculative,
-        });
+        self.conflicts.push(Conflict { at, kind, speculative: confidence == Confidence::Speculative });
     }
 
     /// Reads the jump table used by `jmp [index*4 + table]`.
@@ -280,10 +276,7 @@ impl<'a> Discovery<'a> {
             self.import_uses.entry(slot).or_default()[column] += 1;
         }
 
-        let mut flow = Flow {
-            falls_through: false,
-            targets: Vec::new(),
-        };
+        let mut flow = Flow { falls_through: false, targets: Vec::new() };
         let direct_target = |this: &mut Self| -> Option<u32> {
             match instruction.op0_kind() {
                 OpKind::NearBranch16 | OpKind::NearBranch32 => {
@@ -428,10 +421,7 @@ impl<'a> Discovery<'a> {
             while at < self.kind.len() && self.kind[at] == wanted {
                 at += 1;
             }
-            runs.push(Gap {
-                start: self.text.va + start as u32,
-                len: (at - start) as u32,
-            });
+            runs.push(Gap { start: self.text.va + start as u32, len: (at - start) as u32 });
         }
         runs
     }
@@ -498,19 +488,15 @@ impl<'a> Discovery<'a> {
             match instruction.flow_control() {
                 FlowControl::Next | FlowControl::IndirectCall => {}
                 FlowControl::Call | FlowControl::ConditionalBranch => {
-                    if !matches!(
-                        instruction.op0_kind(),
-                        OpKind::NearBranch32 | OpKind::NearBranch16
-                    ) || !lands_on_code(instruction.near_branch_target() as u32)
+                    if !matches!(instruction.op0_kind(), OpKind::NearBranch32 | OpKind::NearBranch16)
+                        || !lands_on_code(instruction.near_branch_target() as u32)
                     {
                         return false;
                     }
                 }
                 FlowControl::UnconditionalBranch => {
-                    return matches!(
-                        instruction.op0_kind(),
-                        OpKind::NearBranch32 | OpKind::NearBranch16
-                    ) && lands_on_code(instruction.near_branch_target() as u32);
+                    return matches!(instruction.op0_kind(), OpKind::NearBranch32 | OpKind::NearBranch16)
+                        && lands_on_code(instruction.near_branch_target() as u32);
                 }
                 FlowControl::Return | FlowControl::IndirectBranch => return true,
                 FlowControl::Interrupt | FlowControl::Exception | FlowControl::XbeginXabortXend => {
@@ -526,11 +512,8 @@ impl<'a> Discovery<'a> {
         let mut rejected = HashSet::new();
         loop {
             self.classify_gaps();
-            let candidates: Vec<Gap> = self
-                .runs(UNKNOWN)
-                .into_iter()
-                .filter(|gap| !rejected.contains(&gap.start))
-                .collect();
+            let candidates: Vec<Gap> =
+                self.runs(UNKNOWN).into_iter().filter(|gap| !rejected.contains(&gap.start)).collect();
             let mut adopted = false;
             for gap in candidates {
                 if self.plausible_code(&gap) {
@@ -553,33 +536,24 @@ impl<'a> Discovery<'a> {
         let ip = instruction.ip() as u32;
         let direct = || {
             let target = instruction.near_branch_target() as u32;
-            (matches!(
-                instruction.op0_kind(),
-                OpKind::NearBranch16 | OpKind::NearBranch32
-            ) && self.in_text(target))
+            (matches!(instruction.op0_kind(), OpKind::NearBranch16 | OpKind::NearBranch32)
+                && self.in_text(target))
             .then_some(target)
         };
         match instruction.flow_control() {
-            FlowControl::Next | FlowControl::Call | FlowControl::IndirectCall => Flow {
-                falls_through: true,
-                targets: Vec::new(),
-            },
-            FlowControl::ConditionalBranch => Flow {
-                falls_through: true,
-                targets: direct().into_iter().collect(),
-            },
-            FlowControl::UnconditionalBranch => Flow {
-                falls_through: false,
-                targets: direct().into_iter().collect(),
-            },
-            FlowControl::IndirectBranch => Flow {
-                falls_through: false,
-                targets: self.tables.get(&ip).cloned().unwrap_or_default(),
-            },
-            _ => Flow {
-                falls_through: false,
-                targets: Vec::new(),
-            },
+            FlowControl::Next | FlowControl::Call | FlowControl::IndirectCall => {
+                Flow { falls_through: true, targets: Vec::new() }
+            }
+            FlowControl::ConditionalBranch => {
+                Flow { falls_through: true, targets: direct().into_iter().collect() }
+            }
+            FlowControl::UnconditionalBranch => {
+                Flow { falls_through: false, targets: direct().into_iter().collect() }
+            }
+            FlowControl::IndirectBranch => {
+                Flow { falls_through: false, targets: self.tables.get(&ip).cloned().unwrap_or_default() }
+            }
+            _ => Flow { falls_through: false, targets: Vec::new() },
         }
     }
 
@@ -714,15 +688,8 @@ pub fn analyze(image: &Image) -> Option<Analysis> {
     let mut mnemonics: BTreeMap<String, u32> = BTreeMap::new();
     let mut functions = Vec::with_capacity(entries.len());
     for (&entry, &kind) in &entries {
-        let mut function = Function {
-            entry,
-            kind,
-            instructions: 0,
-            bytes: 0,
-            start: entry,
-            end: entry,
-            tail_transfers: 0,
-        };
+        let mut function =
+            Function { entry, kind, instructions: 0, bytes: 0, start: entry, end: entry, tail_transfers: 0 };
         let mut seen = HashSet::from([entry]);
         let mut stack = vec![entry];
         while let Some(ip) = stack.pop() {
@@ -731,9 +698,7 @@ pub fn analyze(image: &Image) -> Option<Analysis> {
             };
             let at = d.index(ip);
             if owners[at] == 0 {
-                *mnemonics
-                    .entry(format!("{:?}", instruction.mnemonic()).to_lowercase())
-                    .or_default() += 1;
+                *mnemonics.entry(format!("{:?}", instruction.mnemonic()).to_lowercase()).or_default() += 1;
             }
             owners[at] = owners[at].saturating_add(1);
             function.instructions += 1;
@@ -848,10 +813,7 @@ mod tests {
             0xC3,                         // 100D: ret
         ];
         let analysis = analyze(&image(&code, &[])).unwrap();
-        assert_eq!(
-            entries(&analysis),
-            [(BASE, EntryKind::Entry), (BASE + 0xB, EntryKind::Called)]
-        );
+        assert_eq!(entries(&analysis), [(BASE, EntryKind::Entry), (BASE + 0xB, EntryKind::Called)]);
         assert_eq!(analysis.bytes.code, 9);
         assert_eq!(analysis.bytes.padding, 5);
         assert_eq!(analysis.bytes.unknown, 0);
@@ -893,10 +855,7 @@ mod tests {
             0x00, 0x01, 0x02, 0x03,                   // 1014: byte table
         ];
         let analysis = analyze(&image(&code, &[BASE + 1, BASE + 7])).unwrap();
-        assert_eq!(
-            entries(&analysis),
-            [(BASE, EntryKind::Entry), (BASE + 0x10, EntryKind::AddressTaken)]
-        );
+        assert_eq!(entries(&analysis), [(BASE, EntryKind::Entry), (BASE + 0x10, EntryKind::AddressTaken)]);
         assert_eq!(analysis.bytes.data, 4);
         assert_eq!(analysis.bytes.unknown, 0);
     }
@@ -913,10 +872,7 @@ mod tests {
         ];
         code.extend([0x31, 0xC0, 0xC3]); // 1010: unreferenced function
         let analysis = analyze(&image(&code, &[BASE + 2])).unwrap();
-        assert_eq!(
-            entries(&analysis),
-            [(BASE, EntryKind::Entry), (BASE + 0x10, EntryKind::Orphan)]
-        );
+        assert_eq!(entries(&analysis), [(BASE, EntryKind::Entry), (BASE + 0x10, EntryKind::Orphan)]);
         assert_eq!(analysis.bytes.data, 4);
         assert_eq!(analysis.bytes.unknown, 0);
     }
@@ -929,10 +885,7 @@ mod tests {
         code.push(0x90); // 1013: padding
         code.extend([0x40, 0xC3]); // 1014: decodes (inc eax; ret) but is unaligned
         let analysis = analyze(&image(&code, &[])).unwrap();
-        assert_eq!(
-            entries(&analysis),
-            [(BASE, EntryKind::Entry), (BASE + 0x10, EntryKind::Orphan)]
-        );
+        assert_eq!(entries(&analysis), [(BASE, EntryKind::Entry), (BASE + 0x10, EntryKind::Orphan)]);
         assert_eq!(analysis.bytes.unknown, 2);
         assert_eq!(analysis.unknown_gaps.len(), 1);
         assert_eq!(analysis.unknown_gaps[0].start, BASE + 0x14);

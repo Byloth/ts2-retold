@@ -13,6 +13,8 @@
 //! which is how window procedures and enumeration callbacks run.
 
 pub mod files;
+pub mod game;
+pub mod mods;
 pub mod os;
 pub mod threads;
 pub mod win32;
@@ -40,6 +42,8 @@ const STACK_SIZE: u32 = 0x0010_0000;
 const TEB_ADDRESS: u32 = 0x7FFD_E000;
 /// Speed of the virtual clock: a machine of roughly the game's era.
 const INSTRUCTIONS_PER_MS: u64 = 50_000;
+/// How many of the most recent host calls a trace is guaranteed to keep.
+const TRACE_KEPT: usize = 20_000;
 /// No host function takes more arguments than this.
 const MAX_ARGS: usize = 16;
 
@@ -115,6 +119,8 @@ pub struct Machine {
     callback_depth: u32,
     /// Every host call so far, when tracing is on.
     pub trace: Option<Vec<HostCall>>,
+    /// Calls dropped from the start of `trace` to bound its size.
+    pub trace_dropped: usize,
     note: Option<String>,
     /// Address of the first instruction the x87 model could not run exactly.
     pub first_inexact: Option<u32>,
@@ -129,37 +135,22 @@ impl Machine {
         let mut memory = Memory::new(Unmapped::Fault);
         for section in &image.sections {
             memory.map(section.va, section.virtual_size);
-            memory
-                .load(section.va, &section.data)
-                .expect("section was just mapped");
+            memory.load(section.va, &section.data).expect("section was just mapped");
         }
         memory.map(STACK_TOP - STACK_SIZE, STACK_SIZE);
         memory.map(TEB_ADDRESS, 0x1000);
         // Thread environment block: exception chain, stack limits, self pointer.
-        for (offset, value) in [
-            (0x00, u32::MAX),
-            (0x04, STACK_TOP),
-            (0x08, STACK_TOP - STACK_SIZE),
-            (0x18, TEB_ADDRESS),
-        ] {
-            memory
-                .write(TEB_ADDRESS + offset, 4, value)
-                .expect("thread block was just mapped");
+        for (offset, value) in
+            [(0x00, u32::MAX), (0x04, STACK_TOP), (0x08, STACK_TOP - STACK_SIZE), (0x18, TEB_ADDRESS)]
+        {
+            memory.write(TEB_ADDRESS + offset, 4, value).expect("thread block was just mapped");
         }
 
-        let mut cpu = Cpu {
-            eip: image.entry,
-            fs_base: TEB_ADDRESS,
-            ..Cpu::default()
-        };
+        let mut cpu = Cpu { eip: image.entry, fs_base: TEB_ADDRESS, ..Cpu::default() };
         cpu.regs[4] = STACK_TOP - 0x100;
-        memory
-            .write(cpu.regs[4], 4, EXIT_ADDRESS)
-            .expect("stack was just mapped");
+        memory.write(cpu.regs[4], 4, EXIT_ADDRESS).expect("stack was just mapped");
 
-        let code = image
-            .code_section()
-            .expect("an image with an entry point has a code section");
+        let code = image.code_section().expect("an image with an entry point has a code section");
         let mut machine = Machine {
             cpu,
             memory,
@@ -174,32 +165,22 @@ impl Machine {
             deadline: u64::MAX,
             callback_depth: 0,
             trace: None,
+            trace_dropped: 0,
             note: None,
             first_inexact: None,
             breakpoint: None,
         };
         machine.os.resources = image.resources.clone();
         for import in &image.imports {
-            if !machine
-                .os
-                .modules
-                .iter()
-                .any(|module| module.eq_ignore_ascii_case(&import.dll))
-            {
+            if !machine.os.modules.iter().any(|module| module.eq_ignore_ascii_case(&import.dll)) {
                 machine.os.modules.push(import.dll.clone());
             }
             let name = import.name.to_string();
             let stub = match win32::lookup(&import.dll, &name) {
                 Some(function) => machine.host_function_address(function),
-                None => machine.add_host_entry(HostEntry::Missing {
-                    dll: import.dll.clone(),
-                    name,
-                }),
+                None => machine.add_host_entry(HostEntry::Missing { dll: import.dll.clone(), name }),
             };
-            machine
-                .memory
-                .write(import.iat_va, 4, stub)
-                .expect("import table is inside a section");
+            machine.memory.write(import.iat_va, 4, stub).expect("import table is inside a section");
         }
         machine
     }
@@ -258,20 +239,14 @@ impl Machine {
     }
 
     fn read_stack(&mut self, address: u32) -> Result<u32, Stop> {
-        self.memory.read(address, 4).ok_or(Stop::Fault(Fault::Memory {
-            address,
-            write: false,
-        }))
+        self.memory.read(address, 4).ok_or(Stop::Fault(Fault::Memory { address, write: false }))
     }
 
     fn call_host(&mut self, index: usize) -> Result<(), Stop> {
         let function = match self.host.get(index) {
             Some(HostEntry::Function(function)) => *function,
             Some(HostEntry::Missing { dll, name }) => {
-                return Err(Stop::Unimplemented {
-                    dll: dll.clone(),
-                    name: name.clone(),
-                });
+                return Err(Stop::Unimplemented { dll: dll.clone(), name: name.clone() });
             }
             None => return Err(Stop::Fault(Fault::Invalid)),
         };
@@ -289,6 +264,11 @@ impl Machine {
         // The trace entry is reserved before the call so that calls made from
         // inside a callback appear after their parent, in execution order.
         let traced = self.trace.as_mut().map(|trace| {
+            if trace.len() >= 2 * TRACE_KEPT {
+                // Only the most recent calls are kept.
+                trace.drain(..TRACE_KEPT);
+                self.trace_dropped += TRACE_KEPT;
+            }
             trace.push(HostCall {
                 name: function.name,
                 thread: self.threads.current(),
@@ -298,7 +278,8 @@ impl Machine {
                 result: 0,
                 note: None,
             });
-            trace.len() - 1
+            // Position in the whole sequence of calls, dropped ones included.
+            self.trace_dropped + trace.len() - 1
         });
         self.note = None;
         let result = match (function.handler)(self, args) {
@@ -308,16 +289,20 @@ impl Machine {
                     // The call has not happened yet: it is made again, from
                     // the start, when the thread's wait is over.
                     self.call_counts[index] -= 1;
-                    if let (Some(index), Some(trace)) = (traced, self.trace.as_mut()) {
-                        trace.truncate(index);
+                    if let (Some(position), Some(trace)) = (traced, self.trace.as_mut()) {
+                        trace.truncate(position.saturating_sub(self.trace_dropped));
                     }
                 }
                 return Err(stop);
             }
         };
-        if let (Some(index), Some(trace)) = (traced, self.trace.as_mut()) {
-            trace[index].result = result;
-            trace[index].note = self.note.take();
+        let dropped = self.trace_dropped;
+        if let Some(call) = traced
+            .and_then(|position| position.checked_sub(dropped))
+            .and_then(|index| self.trace.as_mut()?.get_mut(index))
+        {
+            call.result = result;
+            call.note = self.note.take();
         }
 
         self.cpu.regs[0] = result;
@@ -363,9 +348,7 @@ impl Machine {
                 return Err(Stop::Breakpoint);
             }
             let instruction = self.instruction_at(eip).map_err(Stop::Fault)?;
-            self.cpu
-                .execute(&mut self.memory, &instruction)
-                .map_err(Stop::Fault)?;
+            self.cpu.execute(&mut self.memory, &instruction).map_err(Stop::Fault)?;
             if self.cpu.fpu.inexact_model && self.first_inexact.is_none() {
                 self.first_inexact = Some(eip);
             }
@@ -388,10 +371,7 @@ impl Machine {
             esp -= 4;
             self.memory
                 .write(esp, 4, value)
-                .ok_or(Stop::Fault(Fault::Memory {
-                    address: esp,
-                    write: true,
-                }))?;
+                .ok_or(Stop::Fault(Fault::Memory { address: esp, write: true }))?;
         }
         self.cpu.regs[4] = esp;
         self.cpu.eip = address;
@@ -403,11 +383,7 @@ impl Machine {
             Pause::Yield => unreachable!("a thread inside a callback does not yield"),
         }
         if self.cpu.regs[4] != base {
-            return Err(Stop::CallbackStack {
-                address,
-                expected: base,
-                actual: self.cpu.regs[4],
-            });
+            return Err(Stop::CallbackStack { address, expected: base, actual: self.cpu.regs[4] });
         }
         self.cpu.eip = saved_eip;
         Ok(self.cpu.regs[0])

@@ -114,19 +114,14 @@ impl Machine {
     fn adopt_buffer_position(&mut self, handle: u32, info: u32) -> Option<()> {
         let next = self.memory.read(info + 4 * INFO_NEXT, 4)?;
         let stream = self.stream(handle)?;
-        let consumed = next
-            .checked_sub(stream.buffer)
-            .filter(|&n| n <= stream.buffer_filled)?;
+        let consumed = next.checked_sub(stream.buffer).filter(|&n| n <= stream.buffer_filled)?;
         stream.position = stream.buffer_offset + consumed;
         Some(())
     }
 }
 
 fn not_implemented(what: &str) -> HostResult {
-    Err(Stop::Unimplemented {
-        dll: "WINMM.dll".into(),
-        name: what.into(),
-    })
+    Err(Stop::Unimplemented { dll: "WINMM.dll".into(), name: what.into() })
 }
 
 fn open(m: &mut Machine, a: &[u32]) -> HostResult {
@@ -146,13 +141,7 @@ fn open(m: &mut Machine, a: &[u32]) -> HostResult {
         return Ok(0);
     };
     let buffer = m.os.allocate(&mut m.memory, DEFAULT_BUFFER);
-    let stream = Stream {
-        file,
-        position: 0,
-        buffer,
-        buffer_offset: 0,
-        buffer_filled: 0,
-    };
+    let stream = Stream { file, position: 0, buffer, buffer_offset: 0, buffer_filled: 0 };
     let streams = &mut m.os.mmio.streams;
     let index = streams.iter().position(Option::is_none).unwrap_or_else(|| {
         streams.push(None);
@@ -290,9 +279,7 @@ fn get_info(m: &mut Machine, a: &[u32]) -> u32 {
     let ok = m.memory.load(info, &[0; 4 * INFO_WORDS]).is_some()
         && m.fill_buffer(handle).is_some()
         && m.write_buffer_info(handle, info).is_some()
-        && m.memory
-            .write(info + 4 * (INFO_WORDS as u32 - 1), 4, handle)
-            .is_some();
+        && m.memory.write(info + 4 * (INFO_WORDS as u32 - 1), 4, handle).is_some();
     if ok { 0 } else { MMSYSERR_INVALPARAM }
 }
 
@@ -300,11 +287,7 @@ fn set_info(m: &mut Machine, a: &[u32]) -> u32 {
     if m.stream(a[0]).is_none() {
         return MMSYSERR_INVALHANDLE;
     }
-    if m.adopt_buffer_position(a[0], a[1]).is_some() {
-        0
-    } else {
-        MMSYSERR_INVALPARAM
-    }
+    if m.adopt_buffer_position(a[0], a[1]).is_some() { 0 } else { MMSYSERR_INVALPARAM }
 }
 
 fn advance(m: &mut Machine, a: &[u32]) -> HostResult {
@@ -351,10 +334,7 @@ mod tests {
                 body.push(0);
             }
         };
-        chunk(
-            b"fmt ",
-            &[1, 0, 1, 0, 0x22, 0x56, 0, 0, 0x22, 0x56, 0, 0, 1, 0, 8, 0, 0],
-        );
+        chunk(b"fmt ", &[1, 0, 1, 0, 0x22, 0x56, 0, 0, 0x22, 0x56, 0, 0, 1, 0, 8, 0, 0]);
         chunk(b"fact", &[9, 9, 9, 9]);
         let samples: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
         chunk(b"data", &samples);
@@ -379,15 +359,9 @@ mod tests {
         // The outer RIFF chunk, then the format chunk inside it.
         assert_eq!(m.host("WINMM.dll", "mmioDescend", &[handle, riff, 0, 0]), 0);
         let [id, _, form, data_offset, _]: [u32; 5] = m.read_words(riff);
-        assert_eq!(
-            (id, form, data_offset),
-            (FOURCC_RIFF, u32::from_le_bytes(*b"WAVE"), 8)
-        );
+        assert_eq!((id, form, data_offset), (FOURCC_RIFF, u32::from_le_bytes(*b"WAVE"), 8));
         m.memory.write(chunk, 4, u32::from_le_bytes(*b"fmt ")).unwrap();
-        assert_eq!(
-            m.host("WINMM.dll", "mmioDescend", &[handle, chunk, riff, MMIO_FINDCHUNK]),
-            0
-        );
+        assert_eq!(m.host("WINMM.dll", "mmioDescend", &[handle, chunk, riff, MMIO_FINDCHUNK]), 0);
         assert_eq!(m.read_words::<5>(chunk)[1], 17);
         assert_eq!(m.host("WINMM.dll", "mmioRead", &[handle, out, 16]), 16);
         assert_eq!(m.memory.read(out + 4, 4), Some(22_050));
@@ -396,10 +370,7 @@ mod tests {
         // Back to the start of the form, then find the data, skipping "fact".
         assert_eq!(m.host("WINMM.dll", "mmioSeek", &[handle, data_offset + 4, 0]), 12);
         m.memory.write(chunk, 4, u32::from_le_bytes(*b"data")).unwrap();
-        assert_eq!(
-            m.host("WINMM.dll", "mmioDescend", &[handle, chunk, riff, MMIO_FINDCHUNK]),
-            0
-        );
+        assert_eq!(m.host("WINMM.dll", "mmioDescend", &[handle, chunk, riff, MMIO_FINDCHUNK]), 0);
         let [_, size, _, samples_at, _]: [u32; 5] = m.read_words(chunk);
         assert_eq!(size, 20_000);
 
@@ -420,10 +391,7 @@ mod tests {
             total += take;
         }
         assert_eq!(m.host("WINMM.dll", "mmioSetInfo", &[handle, info, 0]), 0);
-        assert_eq!(
-            m.host("WINMM.dll", "mmioSeek", &[handle, 0, 1]),
-            samples_at + size
-        );
+        assert_eq!(m.host("WINMM.dll", "mmioSeek", &[handle, 0, 1]), samples_at + size);
 
         // A chunk that is not there leaves the position where it was.
         m.memory.write(chunk, 4, u32::from_le_bytes(*b"cue ")).unwrap();
@@ -431,14 +399,8 @@ mod tests {
             m.host("WINMM.dll", "mmioDescend", &[handle, chunk, riff, MMIO_FINDCHUNK]),
             MMIOERR_CHUNKNOTFOUND
         );
-        assert_eq!(
-            m.host("WINMM.dll", "mmioSeek", &[handle, 0, 1]),
-            samples_at + size
-        );
+        assert_eq!(m.host("WINMM.dll", "mmioSeek", &[handle, 0, 1]), samples_at + size);
         assert_eq!(m.host("WINMM.dll", "mmioClose", &[handle, 0]), 0);
-        assert_eq!(
-            m.host("WINMM.dll", "mmioClose", &[handle, 0]),
-            MMSYSERR_INVALHANDLE
-        );
+        assert_eq!(m.host("WINMM.dll", "mmioClose", &[handle, 0]), MMSYSERR_INVALHANDLE);
     }
 }

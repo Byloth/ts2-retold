@@ -76,10 +76,7 @@ fn common(blits: u32, surfaces: u32) -> [u32; WORDS] {
 
 /// Capabilities of the hardware.
 pub fn driver() -> [u32; WORDS] {
-    let mut words = common(
-        BLIT_CAPS | DDCAPS_3D | DDCAPS_BLTDEPTHFILL,
-        BASE_SURFACES | SURFACES_3D,
-    );
+    let mut words = common(BLIT_CAPS | DDCAPS_3D | DDCAPS_BLTDEPTHFILL, BASE_SURFACES | SURFACES_3D);
     words[Z_BUFFER_DEPTHS] = DDBD_16;
     words[VIDEO_MEMORY_TOTAL] = VIDEO_MEMORY;
     words[VIDEO_MEMORY_FREE] = VIDEO_MEMORY;

@@ -189,9 +189,6 @@ mod tests {
         assert_eq!(memory.read(0x0001_2FFF, 2), Some(0x1312));
         memory.write(0x5000, 2, 0xBEEF).unwrap();
         memory.write_u64(0x6000, 1).unwrap();
-        assert_eq!(
-            memory.write_log.as_deref(),
-            Some(&[(0x5000, 2), (0x6000, 4), (0x6004, 4)][..])
-        );
+        assert_eq!(memory.write_log.as_deref(), Some(&[(0x5000, 2), (0x6000, 4), (0x6004, 4)][..]));
     }
 }

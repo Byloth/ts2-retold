@@ -10,8 +10,11 @@ as the game calls them, not by patching the game's renderer. What they report:
 
 - **One adapter**, the primary display ("Primary Display Driver", `display`),
   with hardware 3D and 32 MB of video memory.
-- **Display modes** 640×480, 800×600, 1024×768, 1152×864, 1280×1024 and
-  1600×1200, each at 8, 16 and 32 bits per pixel; 16-bit is RGB 565. Without
+- **Display modes** 320×200, 320×240, 400×300, 512×384, 640×400, 640×480,
+  800×600, 1024×768, 1152×864, 1280×1024 and 1600×1200, each at 8, 16 and 32
+  bits per pixel; 16-bit is RGB 565. The low resolutions were ordinary modes
+  on accelerators of the time and the game looks for 320×240 while examining
+  the machine. Without
   `DDEDM_REFRESHRATES` the refresh rate is reported as 0, the adapter default.
 - **One 3D device**, "Direct3D HAL": a rasteriser of transformed and lit
   vertices, RGB colour model, 16-bit z-buffer, textures up to 2048×2048 that
@@ -21,9 +24,11 @@ as the game calls them, not by patching the game's renderer. What they report:
 - **No software 3D devices.** DirectX also listed its own software rasterisers
   ("Ramp", "RGB", "MMX"); their capability sets cannot be reproduced
   faithfully and nothing is gained by pretending.
-- **Interfaces**: `IDirectDraw`, `IDirectDraw2` and `IDirect3D2` on the same
-  object. Other interface identifiers are refused, as a DirectX 5 runtime
-  would refuse what it does not know.
+- **DirectX 6.** The game examines the machine through `IDirectDraw2` and
+  `IDirect3D2`, then creates its renderer through `IDirectDraw4` and
+  `IDirect3D3`; all are offered on the same object. Interface identifiers of
+  later DirectX versions are refused, as a DirectX 6 runtime would.
+- **A 16-bit z-buffer** is the one depth format.
 
 Rule: **a capability is claimed only if the renderer implements it.** The game
 chooses its code paths from these words.

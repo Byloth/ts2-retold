@@ -11,23 +11,25 @@ cargo run --release --bin andy -- boot --trace
 
 ## How far it gets
 
-**About 120.4 million instructions and 730 host calls**, at about 55 million
-instructions per second in the interpreter, then it stops at
-`DSOUND DirectSoundCreate`: graphics hardware has been examined and chosen,
-the sound driver enumerated; creating the sound device is next.
+**About 131.6 million instructions**, then it stops at
+`IDirectDraw4::SetDisplayMode(640, 480, 16)`: everything before the first
+surface is done.
 
 | Phase | What happens |
 |---|---|
 | C runtime start | `GetVersion`, heap creation (small-block heap: `HeapAlloc` + `VirtualAlloc` reserve/commit), standard handles, command line, environment, code page and character tables |
 | `WinMain` | Opens `HKLM\Software\TravellersTalesToyStory2`, reads `path` and `cdpath`, asks for `allow32bit` |
-| Installation check | Opens `C:\TOY2\validate.tta` |
+| Installation check | Opens `validate.tta` under `cdpath` |
 | Saves | Reads `Toy200.sav` and `Toy299.sav` |
 | CPU benchmark | `CalculateClockSpeed`: ten timed runs of a floating-point loop |
 | Settings | Looks for `toy2.ini`, reads `toy2.cfg` |
-| "Examine machine" | Creates a helper window, enumerates DirectDraw drivers, creates DirectDraw, sets the cooperative level, reads capabilities and video memory, enumerates 18 display modes, obtains `IDirect3D2`, enumerates 3D devices |
+| "Examine machine" | Creates a helper window, enumerates DirectDraw drivers, creates DirectDraw, sets the cooperative level, reads capabilities and video memory, enumerates the display modes, obtains `IDirect3D2`, enumerates 3D devices |
 | "Select drivers" | Picks the primary driver, the hardware 3D device, full screen |
 | Disc | Reads `cd.txt` (base CD audio track) |
-| Sound | Enumerates sound drivers; `DirectSoundCreate` — not implemented yet |
+| Sound | Creates DirectSound, loads 61 sound effects from `sfx\*.wav` into buffers and duplicates them, starts the streaming thread |
+| Second enumeration | `DirectDrawEnumerateExA`, `IDirectDraw4`, `IDirect3D3`: drivers, devices and modes again, DirectX 6 style |
+| "Screen Mode Select" | The start-up window; skipped by a modification (`docs/MODIFICATIONS.md`) |
+| Renderer start | Main window maximised, `DirectDrawCreate`, cooperative level `FULLSCREEN | EXCLUSIVE | ALLOWREBOOT | FPUSETUP`, `FindDevice`, `EnumZBufferFormats`, then `SetDisplayMode` — not implemented yet |
 
 ## The game's own log
 
@@ -68,10 +70,28 @@ CONFIG : Base CD track is 2.
   (`FIRE`, `JUMP`, `CAMLEFT`…). The file is looked up in `c:\`, then in the
   install directory; how the game then reads it is `UNVERIFIED` (it reopens
   it under a `\cd\` path).
-- **The game selected a 640×480 mode at 8 bits per pixel.** Whether that is
-  its real default, a consequence of this copy's `toy2.cfg` (written under a
-  third-party wrapper with different modes), or of a capability it expected
-  is `UNVERIFIED` and is the first thing to settle next.
+- **The game is a DirectX 6 program.** Its "examine machine" pass uses the
+  DirectX 5 interfaces, but the renderer is created through `IDirectDraw4`
+  and `IDirect3D3` by code that follows the DirectX 6 SDK's `D3DFrame`
+  framework. With only DirectX 5 interfaces on offer it exits with **"Unable
+  to enumerate a suitable device"** (`direct6.cpp`, line 103), the message
+  known from modern PCs.
+- **Mode selection.** While examining the machine the game looks for 320×240
+  at 16 bits (a flag at `0x4E0690`, initialised to 1 in the executable), and
+  falls back to the first mode listed. The mode it finally runs in comes from
+  the "Screen Mode Select" window: saved indices from `toy2.cfg` if the saved
+  driver index is not negative, otherwise the first hardware device and the
+  first mode at least 480 lines high.
+- **The registry paths name the `data` directory.** The game looks for
+  `sfx\`, `cd.txt` and `validate.tta` under them, and in the copies in
+  circulation those are in `data\` (`UNVERIFIED` against an installed copy's
+  registry).
+- **The game asks DirectDraw to set up the FPU** (`DDSCL_FPUSETUP`): Direct3D
+  will switch the x87 unit to single precision, the case ADR 0010 prepares
+  for.
+- **A streaming thread** (at `0x437010`) is created during sound start-up and
+  waits on three events; the first thread busy-waits until it has started
+  (ADR 0013).
 - **`allow32bit` is the game's own registry option**, not an invention of the
   community fix.
 - **The registry layout is confirmed**: key and value names as in ADR 0011.
@@ -87,9 +107,6 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-1. DirectSound objects and buffers (the game sets a cooperative level, creates
-   buffers and stops one during start-up), then DirectInput.
-2. Why the game selected an 8-bit mode.
-3. The game's main window, `SetDisplayMode`, the primary surface with its
-   back buffer and z-buffer, the 3D device: the first work for the GPU
-   renderer (ADR 0012).
+`SetDisplayMode`, the primary surface with its back buffer and z-buffer, the
+3D device: the first work for the GPU renderer (ADR 0012). DirectInput is
+created in the same stretch.
