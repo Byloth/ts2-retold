@@ -85,11 +85,15 @@ out of here into the roadmap or an ADR when work on them starts.
 
 - A verified dump of a pressed disc as a second witness for the reference
   copy in `ref/disc` (ADR 0003).
-- **Other languages.** Eight language releases exist as separate builds
-  with their own executable, dubbed movies and speech (ADR 0003). The
-  project supports the English reference build only. To decide: analyse
-  each executable, or bring a language's texts, movies and sounds to the
-  reference build as a catalogued modification.
+- **Italian on the reference build** (ADR 0016): find how the game looks
+  its texts up, then bring the Italian disc's texts, movies, speech and
+  graphics over as a catalogued modification, chosen by `LANGUAGE IT` in
+  `toy2.ini` until the Options menu has it.
+- **The other languages**: French, Spanish, Dutch, Swedish, Norwegian and
+  Finnish are at hand as disc images; German, Danish and Portuguese have
+  not been found (ADR 0003).
+- **A settings file** for the screen mode and the project's own settings
+  (ADR 0016).
 - Reference screenshots of the original game, once the port draws.
 - Which font Windows picks for the face name "ariel" (the game's spelling;
   no such font exists). The runtime answers with its Arial substitute.
