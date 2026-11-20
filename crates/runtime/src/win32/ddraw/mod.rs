@@ -8,7 +8,7 @@ mod caps;
 use super::com::{E_INVALIDARG, E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
 use super::d3d::{self, DIRECT_3D_2, DIRECT_3D_3, IID_IDIRECT3D2, IID_IDIRECT3D3};
 use super::{HostResult, functions};
-use crate::win32::user32::Display;
+use crate::win32::user32::{Display, WM_DISPLAYCHANGE};
 use crate::{Machine, Stop};
 
 pub const DD_OK: u32 = S_OK;
@@ -87,6 +87,8 @@ pub struct State {
     /// Guest strings describing the driver, created on first enumeration.
     driver_strings: Option<(u32, u32)>,
     pub(crate) device_strings: Option<d3d::DeviceStrings>,
+    /// The desktop's display mode, while the program has changed it.
+    desktop: Option<Display>,
 }
 
 /// The display modes the adapter offers, in the order Windows lists them.
@@ -336,6 +338,50 @@ fn enum_display_modes(m: &mut Machine, a: &[u32], description_words: usize) -> H
     Ok(DD_OK)
 }
 
+/// Changes the display mode. Only the application with exclusive access may.
+fn set_display_mode(m: &mut Machine, this: u32, mode: Display, refresh_rate: u32) -> HostResult {
+    let Some((window, level)) = m.direct_draw(this).map(|object| (object.window, object.cooperative_level))
+    else {
+        return Ok(DDERR_INVALIDOBJECT);
+    };
+    if level & DDSCL_EXCLUSIVE == 0 {
+        return Ok(DDERR_NOEXCLUSIVEMODE);
+    }
+    if !display_modes().any(|offered| offered == mode)
+        || (refresh_rate != 0 && refresh_rate != DISPLAY_REFRESH_RATE)
+    {
+        return Ok(DDERR_INVALIDMODE);
+    }
+    m.note(|| format!("{}x{} at {} bits", mode.width, mode.height, mode.bits_per_pixel));
+    change_display(m, mode, window)?;
+    Ok(DD_OK)
+}
+
+/// Puts the display in `mode`, remembering the desktop's mode the first
+/// time, and tells the windows.
+fn change_display(m: &mut Machine, mode: Display, full_screen_window: u32) -> Result<(), Stop> {
+    let previous = m.os.user.display;
+    if previous == mode {
+        return Ok(());
+    }
+    m.os.ddraw.desktop.get_or_insert(previous);
+    m.os.user.display = mode;
+    // The full-screen window covers the screen whatever its size becomes.
+    m.move_window(full_screen_window, 0, 0, mode.width as i32, mode.height as i32)?;
+    m.broadcast(WM_DISPLAYCHANGE, mode.bits_per_pixel, mode.width | mode.height << 16)
+}
+
+fn restore_display_mode(m: &mut Machine, a: &[u32]) -> HostResult {
+    let Some(window) = m.direct_draw(a[0]).map(|object| object.window) else {
+        return Ok(DDERR_INVALIDOBJECT);
+    };
+    if let Some(desktop) = m.os.ddraw.desktop.take() {
+        change_display(m, desktop, window)?;
+        m.os.ddraw.desktop = None;
+    }
+    Ok(DD_OK)
+}
+
 /// `GetDisplayMode`: describes the mode the display is in.
 fn get_display_mode(m: &mut Machine, a: &[u32], description_words: usize) -> u32 {
     if m.direct_draw(a[0]).is_none() {
@@ -387,9 +433,11 @@ interface! { static DIRECT_DRAW = "IDirectDraw";
     GetScanLine(2),
     GetVerticalBlankStatus(2),
     Initialize(2),
-    RestoreDisplayMode(1),
+    RestoreDisplayMode(1) => restore_display_mode,
     SetCooperativeLevel(3) => set_cooperative_level,
-    SetDisplayMode(4),
+    SetDisplayMode(4) => |m, a| {
+        set_display_mode(m, a[0], Display { width: a[1], height: a[2], bits_per_pixel: a[3] }, 0)
+    },
     WaitForVerticalBlank(3),
 }
 
@@ -413,9 +461,12 @@ interface! { static DIRECT_DRAW_2 = "IDirectDraw2";
     GetScanLine(2),
     GetVerticalBlankStatus(2),
     Initialize(2),
-    RestoreDisplayMode(1),
+    RestoreDisplayMode(1) => restore_display_mode,
     SetCooperativeLevel(3) => set_cooperative_level,
-    SetDisplayMode(6),
+    SetDisplayMode(6) => |m, a| {
+        // The flags only concern the old standard VGA mode 13h.
+        set_display_mode(m, a[0], Display { width: a[1], height: a[2], bits_per_pixel: a[3] }, a[4])
+    },
     WaitForVerticalBlank(3),
     GetAvailableVidMem(4) => get_available_video_memory,
 }
@@ -440,9 +491,12 @@ interface! { static DIRECT_DRAW_4 = "IDirectDraw4";
     GetScanLine(2),
     GetVerticalBlankStatus(2),
     Initialize(2),
-    RestoreDisplayMode(1),
+    RestoreDisplayMode(1) => restore_display_mode,
     SetCooperativeLevel(3) => set_cooperative_level,
-    SetDisplayMode(6),
+    SetDisplayMode(6) => |m, a| {
+        // The flags only concern the old standard VGA mode 13h.
+        set_display_mode(m, a[0], Display { width: a[1], height: a[2], bits_per_pixel: a[3] }, a[4])
+    },
     WaitForVerticalBlank(3),
     GetAvailableVidMem(4) => get_available_video_memory,
     GetSurfaceFromDC(3),

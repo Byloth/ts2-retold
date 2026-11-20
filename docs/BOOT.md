@@ -12,8 +12,9 @@ cargo run --release --bin andy -- boot --trace
 ## How far it gets
 
 **About 131.6 million instructions**, then it stops at
-`IDirectDraw4::SetDisplayMode(640, 480, 16)`: everything before the first
-surface is done.
+`IDirectDraw4::CreateSurface` for the primary surface (primary, 3D device,
+flip chain with one back buffer): the display is in 640×480 at 16 bits and
+everything before the first surface is done.
 
 | Phase | What happens |
 |---|---|
@@ -29,7 +30,7 @@ surface is done.
 | Sound | Creates DirectSound, loads 61 sound effects from `sfx\*.wav` into buffers and duplicates them, starts the streaming thread |
 | Second enumeration | `DirectDrawEnumerateExA`, `IDirectDraw4`, `IDirect3D3`: drivers, devices and modes again, DirectX 6 style |
 | "Screen Mode Select" | The start-up window; skipped by a modification (`docs/MODIFICATIONS.md`) |
-| Renderer start | Main window maximised, `DirectDrawCreate`, cooperative level `FULLSCREEN | EXCLUSIVE | ALLOWREBOOT | FPUSETUP`, `FindDevice`, `EnumZBufferFormats`, then `SetDisplayMode` — not implemented yet |
+| Renderer start | Main window maximised, `DirectDrawCreate`, cooperative level `FULLSCREEN | EXCLUSIVE | ALLOWREBOOT | FPUSETUP`, `FindDevice`, `EnumZBufferFormats`, `SetDisplayMode(640, 480, 16)`, then `CreateSurface` — not implemented yet |
 
 ## The game's own log
 
@@ -107,6 +108,6 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-`SetDisplayMode`, the primary surface with its back buffer and z-buffer, the
-3D device: the first work for the GPU renderer (ADR 0012). DirectInput is
-created in the same stretch.
+The primary surface with its back buffer and z-buffer, then the 3D device:
+the first work for the GPU renderer (ADR 0012). DirectInput is created in the
+same stretch.

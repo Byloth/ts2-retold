@@ -281,7 +281,9 @@ impl Machine {
             // Position in the whole sequence of calls, dropped ones included.
             self.trace_dropped + trace.len() - 1
         });
-        self.note = None;
+        // A note belongs to the call that wrote it: the caller's is put
+        // aside while this call, possibly made from inside a callback, runs.
+        let outer_note = self.note.take();
         let result = match (function.handler)(self, args) {
             Ok(result) => result,
             Err(stop) => {
@@ -293,6 +295,7 @@ impl Machine {
                         trace.truncate(position.saturating_sub(self.trace_dropped));
                     }
                 }
+                self.note = outer_note;
                 return Err(stop);
             }
         };
@@ -304,6 +307,7 @@ impl Machine {
             call.result = result;
             call.note = self.note.take();
         }
+        self.note = outer_note;
 
         self.cpu.regs[0] = result;
         // stdcall: the callee removes its arguments.

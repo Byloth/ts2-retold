@@ -36,6 +36,7 @@ pub const WM_NCCREATE: u32 = 0x0081;
 pub const WM_NCDESTROY: u32 = 0x0082;
 pub const WM_NCCALCSIZE: u32 = 0x0083;
 pub const WM_NCACTIVATE: u32 = 0x0086;
+pub const WM_DISPLAYCHANGE: u32 = 0x007E;
 pub const WM_QUERYENDSESSION: u32 = 0x0011;
 pub const WM_KEYDOWN: u32 = 0x0100;
 const VK_SPACE: u32 = 0x20;
@@ -482,6 +483,51 @@ impl Machine {
             }
         }
         Ok(was_visible)
+    }
+
+    /// Moves and resizes a window, with the messages Windows sends for it.
+    pub(crate) fn move_window(
+        &mut self,
+        handle: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Result<(), Stop> {
+        let Some(window) = self.os.user.window(handle) else { return Ok(()) };
+        let old = (window.x, window.y, window.width, window.height);
+        let new = (x, y, width, height);
+        if new == old {
+            return Ok(());
+        }
+        // WINDOWPOS: window, insert-after, x, y, cx, cy, flags.
+        let position = [handle, 0, x as u32, y as u32, width as u32, height as u32, 0];
+        self.send_with_struct(handle, WM_WINDOWPOSCHANGING, 0, position)?;
+        if let Some(window) = self.os.user.window_mut(handle) {
+            (window.x, window.y, window.width, window.height) = new;
+            window.needs_paint = window.visible;
+        }
+        self.send_with_struct(handle, WM_WINDOWPOSCHANGED, 0, position)?;
+        if let Some(window) = self.os.user.window(handle) {
+            let ((cx, cy), (cw, ch)) = (window.client_origin(), window.client_size());
+            if (old.2, old.3) != (width, height) {
+                self.send_message(handle, WM_SIZE, 0, pack(cw, ch))?;
+            }
+            if (old.0, old.1) != (x, y) {
+                self.send_message(handle, WM_MOVE, 0, pack(cx, cy))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Sends a message to every top-level window.
+    pub(crate) fn broadcast(&mut self, message: u32, wparam: u32, lparam: u32) -> Result<(), Stop> {
+        let windows: Vec<u32> =
+            self.os.user.windows.iter().filter(|w| w.alive && w.parent == 0).map(|w| w.handle).collect();
+        for window in windows {
+            self.send_message(window, message, wparam, lparam)?;
+        }
+        Ok(())
     }
 
     fn deactivate(&mut self) -> Result<(), Stop> {
