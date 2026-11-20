@@ -54,7 +54,7 @@ by eye.
 | Level 0 | Writes `Toy200.sav` and `toy2.cfg`, reads `rand.dat`, releases the duplicated sound buffers, loads `level00\level.raw` and `level00\level.ngn`; each texture is read as a bitmap into a DIB section (24-bit, or 8-bit with a colour table) and copied into a texture surface; three more materials |
 | Backdrop | `glueSetBackdrop()`: a 640×480 off-screen surface filled from an 8-bit bitmap through `GetDIBColorTable`, then `BltFast` to the back buffer |
 | Loading screen | Each frame: `Clear2`, `BeginScene`, the backdrop copied with `BltFast`, `DrawIndexedPrimitive` (a strip of four transformed-and-lit vertices: "LOADING…"), `EndScene`, `Flip` |
-| Movie | `IDirectSound::Release`, `CoInitialize`, `CoCreateInstance` — not implemented yet |
+| Movie | `IDirectSound::Release`, `CoInitialize`, `CoCreateInstance` of a multimedia stream, `Initialize`, `AddMediaStream` for video (on the DirectDraw object) and audio, `OpenFile("C:\\TOY2\\rtlibs\\acti.dll")` — the file is there, so the machine stops: playing is not implemented yet |
 
 ## The game's own log
 
@@ -130,6 +130,12 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-The movie (a decision: this copy has only `data\FMV\fmv.bin`), then
-Direct3D's own transformation and lighting, which the game needs for its
-untransformed vertex buffer and four lights, and a window to present in.
+Delivering the movie's pictures to the game (ADR 0015; the decoder is
+done). After `OpenFile` the game calls `GetMediaStream` for the video,
+asks it for `IDirectDrawMediaStream`, `CreateSample` without a surface,
+`GetSurface` on the sample, `IDirectDrawSurface3` on that surface, then
+`SetState` to run and, per picture, the sample's `Update` followed by
+`GetSurfaceDesc` and `Blt`. Needed: those three objects, surfaces seen
+through `IDirectDrawSurface3`, `Update` waiting on the virtual clock for
+the picture's time, and the Layer II audio decoder. Then Direct3D's own
+transformation and lighting, and a window to present in.

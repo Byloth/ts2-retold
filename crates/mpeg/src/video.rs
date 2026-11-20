@@ -537,7 +537,7 @@ impl<'a> Decoder<'a> {
         } else {
             idct(&mut self.block);
         }
-        for (row, values) in self.block.chunks_exact(8).enumerate() {
+        for (row, values) in self.block.as_chunks::<8>().0.iter().enumerate() {
             let pixels = &mut plane[start + row * stride..][..8];
             for (pixel, &value) in pixels.iter_mut().zip(values) {
                 let value = if self.macroblock_intra { value } else { *pixel as i32 + value };
