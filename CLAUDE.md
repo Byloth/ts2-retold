@@ -9,7 +9,7 @@ known gaps: `docs/BACKLOG.md`. The catalogue of modifications:
 `docs/MODIFICATIONS.md` (keep it in step with `crates/runtime/src/mods.rs`). Analysis results:
 `docs/CODE-DISCOVERY.md`. Instruction semantics and their verification:
 `docs/SEMANTICS.md`. How drawing is split between runtime and video backend:
-ADR 0014. Languages and settings (one build, English and Italian): ADR 0016.
+ADR 0014. Languages and settings (one build, English and Italian): ADR 0016. Input and its recordings: ADR 0017.
 
 **Crates.** `crates/cli` (`andy`): the command-line tool.
 `crates/runtime` (`andy-runtime`): the machine, the loader and the replacement
@@ -123,6 +123,8 @@ cargo run --release --bin andy -- difftest --out out/difftest.jsonl --rounds 40
 cargo run --release --bin andy -- boot --trace --limit 400000000 --args "-log"
 # The same on the graphics adapter, writing every tenth frame shown
 cargo run --release --bin andy -- boot --limit 600000000 --gpu --frames out/frames --frame-step 10
+# With recorded input (one change per line: READ press|release KEY)
+cargo run --release --bin andy -- boot --limit 1300000000 --gpu --input out/input/title.txt --frames out/frames --frame-step 25
 ```
 
 `.venv` is created with `python3 -m venv .venv && .venv/bin/pip install unicorn==2.1.4`.

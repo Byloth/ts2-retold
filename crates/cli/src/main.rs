@@ -22,7 +22,7 @@ USAGE:
     andy analyze [EXE] [--json OUT] Discover code and functions
     andy boot    [EXE] [--trace] [--limit N] [--args TEXT]
                  [--stop-at ADDR] [--dump ADDR:LEN]... [--surfaces DIR]
-                 [--gpu] [--frames DIR [--frame-step N]]
+                 [--gpu] [--frames DIR [--frame-step N]] [--input FILE]
                                     Run the game in the interpreter until it
                                     stops, and report how far it got. --args
                                     is the game's own command line: -log
@@ -34,7 +34,9 @@ USAGE:
                                     draws on the graphics adapter (without
                                     it triangles are counted, not drawn);
                                     --frames writes every Nth frame the
-                                    game shows as a PNG file into DIR
+                                    game shows as a PNG file into DIR;
+                                    --input plays back recorded input (one
+                                    line per change: READ press|release KEY)
                                     --with/--without ID switch a modification
     andy mods                       List the modifications (docs/MODIFICATIONS.md)
     andy movie FILE --yuv OUT [--pictures N]
@@ -71,6 +73,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut gpu = false;
     let mut frames = None;
     let mut frame_step = 1u64;
+    let mut input = None;
     let mut yuv = None;
     let mut pictures = u64::MAX;
     let mut game_args = String::new();
@@ -99,6 +102,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 dumps.push(range.ok_or("--dump needs ADDR:LEN in hexadecimal")?);
             }
             "--gpu" => gpu = true,
+            "--input" => input = Some(PathBuf::from(args.next().ok_or("--input needs a file")?)),
             "--frames" => frames = Some(PathBuf::from(args.next().ok_or("--frames needs a directory")?)),
             "--yuv" => yuv = Some(PathBuf::from(args.next().ok_or("--yuv needs a path")?)),
             "--pictures" => {
@@ -181,6 +185,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 dumps,
                 surfaces,
                 gpu,
+                input,
                 frames: frames.map(|directory| (directory, frame_step)),
             },
         ),
@@ -217,6 +222,8 @@ struct BootOptions {
     dumps: Vec<(u32, u32)>,
     surfaces: Option<PathBuf>,
     gpu: bool,
+    /// A recording of input to play back.
+    input: Option<PathBuf>,
     /// Where to write presented frames, and every how many.
     frames: Option<(PathBuf, u64)>,
 }
@@ -239,7 +246,7 @@ fn parse_hex(text: &str) -> Option<u32> {
 }
 
 fn boot(image: &Image, options: BootOptions) {
-    let BootOptions { mods, game_dir, trace, limit, game_args, stop_at, dumps, surfaces, gpu, frames } =
+    let BootOptions { mods, game_dir, trace, limit, game_args, stop_at, dumps, surfaces, gpu, frames, input } =
         options;
     // The program reads the game directory and writes only to `out/run`.
     let write_dir = PathBuf::from("out/run");
@@ -251,6 +258,18 @@ fn boot(image: &Image, options: BootOptions) {
     os.mods = mods;
     let mut machine = Machine::load(image, os);
     machine.breakpoint = stop_at;
+    if let Some(path) = input {
+        let recording = fs::read_to_string(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|text| andy_runtime::input::Recording::parse(&text));
+        match recording {
+            Ok(recording) => machine.os.recording = Some(recording),
+            Err(error) => {
+                eprintln!("{}: {error}", path.display());
+                return;
+            }
+        }
+    }
     if gpu {
         match andy_gpu::Gpu::new() {
             Ok(gpu) => {
@@ -318,6 +337,7 @@ fn boot(image: &Image, options: BootOptions) {
     }
     let video = &machine.os.ddraw;
     println!("frames shown           {}", video.frames);
+    println!("keyboard reads         {}", machine.os.keyboard_reads);
     println!("surface transfers      {} to video, {} back", video.uploads, video.downloads);
     let mut states: Vec<_> = video.statistics.draw_states.iter().collect();
     states.sort_by_key(|(_, used)| std::cmp::Reverse(used.draws));

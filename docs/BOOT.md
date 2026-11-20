@@ -18,6 +18,11 @@ and the energy display on top. Run to 1260 million instructions it has
 shown 4313 frames, the last 141 of the demo at about 4,500 triangles each
 (37 draw states in all).
 
+With recorded input (ADR 0017) it goes further: `--input` with a file
+saying `3700 press SPACE` and `3706 release SPACE` presses "jump" at the
+title screen and brings up the main menu (START GAME, OPTIONS, LOAD GAME,
+MOVIE VIEWER, EXIT), which the game then draws for as long as it is left.
+
 The pictures look right as far as can be told without the original beside
 them: the room, Buzz, an enemy robot, the lives, coins and battery
 displays. (What was first taken for wrong colours on Buzz was that robot
@@ -144,7 +149,7 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-A comparison of the demo with the original, when the owner can supply
-pictures of it. Then input, to press "jump" at the title and play; sound output with the Layer II
-audio decoder (movies are silent, like all sound so far); and a window to
-present in.
+Going through the menu into a level with recorded input. A comparison
+with the original, when the owner can supply pictures of it. Sound output
+with the Layer II audio decoder (movies are silent, like all sound so
+far); and a window, which will supply input and present the picture.

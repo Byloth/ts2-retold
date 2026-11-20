@@ -349,6 +349,13 @@ fn get_device_state(m: &mut Machine, a: &[u32]) -> u32 {
     if size != data_size {
         return DIERR_INVALIDPARAM;
     }
+    // Each read of the keyboard is one tick of recorded input.
+    if device.kind == Kind::Keyboard {
+        m.os.keyboard_reads += 1;
+        if let Some(recording) = &mut m.os.recording {
+            recording.apply(m.os.keyboard_reads, &mut m.os.input);
+        }
+    }
     let mut state = vec![0u8; size as usize];
     let input = &mut m.os.input;
     for (offset, control) in controls {

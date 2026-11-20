@@ -14,6 +14,8 @@
 
 pub mod files;
 pub mod game;
+pub mod input;
+pub mod keys;
 pub mod mods;
 pub mod os;
 pub mod threads;

@@ -54,6 +54,11 @@ pub struct Os {
     pub(crate) amstream: amstream::State,
     /// What the keyboard and mouse are doing; written by the embedder.
     pub input: dinput::Input,
+    /// A recording of input being played back, if any.
+    pub recording: Option<crate::input::Recording>,
+    /// How many times the program has read the keyboard: the clock of
+    /// recorded input.
+    pub keyboard_reads: u64,
     pub(crate) mmio: winmm::State,
     pub(crate) movable_blocks: Vec<crate::win32::kernel32::MovableBlock>,
     /// Open registry keys: handle to lower-case path.

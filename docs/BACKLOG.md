@@ -77,7 +77,8 @@ out of here into the roadmap or an ADR when work on them starts.
   and synchronous `Update` are implemented.
 - **Sound is not heard.** DirectSound buffers hold their samples and their
   play cursors advance, but nothing mixes them to an output yet.
-- **No input yet.** Nothing delivers keyboard, mouse or joystick events.
+- **Input comes only from recordings** (ADR 0017): keyboard, by file. No
+  window supplies it live yet, and mouse and joystick have no events.
 - **x87 state save/restore** (`fnsave`, `frstor`, `fnstenv`, `fldenv`) is not
   implemented (ADR 0010).
 - **The streaming thread is run as the game wrote it**, by a scheduler that
