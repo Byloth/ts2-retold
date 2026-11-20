@@ -24,6 +24,7 @@ use andy_cpu::memory::{Memory, Unmapped};
 use andy_recomp::pe::Image;
 use iced_x86::Instruction;
 
+use crate::game::Replacement;
 use crate::os::Os;
 use crate::threads::{Pause, Threads};
 use crate::win32::Function;
@@ -90,6 +91,16 @@ pub struct HostCall {
     pub note: Option<String>,
 }
 
+/// Marks, in the table of decoded instructions, an address not decoded yet.
+const NOT_DECODED: u32 = u32::MAX;
+/// Entries from this value up name a replaced function instead.
+const FIRST_REPLACEMENT: u32 = 0xFFFF_0000;
+
+enum Fetched {
+    Instruction(Instruction),
+    Replacement(&'static Replacement),
+}
+
 enum HostEntry {
     Function(&'static Function),
     /// An import the runtime has no implementation for.
@@ -114,6 +125,8 @@ pub struct Machine {
     code_start: u32,
     decoded_index: Vec<u32>,
     decoded: Vec<Instruction>,
+    /// Functions of the game replaced by the modifications that are on.
+    replacements: Vec<&'static Replacement>,
     /// Value of `cpu.instructions` at which execution stops.
     deadline: u64,
     callback_depth: u32,
@@ -160,8 +173,9 @@ impl Machine {
             host_addresses: std::collections::HashMap::new(),
             call_counts: Vec::new(),
             code_start: code.va,
-            decoded_index: vec![u32::MAX; code.virtual_size as usize],
+            decoded_index: vec![NOT_DECODED; code.virtual_size as usize],
             decoded: Vec::new(),
+            replacements: Vec::new(),
             deadline: u64::MAX,
             callback_depth: 0,
             trace: None,
@@ -171,6 +185,13 @@ impl Machine {
             breakpoint: None,
         };
         machine.os.resources = image.resources.clone();
+        for replacement in game::REPLACEMENTS {
+            let offset = replacement.address.wrapping_sub(code.va) as usize;
+            if machine.os.mods.is_enabled(replacement.modification) && offset < machine.decoded_index.len() {
+                machine.decoded_index[offset] = FIRST_REPLACEMENT + machine.replacements.len() as u32;
+                machine.replacements.push(replacement);
+            }
+        }
         for import in &image.imports {
             if !machine.os.modules.iter().any(|module| module.eq_ignore_ascii_case(&import.dll)) {
                 machine.os.modules.push(import.dll.clone());
@@ -223,19 +244,34 @@ impl Machine {
         }
     }
 
-    fn instruction_at(&mut self, address: u32) -> Result<Instruction, Fault> {
+    /// What is at `address`: an instruction, or a function of the game
+    /// that a modification replaces.
+    fn fetch(&mut self, address: u32) -> Result<Fetched, Fault> {
         let offset = address.wrapping_sub(self.code_start) as usize;
         match self.decoded_index.get(offset).copied() {
-            Some(u32::MAX) => {
+            Some(NOT_DECODED) => {
                 let instruction = interp::decode(&mut self.memory, address).ok_or(Fault::Invalid)?;
                 self.decoded_index[offset] = self.decoded.len() as u32;
                 self.decoded.push(instruction);
-                Ok(instruction)
+                Ok(Fetched::Instruction(instruction))
             }
-            Some(index) => Ok(self.decoded[index as usize]),
+            Some(index) if index < FIRST_REPLACEMENT => {
+                Ok(Fetched::Instruction(self.decoded[index as usize]))
+            }
+            Some(index) => Ok(Fetched::Replacement(self.replacements[(index - FIRST_REPLACEMENT) as usize])),
             // Outside the code section: decode every time.
-            None => interp::decode(&mut self.memory, address).ok_or(Fault::Invalid),
+            None => interp::decode(&mut self.memory, address).map(Fetched::Instruction).ok_or(Fault::Invalid),
         }
+    }
+
+    /// Runs the native function that stands in for a function of the game,
+    /// then returns to the game's caller.
+    fn run_replacement(&mut self, replacement: &Replacement) -> Result<(), Stop> {
+        (replacement.function)(self)?;
+        let esp = self.cpu.regs[4];
+        self.cpu.eip = self.read_stack(esp)?;
+        self.cpu.regs[4] = esp + 4 + replacement.callee_pops;
+        Ok(())
     }
 
     fn read_stack(&mut self, address: u32) -> Result<u32, Stop> {
@@ -351,7 +387,13 @@ impl Machine {
             if self.breakpoint == Some(eip) {
                 return Err(Stop::Breakpoint);
             }
-            let instruction = self.instruction_at(eip).map_err(Stop::Fault)?;
+            let instruction = match self.fetch(eip).map_err(Stop::Fault)? {
+                Fetched::Instruction(instruction) => instruction,
+                Fetched::Replacement(replacement) => {
+                    self.run_replacement(replacement)?;
+                    continue;
+                }
+            };
             self.cpu.execute(&mut self.memory, &instruction).map_err(Stop::Fault)?;
             if self.cpu.fpu.inexact_model && self.first_inexact.is_none() {
                 self.first_inexact = Some(eip);

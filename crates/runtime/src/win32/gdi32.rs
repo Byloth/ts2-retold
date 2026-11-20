@@ -1,12 +1,10 @@
 //! GDI32: bitmaps, device contexts and copies between them.
 //!
 //! The game uses GDI for its start-up "Screen Mode Select" window and for
-//! debug text. Bitmaps and copies are implemented; **text is not drawn**.
-//! Drawing text needs the fonts of Windows, which cannot be shipped. Text
-//! output is accepted, and does nothing, only while the `skip-mode-select`
-//! modification has that window open and off the screen: the window paints
-//! itself through an off-screen bitmap, and none of it is ever shown. At any
-//! other time text output stops the machine.
+//! debug text. Bitmaps and copies are implemented; **text is not drawn**:
+//! it needs the fonts of Windows, which cannot be shipped, so text output
+//! stops the machine. The window that needs it is normally replaced by the
+//! `skip-mode-select` modification.
 //!
 //! Colours are held as `0x00RRGGBB` at full depth. A real device-dependent
 //! bitmap would hold the display's colours (16 bits in the game's modes), so
@@ -413,10 +411,7 @@ fn text_out(m: &mut Machine, context: u32) -> HostResult {
     if m.os.gdi.context(context).is_none() {
         return Ok(0);
     }
-    if !m.os.user.has_window_hidden_by_modification() {
-        return not_implemented("drawing text");
-    }
-    Ok(1)
+    not_implemented("drawing text")
 }
 
 functions! { "GDI32.dll";

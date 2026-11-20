@@ -66,14 +66,13 @@ impl Os {
         HEAP_START
     }
 
-    /// The registry as the installer leaves it: one key with the directory
-    /// of the game's data and the directory of the disc. The game looks for
-    /// `sfx\`, `cd.txt` and its levels under the first and for `validate.tta`
-    /// under the second; in the copies in circulation both are the `data`
-    /// directory next to the executable, which holds what was on the disc.
+    /// The registry as the installer leaves it, confirmed on an installed
+    /// copy: `path` is the `data` directory (levels, `sfx\`, `cd.txt`) and
+    /// `cdpath` the directory above it (`validate.tta`).
     pub(crate) fn registry_value(key: &str, value: &str) -> Option<String> {
         match (key, value.to_ascii_lowercase().as_str()) {
-            (GAME_KEY, "path" | "cdpath") => Some(format!("{INSTALL_DIR}\\data\\")),
+            (GAME_KEY, "path") => Some(format!("{INSTALL_DIR}\\data\\")),
+            (GAME_KEY, "cdpath") => Some(format!("{INSTALL_DIR}\\")),
             _ => None,
         }
     }

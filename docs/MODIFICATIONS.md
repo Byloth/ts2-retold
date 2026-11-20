@@ -6,19 +6,23 @@ list. With every entry off the port behaves like the original.
 
 | Identifier | Class | Affects simulation | On by default | What it does |
 |---|---|---|---|---|
-| `skip-mode-select` | feature | no | yes | The start-up "Screen Mode Select" window is not shown. Its three questions (display device, render method, screen resolution) are answered with the game's own defaults: the hardware 3D device and the first mode at least 480 lines high (640×480 at 16 bits). Choices saved in `toy2.cfg` are ignored, since they index lists that differ from one machine to another. |
+| `skip-mode-select` | feature | no | yes | The start-up "Screen Mode Select" window does not exist: the game's routine for it is replaced by one that makes the choice the original proposes when nothing was saved (the first hardware 3D device and the first mode at least 480 lines high: 640×480 at 16 bits, full screen). Choices saved in `toy2.cfg` are ignored, since they index lists that differ from one machine to another. |
 
-## How `skip-mode-select` works
+## How modifications attach
 
-The game's routine runs unmodified. The runtime marks its window as hidden,
-resets the saved driver index so that the routine takes its default path
-(`crates/runtime/src/game.rs`), and delivers the space bar, the window's
-"confirm" key, each time the window has drained its messages. Three
-confirmations later the routine destroys the window and returns.
+A modification that changes what the game's code does **replaces a function**
+(`crates/runtime/src/game.rs`): when control reaches the function's address,
+a native function runs in its place and returns to the caller. The original
+is never executed, and a recompiled build leaves it out altogether. Addresses
+are those of one exact build of the executable.
 
-With the modification off the window would have to be shown, which needs GDI
-text (`docs/BACKLOG.md`); until then the machine stops at the first text
-output.
+`skip-mode-select` replaces the function at `0x432020`. The replacement
+writes the same records and variables the original leaves behind, following
+the original's own default path; a unit test checks the selection rule.
+
+With the modification off the original routine runs and its window would
+have to be shown, which needs GDI text (`docs/BACKLOG.md`); until then the
+machine stops at the first text output.
 
 ## Not modifications
 

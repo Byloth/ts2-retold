@@ -28,7 +28,13 @@ Status: Accepted in principle; mechanism to be designed in Phase 1 (2026-11-20)
 - Whether something is "plainly a bug" or a design choice is decided case by
   case and recorded in the entry.
 
-## Open points
+## Mechanism (2026-11-20)
 
-- Where modifications attach (function replacement, hooks by original address,
-  data overrides) and how the catalogue is stored.
+- The catalogue lives in code (`crates/runtime/src/mods.rs`) and is mirrored
+  in `docs/MODIFICATIONS.md`; `andy mods` prints it and `--with` /
+  `--without` switch entries for a run.
+- Changes to the game's behaviour are made by **replacing whole functions**
+  of the game with native ones, keyed by the function's address in one exact
+  build (`crates/runtime/src/game.rs`). The original function is not run, and
+  is not translated by the recompiler. Feeding the original code synthetic
+  input, or patching its instructions, is not used.

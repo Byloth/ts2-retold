@@ -8,9 +8,10 @@ The runtime (`crates/runtime`) replaces Windows for the game. Its choices:
   game shipped for. The C runtime then takes its ANSI paths, which keeps the
   set of functions to implement small.
 - **Installed in `C:\TOY2`.** The registry holds what the installer writes:
-  `HKLM\Software\TravellersTalesToyStory2` with `path` and `cdpath`, both
-  `C:\TOY2\`. The disc check (`validate.tta`) is satisfied from the same
-  directory. No `allow32bit` value: that belongs to a third-party fix.
+  `HKLM\Software\TravellersTalesToyStory2` with `path` = `C:\TOY2\data\`
+  and `cdpath` = `C:\TOY2\` (the layout confirmed on an installed copy).
+  The disc check (`validate.tta`) is satisfied from the latter. No
+  `allow32bit` value: the game reads it, the installer does not write it.
 - **The game directory is read-only.** Reads come from the user's copy;
   everything the program creates goes to a separate write directory that
   shadows it. Paths outside `C:\TOY2` do not exist. Names ignore case.

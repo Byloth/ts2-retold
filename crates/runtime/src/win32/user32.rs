@@ -11,8 +11,6 @@ use std::collections::VecDeque;
 use andy_recomp::pe::{ResourceId, resource_type};
 
 use super::{HostResult, functions};
-use crate::game;
-use crate::mods::SKIP_MODE_SELECT;
 use crate::threads::{INFINITE, Waiting};
 use crate::{Machine, Stop};
 
@@ -38,10 +36,6 @@ pub const WM_NCCALCSIZE: u32 = 0x0083;
 pub const WM_NCACTIVATE: u32 = 0x0086;
 pub const WM_DISPLAYCHANGE: u32 = 0x007E;
 pub const WM_QUERYENDSESSION: u32 = 0x0011;
-pub const WM_KEYDOWN: u32 = 0x0100;
-const VK_SPACE: u32 = 0x20;
-/// Class of the game's start-up "Screen Mode Select" window, upper-cased.
-const MODE_SELECT_CLASS: &[u8] = b"SCREEN MODE SELECT";
 
 const WS_VISIBLE: u32 = 0x1000_0000;
 const CW_USEDEFAULT: u32 = 0x8000_0000;
@@ -82,9 +76,6 @@ pub struct Window {
     pub visible: bool,
     alive: bool,
     needs_paint: bool,
-    /// Set by the `skip-mode-select` modification on the window it answers
-    /// on the user's behalf.
-    hidden_by_modification: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,20 +111,12 @@ pub struct User {
     quit: Option<u32>,
     /// Window that is active and has the keyboard focus, or 0.
     pub active: u32,
-    /// The `skip-mode-select` modification delivered its key press and owes
-    /// the window an empty queue before the next one.
-    confirmation_delivered: bool,
     /// `ShowCursor` display count; the cursor shows while it is >= 0.
     pub cursor_count: i32,
     pub display: Display,
 }
 
 impl User {
-    /// Whether a window that a modification keeps off the screen is open.
-    pub fn has_window_hidden_by_modification(&self) -> bool {
-        self.windows.iter().any(|window| window.alive && window.hidden_by_modification)
-    }
-
     pub(crate) fn window(&self, handle: u32) -> Option<&Window> {
         let index = handle.checked_sub(FIRST_WINDOW)? / 4;
         self.windows.get(index as usize).filter(|w| w.alive && w.handle == handle)
@@ -331,8 +314,6 @@ impl Machine {
             alive: true,
             needs_paint: false,
             frame: Frame::of(style, ex_style, menu != 0),
-            hidden_by_modification: self.os.mods.is_enabled(SKIP_MODE_SELECT)
-                && self.os.user.classes[class].name == MODE_SELECT_CLASS,
         };
         self.note(|| {
             format!(
@@ -344,12 +325,6 @@ impl Machine {
                 window.y
             )
         });
-        if window.hidden_by_modification {
-            // Forget the choices saved in the settings file, which index
-            // lists that depend on the machine they were made on. The
-            // window then starts from the game's own defaults.
-            let _ = self.memory.write(game::SAVED_DISPLAY_DRIVER, 4, u32::MAX);
-        }
         let (wx, wy, ww, wh) = (window.x, window.y, window.width, window.height);
         self.os.user.windows.push(window);
 
@@ -593,17 +568,7 @@ impl Machine {
                 time: now,
             });
         }
-        // The skipped mode-select window is answered for the user: it is
-        // told that the space bar, its "confirm" key, went down. Between two
-        // key presses the queue is reported empty once, because the window
-        // only acts on a key after it has drained its messages.
-        let skipped = user.windows.iter().find(|w| w.alive && w.hidden_by_modification)?.handle;
-        if user.confirmation_delivered {
-            user.confirmation_delivered = false;
-            return None;
-        }
-        user.confirmation_delivered = remove;
-        Some(Message { window: skipped, message: WM_KEYDOWN, wparam: VK_SPACE, lparam: 1, time: now })
+        None
     }
 
     fn write_message(&mut self, address: u32, message: &Message) {

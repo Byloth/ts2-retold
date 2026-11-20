@@ -26,6 +26,11 @@ directory and identifiers: `ts2-retold`. Recompiler codename: `andy` (ADR 0007):
 binary `andy`, crates `andy-*`, prefix `andy_` in generated code.
 License: Apache-2.0 (ADR 0005).
 
+**Product shape (ADR 0001, amended).** One tool run locally: the user gives it
+their own copy and picks a target (native Windows or Linux, or a browser
+bundle). Recompilation and asset conversion happen at build time on the
+user's machine; the browser only runs the finished result.
+
 Talk to the user in **Italian**. Code, comments, commit messages and docs are in **English**.
 
 ## Non-negotiable rules

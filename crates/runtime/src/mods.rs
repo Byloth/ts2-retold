@@ -34,11 +34,11 @@ pub static CATALOGUE: &[Modification] = &[Modification {
     class: Class::Feature,
     affects_simulation: false,
     enabled_by_default: true,
-    summary: "The start-up \"Screen Mode Select\" window is not shown. Its three questions (display \
-              device, render method, screen resolution) are answered with the game's own defaults: the \
-              hardware 3D device and the first mode at least 480 lines high (640x480 at 16 bits). \
-              Choices saved in toy2.cfg are ignored, since they index lists that differ from one \
-              machine to another.",
+    summary: "The start-up \"Screen Mode Select\" window does not exist: the game's routine for it is \
+              replaced by one that makes the choice the original proposes when nothing was saved (the \
+              first hardware 3D device and the first mode at least 480 lines high: 640x480 at 16 bits, \
+              full screen). Choices saved in toy2.cfg are ignored, since they index lists that differ \
+              from one machine to another.",
 }];
 
 /// Which modifications are switched on for this run.

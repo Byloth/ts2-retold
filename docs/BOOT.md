@@ -83,10 +83,8 @@ CONFIG : Base CD track is 2.
   the "Screen Mode Select" window: saved indices from `toy2.cfg` if the saved
   driver index is not negative, otherwise the first hardware device and the
   first mode at least 480 lines high.
-- **The registry paths name the `data` directory.** The game looks for
-  `sfx\`, `cd.txt` and `validate.tta` under them, and in the copies in
-  circulation those are in `data\` (`UNVERIFIED` against an installed copy's
-  registry).
+- **Registry paths**, confirmed on the owner's installed copy: `path` is the
+  `data` directory and `cdpath` the directory above it.
 - **The game asks DirectDraw to set up the FPU** (`DDSCL_FPUSETUP`): Direct3D
   will switch the x87 unit to single precision, the case ADR 0010 prepares
   for.
