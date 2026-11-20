@@ -7,7 +7,7 @@
 //! sample's surface. The clock is the machine's own, started when the stream
 //! is set running, so a movie plays the same in every run.
 //!
-//! **The audio is not played**, like every other sound so far.
+//! **The audio is not played**: the Layer II decoder does not exist yet.
 
 use std::sync::Arc;
 

@@ -12,6 +12,7 @@
 //! Host functions can call back into the program ([`Machine::call_guest`]),
 //! which is how window procedures and enumeration callbacks run.
 
+pub mod audio;
 pub mod files;
 pub mod game;
 pub mod input;
@@ -125,6 +126,8 @@ pub struct Machine {
     pub os: Os,
     /// What draws and shows the game's surfaces. Headless until replaced.
     pub video: Box<dyn Video>,
+    /// What receives the sound. Without one nothing is mixed.
+    pub audio: Option<Box<dyn audio::Audio>>,
     pub threads: Threads,
     host: Vec<HostEntry>,
     /// Addresses already given to host functions, by the function's identity.
@@ -185,6 +188,7 @@ impl Machine {
             memory,
             os,
             video: Box::new(Headless::default()),
+            audio: None,
             threads: Threads::new(),
             host: Vec::new(),
             host_addresses: std::collections::HashMap::new(),

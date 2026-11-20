@@ -15,7 +15,8 @@ Every dependency or tool is listed here **before** it is adopted
 | `ttf-parser` 0.25 | MIT OR Apache-2.0 | reading the bundled font's metric tables |
 | `wgpu` 30 | MIT OR Apache-2.0 | the GPU video backend (`crates/gpu`): Vulkan, Direct3D 12, Metal and WebGPU from one code base |
 | `winit` 0.30 | Apache-2.0 | the window of `andy play` (command-line tool only), without its own window frame for Wayland; its tree of platform bindings is MIT, Apache-2.0, Zlib, BSD or ISC |
-| `pollster` 1 | MIT OR Apache-2.0 | waiting for the graphics device to open, on native targets |
+| `pollster` 1 | MIT OR Apache-2.0 | waiting for the graphics device to open, on native targets, and for the sound server's answers |
+| `pulseaudio` 0.3 | MIT | the sound device of `andy play` (command-line tool only): the PulseAudio server's protocol in Rust, no system library; its tree (`mio`, `futures`, `bitflags`, `byteorder`, `enum-primitive-derive`, `num-traits`, `thiserror`, `log` and theirs) is MIT, MIT OR Apache-2.0 or Unlicense OR MIT |
 | `png` 0.17 | MIT OR Apache-2.0 | `andy boot --surfaces`: writing surfaces as images for inspection (command-line tool only) |
 
 Transitive dependencies: all `MIT`, `MIT OR Apache-2.0` or `Unlicense OR MIT`,
@@ -54,6 +55,7 @@ No copyleft and no noncommercial-only license is in the tree.
 
 | Wine `wingdi.h` (9.0) | LGPL-2.1 | Layout of `TEXTMETRICA` and GDI constant values. Kept in the git-ignored `ref/win`. Facts only, nothing transcribed. |
 | Wine `dlls/ddraw/device.c` (9.0) | LGPL-2.1 | How the DirectX 5 render states act on texture stage 0 (ADR 0014), a behaviour Wine established by tests on Windows. Kept in the git-ignored `ref/wine`. The rules are re-expressed, no code is copied. |
+| WSLg's PulseAudio `src/modules/rdp/module-rdp-sink.c` (microsoft/pulseaudio-mirror, branch `working`) | LGPL-2.1 | Read to understand the stall of WSLg's sound (`docs/BACKLOG.md`). Kept in the git-ignored `ref/wslg`. Nothing is taken from it. |
 
 ## External projects consulted, not used
 

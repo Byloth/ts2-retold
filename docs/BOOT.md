@@ -171,7 +171,6 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-Playing the first level, in the window and with recordings that move
-Buzz. A comparison with the original, when the owner can supply pictures
-of it. Sound output with the Layer II audio decoder (movies are silent,
-like all sound so far).
+A comparison with the original, pictures and sound, when the owner can
+supply them. The Layer II audio decoder for the movies, which are still
+silent (effects and music are heard, ADR 0019).

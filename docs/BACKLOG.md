@@ -109,8 +109,30 @@ out of here into the roadmap or an ADR when work on them starts.
   (`crates/mpeg`, ADR 0015); the Layer II audio decoder is not written yet
   and there is no sound output for it to feed. Only seeking to the start
   and synchronous `Update` are implemented.
-- **Sound is not heard.** DirectSound buffers hold their samples and their
-  play cursors advance, but nothing mixes them to an output yet.
+- **Sound** (ADR 0019) is mixed and heard, on Linux through a PulseAudio
+  server. Still to do: a sound device on Windows and in the browser; the
+  movies' sound; a listening comparison with the original (rate conversion
+  is a straight line between samples, the original setup's is
+  `UNVERIFIED`); 3D sound and the other DirectSound interfaces stop the
+  machine by name. When the game starts in the window its clock runs
+  ahead of the computer's by about two seconds (a wait inside a callback
+  cannot be bounded by the window's clock limit), so the window stands
+  still for that long and that much silence is dropped.
+- **WSLg's sound stalls when a window appears while sound plays** (WSLg
+  1.0.79; found 2026-11-20). From the moment a window is on the screen the
+  PulseAudio server asks every playing stream for sound about once a
+  second instead of fifty times, whichever program owns the window or the
+  stream, and it stays so until the sound has paused; a stream started
+  after the window is well. `tools/wslg-audio-stall` shows it with a
+  stream of silence and an empty window (requests in each second: 51, 31,
+  1, 1, 1, ...; with `late` 50 throughout; with `recover` back to 50 after
+  a pause that the stalled server takes 2.5 to 4.5 seconds to carry out).
+  The cause inside WSLg is not known: its sink (`module-rdp-sink`, kept in
+  `ref/wslg`) talks to the RDP side over a socket with blocking reads and
+  resets its latency only when it goes idle, which fits, but that is a
+  reading of the source, not a finding. To be reported to WSLg. The game
+  starts its sound before its window, so on WSLg it stalls once at every
+  start; the speaker's watch (ADR 0019) brings it back within seconds.
 - **Input** (ADR 0017) is the keyboard, from a recording or from the
   window; mouse and joystick have no events.
 - **A pending flip holds back only the next flip.** On real drivers a lock

@@ -14,6 +14,7 @@
 use super::com::{E_INVALIDARG, E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
 use super::{HostResult, functions};
 use crate::Machine;
+use crate::audio::{Frame, OUTPUT_RATE};
 use crate::threads::Object;
 
 pub const DS_OK: u32 = S_OK;
@@ -161,6 +162,18 @@ pub struct Buffer {
     /// While it plays: the play cursor up to which notifications have been
     /// signalled.
     notified_to: Option<u32>,
+    /// While it plays: where the mixer is in it.
+    mix: Option<Mix>,
+}
+
+/// The mixer's place in a playing buffer. The play cursor the program is
+/// told follows the clock in whole milliseconds; the mixer keeps its own,
+/// exact to a fraction of a sample, so that what is heard has no steps.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Mix {
+    /// In sample frames from the start of the buffer.
+    at: f64,
+    looping: bool,
 }
 
 impl Buffer {
@@ -207,6 +220,72 @@ impl Buffer {
 }
 
 impl Buffer {
+    /// How loud the buffer is in the left and the right channel, from its
+    /// volume and pan: both are attenuations in hundredths of a decibel,
+    /// and a pan to one side attenuates the other.
+    fn gains(&self) -> [f32; 2] {
+        let gain = |hundredths: i32| 10f32.powf(hundredths as f32 / 2000.0);
+        [gain(self.volume - self.pan.max(0)), gain(self.volume + self.pan.min(0))]
+    }
+
+    /// Adds what the buffer plays next to `out`, a stretch of the mixed
+    /// stream, and moves the mixer's place on. `samples` reads the bytes of
+    /// the buffer from an offset. Between two of its samples the value is
+    /// taken on the straight line from one to the other.
+    fn mix_into(&mut self, out: &mut [[f32; 2]], mut samples: impl FnMut(u32, u32) -> Vec<u8>) {
+        let Some(Mix { mut at, looping }) = self.mix else { return };
+        let block = self.format.block_align();
+        let frames = (self.size / block.max(1)) as u64;
+        if frames == 0 {
+            self.mix = None;
+            return;
+        }
+        let step = self.frequency as f64 / OUTPUT_RATE as f64;
+        // The sample frames this stretch touches, read in one go (in two
+        // when it goes round the end of a looping buffer).
+        let first = at as u64;
+        let wanted = (at + step * out.len() as f64) as u64 + 2 - first;
+        let available = if looping { wanted } else { wanted.min(frames.saturating_sub(first)) };
+        let mut bytes = Vec::with_capacity((available * block as u64) as usize);
+        let mut frame = first % frames;
+        while (bytes.len() as u64) < available * block as u64 {
+            let count = (available - bytes.len() as u64 / block as u64).min(frames - frame);
+            bytes.extend(samples(frame as u32 * block, count as u32 * block));
+            frame = 0;
+        }
+        let (wide, channels) = (self.format.bits_per_sample == 16, self.format.channels as usize);
+        // A frame of the buffer as left and right, from -1 to 1; silence
+        // past the end of a buffer that plays once.
+        let frame_at = |index: u64| -> [f32; 2] {
+            let sample = |channel: usize| {
+                let at = (index - first) as usize * block as usize + channel * if wide { 2 } else { 1 };
+                match (wide, bytes.get(at..at + 2), bytes.get(at)) {
+                    (true, Some(pair), _) => i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32768.0,
+                    // Eight-bit samples are unsigned, silence at 128.
+                    (false, _, Some(&byte)) => (byte as f32 - 128.0) / 128.0,
+                    _ => 0.0,
+                }
+            };
+            [sample(0), sample(channels - 1)]
+        };
+        let [left, right] = self.gains();
+        for mixed in out.iter_mut() {
+            if !looping && at >= frames as f64 {
+                break;
+            }
+            let (index, between) = (at as u64, at.fract() as f32);
+            let (from, to) = (frame_at(index), frame_at(index + 1));
+            mixed[0] += (from[0] + (to[0] - from[0]) * between) * left;
+            mixed[1] += (from[1] + (to[1] - from[1]) * between) * right;
+            at += step;
+        }
+        self.mix = if looping {
+            Some(Mix { at: at % frames as f64, looping })
+        } else {
+            (at < frames as f64).then_some(Mix { at, looping })
+        };
+    }
+
     /// The events of the notification positions the play cursor has passed
     /// since the last call, and how long, in milliseconds, until it passes
     /// the next one. Between calls the cursor must not go round a looping
@@ -246,6 +325,8 @@ pub struct State {
     driver_strings: Option<(u32, u32)>,
     devices: Vec<Device>,
     pub buffers: Vec<Buffer>,
+    /// Frames of the mixed stream handed on so far.
+    mixed_frames: u64,
 }
 
 impl Machine {
@@ -254,7 +335,38 @@ impl Machine {
         self.os.dsound.devices.get_mut(index).filter(|d| d.references > 0 && d.pointer == this)
     }
 
+    /// Mixes what the buffers play, up to the present of the machine's
+    /// clock, and hands it to the receiver of the sound. Called as the
+    /// clock advances and before anything about a buffer changes, so that
+    /// every change is heard from its own moment on. The samples are read
+    /// from the program's memory as they are when the mixer reaches them,
+    /// which is how a program that keeps refilling a looping buffer is heard.
+    pub(crate) fn mix_sound(&mut self) {
+        let Some(mut audio) = self.audio.take() else { return };
+        let target = crate::audio::frames_at(self.clock_ms());
+        let count = target.saturating_sub(self.os.dsound.mixed_frames) as usize;
+        if count > 0 {
+            self.os.dsound.mixed_frames = target;
+            let mut mixed = vec![[0f32; 2]; count];
+            let memory = &mut self.memory;
+            for buffer in self.os.dsound.buffers.iter_mut().filter(|buffer| buffer.mix.is_some()) {
+                let start = buffer.memory;
+                buffer.mix_into(&mut mixed, |offset, len| {
+                    memory.dump(start + offset, len).unwrap_or_else(|| vec![0; len as usize])
+                });
+            }
+            // Louder than the output can carry is cut off at its limits.
+            let frames: Vec<Frame> = mixed
+                .iter()
+                .map(|frame| frame.map(|sample| (sample * 32768.0).clamp(-32768.0, 32767.0) as i16))
+                .collect();
+            audio.play(&frames);
+        }
+        self.audio = Some(audio);
+    }
+
     fn sound_buffer(&mut self, this: u32) -> Option<&mut Buffer> {
+        self.mix_sound();
         let index = self.object_index(this)?;
         self.os.dsound.buffers.get_mut(index).filter(|b| b.references > 0 && b.pointer == this)
     }
@@ -277,6 +389,7 @@ impl Machine {
     /// buffers have passed, and returns the time in milliseconds until the
     /// next one. The scheduler calls this as the clock advances.
     pub(crate) fn sound_notifications(&mut self) -> Option<u64> {
+        self.mix_sound();
         let now = self.clock_ms() as u32;
         let mut events = Vec::new();
         let next = self
@@ -452,6 +565,7 @@ fn create_sound_buffer(m: &mut Machine, a: &[u32]) -> u32 {
         notify_pointer: 0,
         notifications: Vec::new(),
         notified_to: None,
+        mix: None,
     });
     if m.memory.write(out, 4, pointer).is_some() { DS_OK } else { DSERR_INVALIDPARAM }
 }
@@ -498,6 +612,7 @@ fn duplicate_sound_buffer(m: &mut Machine, a: &[u32]) -> u32 {
         notify_pointer: 0,
         notifications: Vec::new(),
         notified_to: None,
+        mix: None,
     };
     let pointer = m.new_buffer(copy);
     if m.memory.write(a[2], 4, pointer).is_some() { DS_OK } else { DSERR_INVALIDPARAM }
@@ -583,6 +698,7 @@ fn buffer_release(m: &mut Machine, a: &[u32]) -> u32 {
         buffer.references -= 1;
         if buffer.references == 0 {
             buffer.playback = None;
+            buffer.mix = None;
             buffer.notified_to = None;
             buffer.notifications.clear();
         }
@@ -712,6 +828,12 @@ fn play(m: &mut Machine, a: &[u32]) -> u32 {
         // The primary buffer only ever plays looping.
         return DSERR_INVALIDPARAM;
     }
+    // A buffer already playing goes on from where it is.
+    let at = match (buffer.playback, buffer.mix) {
+        (Some(_), Some(mix)) => mix.at,
+        _ => (buffer.position / buffer.format.block_align().max(1)) as f64,
+    };
+    buffer.mix = (!buffer.is_primary()).then_some(Mix { at, looping });
     buffer.playback = Some(Playback { started_ms: now, from: buffer.position, looping });
     // Notifications count from where playback starts, unless it was
     // already playing.
@@ -734,6 +856,7 @@ fn stop(m: &mut Machine, a: &[u32]) -> u32 {
     }
     buffer.settle(now);
     buffer.playback = None;
+    buffer.mix = None;
     buffer.notified_to = None;
     m.signal(&events);
     DS_OK
@@ -754,6 +877,9 @@ fn set_current_position(m: &mut Machine, a: &[u32]) -> u32 {
     buffer.position = a[1] / block * block;
     if let Some(playback) = &mut buffer.playback {
         *playback = Playback { started_ms: now, from: buffer.position, ..*playback };
+    }
+    if let Some(mix) = &mut buffer.mix {
+        mix.at = (buffer.position / block) as f64;
     }
     DS_OK
 }
@@ -939,6 +1065,7 @@ mod tests {
             notify_pointer: 0,
             notifications: Vec::new(),
             notified_to: None,
+            mix: None,
         }
     }
 
@@ -954,6 +1081,63 @@ mod tests {
         let mut compressed = bytes;
         compressed[0] = 2;
         assert_eq!(WaveFormat::from_bytes(&compressed), None);
+    }
+
+    /// Mixes `frames` of output from a buffer holding `samples`.
+    fn mixed(buffer: &mut Buffer, samples: &[u8], frames: usize) -> Vec<[f32; 2]> {
+        let mut out = vec![[0.0; 2]; frames];
+        buffer.mix_into(&mut out, |offset, len| samples[offset as usize..][..len as usize].to_vec());
+        out
+    }
+
+    #[test]
+    fn the_mixer_plays_a_buffer_at_its_rate_volume_and_pan() {
+        // Sixteen bits, one channel, a quarter of the output's rate: a ramp
+        // of four samples comes out as a straight line sixteen frames long.
+        let ramp: Vec<u8> =
+            [0i16, 8192, 16384, 24576].iter().flat_map(|sample| sample.to_le_bytes()).collect();
+        let mut sound = buffer(8, None);
+        sound.format = WaveFormat { channels: 1, samples_per_second: OUTPUT_RATE / 4, bits_per_sample: 16 };
+        sound.frequency = OUTPUT_RATE / 4;
+        sound.mix = Some(Mix { at: 0.0, looping: false });
+        let out = mixed(&mut sound, &ramp, 20);
+        for (frame, value) in out.iter().enumerate().take(12) {
+            assert_eq!(*value, [frame as f32 / 16.0; 2], "frame {frame}");
+        }
+        // After the last sample it fades to nothing and has ended.
+        assert_eq!(out[13], [0.75 * 0.75; 2]);
+        assert_eq!(out[16..], [[0.0; 2]; 4]);
+        assert_eq!(sound.mix, None);
+
+        // Looping it goes round, and remembers where it is between calls.
+        sound.mix = Some(Mix { at: 0.0, looping: true });
+        let first = mixed(&mut sound, &ramp, 10);
+        let second = mixed(&mut sound, &ramp, 10);
+        assert_eq!(sound.mix, Some(Mix { at: 1.0, looping: true }));
+        assert_eq!((first[4], second[2], second[6]), ([0.25; 2], [0.75; 2], [0.0; 2]));
+        // Between the last sample and the first it goes from one to the other.
+        assert_eq!(second[4], [0.375; 2]);
+
+        // Twenty decibels down is a tenth; a pan to the right leaves the
+        // right as it is and attenuates the left.
+        (sound.volume, sound.pan) = (-2000, 0);
+        assert!(sound.gains().iter().all(|gain| (gain - 0.1).abs() < 1e-6));
+        (sound.volume, sound.pan) = (0, 2000);
+        let [left, right] = sound.gains();
+        assert!((left - 0.1).abs() < 1e-6 && right == 1.0);
+        (sound.volume, sound.pan) = (0, -10000);
+        assert_eq!(sound.gains(), [1.0, 1e-5]);
+    }
+
+    #[test]
+    fn the_mixer_reads_eight_bits_and_two_channels() {
+        // Eight bits are unsigned around 128; two channels stay apart.
+        let mut sound = buffer(4, None);
+        sound.format = WaveFormat { channels: 2, samples_per_second: OUTPUT_RATE, bits_per_sample: 8 };
+        sound.frequency = OUTPUT_RATE;
+        sound.mix = Some(Mix { at: 0.0, looping: false });
+        let out = mixed(&mut sound, &[128, 192, 64, 0], 3);
+        assert_eq!(out, [[0.0, 0.5], [-0.5, -1.0], [0.0, 0.0]]);
     }
 
     #[test]

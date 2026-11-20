@@ -166,6 +166,8 @@ struct Play {
     /// When the machine's clock read `clock_start`.
     started: Instant,
     clock_start: u64,
+    /// The clock value at which the window closes by itself.
+    until: Option<u64>,
     /// Why the machine stopped, once it has.
     stopped: Option<Stop>,
     error: Option<String>,
@@ -409,6 +411,10 @@ impl ApplicationHandler for Play {
             // from the same starting point.
             let now = self.started.elapsed().as_millis() as u64;
             let clock = self.machine.clock() - self.clock_start;
+            if self.until.is_some_and(|until| self.machine.clock() >= until) {
+                event_loop.exit();
+                return;
+            }
             // Far behind (the host was busy, or is too slow): do not try to
             // catch up, take the present as the new starting point.
             if now.saturating_sub(clock) > 250 {
@@ -444,7 +450,19 @@ impl ApplicationHandler for Play {
 }
 
 /// Runs the game in a window until it stops or the window is closed.
-pub fn play(machine: Machine) -> Result<(Machine, Option<Stop>), String> {
+pub fn play(mut machine: Machine, seconds: Option<u64>) -> Result<(Machine, Option<Stop>), String> {
+    // Without a sound device the game is played silent.
+    let losses = match crate::speaker::Speaker::open() {
+        Ok(speaker) => {
+            let losses = speaker.losses();
+            machine.audio = Some(Box::new(speaker));
+            Some(losses)
+        }
+        Err(error) => {
+            println!("no sound: {error}");
+            None
+        }
+    };
     let event_loop = EventLoop::new().map_err(|error| format!("no window system: {error}"))?;
     let mut play = Play {
         machine,
@@ -457,10 +475,24 @@ pub fn play(machine: Machine) -> Result<(Machine, Option<Stop>), String> {
         frames_shown: 0,
         started: Instant::now(),
         clock_start: 0,
+        until: seconds.map(|seconds| seconds * 1000),
         stopped: None,
         error: None,
     };
     event_loop.run_app(&mut play).map_err(|error| error.to_string())?;
+    // The sound device is let go before the machine is handed back.
+    play.machine.audio = None;
+    if let Some(losses) = losses {
+        let (starved, dropped) = losses.count();
+        let rate = andy_runtime::audio::OUTPUT_RATE as u64;
+        println!(
+            "sound                  {} ms of silence for lack of sound, {} ms dropped for being late, \
+             the device stalled {} times",
+            starved * 1000 / rate,
+            dropped * 1000 / rate,
+            losses.stalls()
+        );
+    }
     match play.error {
         Some(error) => Err(error),
         None => Ok((play.machine, play.stopped)),

@@ -1,0 +1,18 @@
+# A minimal program for the stall of WSLg's sound described in
+# docs/BACKLOG.md: a stream of silence to the PulseAudio server, and a
+# window that appears while it plays. Not part of the project's workspace
+# or of any build.
+[package]
+name = "wslg-audio-stall"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+pollster = "1"
+pulseaudio = "0.3"
+wgpu = "30"
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }

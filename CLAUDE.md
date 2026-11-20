@@ -9,7 +9,7 @@ known gaps: `docs/BACKLOG.md`. The catalogue of modifications:
 `docs/MODIFICATIONS.md` (keep it in step with `crates/runtime/src/mods.rs`). Analysis results:
 `docs/CODE-DISCOVERY.md`. Instruction semantics and their verification:
 `docs/SEMANTICS.md`. How drawing is split between runtime and video backend:
-ADR 0014. The window's own frame: ADR 0018. Languages and settings (one build, English and Italian): ADR 0016. Input and its recordings: ADR 0017.
+ADR 0014. The window's own frame: ADR 0018. Sound, mixed in the runtime: ADR 0019. Languages and settings (one build, English and Italian): ADR 0016. Input and its recordings: ADR 0017.
 
 **Crates.** `crates/cli` (`andy`): the command-line tool.
 `crates/runtime` (`andy-runtime`): the machine, the loader and the replacement
@@ -132,6 +132,8 @@ cargo run --release --bin andy -- boot --limit 1300000000 --gpu --input out/inpu
 # Into the first level. --seconds bounds the machine's clock, which also
 # passes while the game waits for a key (the instruction limit does not).
 cargo run --release --bin andy -- boot --limit 6000000000 --seconds 400 --gpu --input out/input/level.txt --frames out/frames --frame-step 50
+# What the game plays, as a WAVE file (the same for the same run)
+cargo run --release --bin andy -- boot --limit 6000000000 --seconds 300 --input out/input/level.txt --sound out/sound/level.wav
 ```
 
 `.venv` is created with `python3 -m venv .venv && .venv/bin/pip install unicorn==2.1.4`.

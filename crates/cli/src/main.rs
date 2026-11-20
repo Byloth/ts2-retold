@@ -3,6 +3,8 @@
 mod capture;
 mod frame;
 mod play;
+mod speaker;
+mod wav;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -25,6 +27,7 @@ USAGE:
     andy boot    [EXE] [--trace] [--limit N] [--seconds N] [--args TEXT]
                  [--stop-at ADDR] [--dump ADDR:LEN]... [--surfaces DIR]
                  [--gpu] [--frames DIR [--frame-step N]] [--input FILE]
+                 [--sound FILE]
                                     Run the game in the interpreter until it
                                     stops, and report how far it got. --args
                                     is the game's own command line: -log
@@ -39,14 +42,18 @@ USAGE:
                                     game shows as a PNG file into DIR;
                                     --input plays back recorded input (one
                                     line per change: READ press|release KEY);
+                                    --sound writes what the game plays as
+                                    a WAVE file;
                                     --limit stops after N instructions,
                                     --seconds after N seconds of the
                                     machine's clock (which also passes
                                     while the game waits)
                                     --with/--without ID switch a modification
-    andy play    [EXE] [--args TEXT] [--with/--without ID]
+    andy play    [EXE] [--args TEXT] [--seconds N] [--with/--without ID]
                                     Run the game in a window, with the
-                                    keyboard
+                                    keyboard and the sound device;
+                                    --seconds closes the window after N
+                                    seconds of the machine's clock
     andy mods                       List the modifications (docs/MODIFICATIONS.md)
     andy movie FILE --yuv OUT [--pictures N]
                                     Decode a movie of the game and write its
@@ -79,6 +86,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut stop_at = None;
     let mut dumps = Vec::new();
     let mut surfaces = None;
+    let mut sound = None;
     let mut gpu = false;
     let mut frames = None;
     let mut frame_step = 1u64;
@@ -121,6 +129,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--frame-step" => {
                 frame_step = args.next().and_then(|n| n.parse().ok()).ok_or("--frame-step needs a number")?;
             }
+            "--sound" => sound = Some(PathBuf::from(args.next().ok_or("--sound needs a file")?)),
             "--surfaces" => {
                 surfaces = Some(PathBuf::from(args.next().ok_or("--surfaces needs a directory")?));
             }
@@ -198,6 +207,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 stop_at,
                 dumps,
                 surfaces,
+                sound,
                 gpu,
                 input,
                 frames: frames.map(|directory| (directory, frame_step)),
@@ -209,7 +219,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let mut os = Os::new(files);
             os.command_line_arguments = game_args;
             os.mods = mods;
-            let (machine, stop) = play::play(Machine::load(&image, os))?;
+            let (machine, stop) = play::play(Machine::load(&image, os), seconds)?;
             println!("frames shown           {}", machine.os.ddraw.frames);
             match stop {
                 Some(stop) => println!("stopped at eip {:#010x}: {}", machine.cpu.eip, describe(&stop)),
@@ -250,6 +260,8 @@ struct BootOptions {
     stop_at: Option<u32>,
     dumps: Vec<(u32, u32)>,
     surfaces: Option<PathBuf>,
+    /// The file the machine's sound is written to.
+    sound: Option<PathBuf>,
     gpu: bool,
     /// A recording of input to play back.
     input: Option<PathBuf>,
@@ -285,6 +297,7 @@ fn boot(image: &Image, options: BootOptions) {
         stop_at,
         dumps,
         surfaces,
+        sound,
         gpu,
         frames,
         input,
@@ -299,6 +312,15 @@ fn boot(image: &Image, options: BootOptions) {
     os.mods = mods;
     let mut machine = Machine::load(image, os);
     machine.breakpoint = stop_at;
+    if let Some(path) = sound {
+        match wav::WaveFile::create(&path) {
+            Ok(file) => machine.audio = Some(Box::new(file)),
+            Err(error) => {
+                eprintln!("{}: {error}", path.display());
+                return;
+            }
+        }
+    }
     if let Some(path) = input {
         let recording = fs::read_to_string(&path)
             .map_err(|error| error.to_string())
