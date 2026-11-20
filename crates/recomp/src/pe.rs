@@ -131,10 +131,7 @@ impl Image {
                 return Ok((0, 0));
             }
             let at = opt + 96 + index * 8;
-            Ok((
-                r.u32(at, "data directory")?,
-                r.u32(at + 4, "data directory")?,
-            ))
+            Ok((r.u32(at, "data directory")?, r.u32(at + 4, "data directory")?))
         };
 
         let mut sections = Vec::with_capacity(section_count);
@@ -160,9 +157,7 @@ impl Image {
             let va = base
                 .checked_add(rva)
                 .filter(|va| va.checked_add(virtual_size).is_some())
-                .ok_or_else(|| {
-                    PeError::Unsupported(format!("section {name} wraps the address space"))
-                })?;
+                .ok_or_else(|| PeError::Unsupported(format!("section {name} wraps the address space")))?;
             sections.push(Section {
                 name,
                 va,
@@ -254,11 +249,8 @@ impl Image {
                 match entry >> 12 {
                     REL_BASED_ABSOLUTE => {}
                     REL_BASED_HIGHLOW => {
-                        self.relocs.push(
-                            self.base
-                                .wrapping_add(page)
-                                .wrapping_add((entry & 0xFFF) as u32),
-                        );
+                        self.relocs
+                            .push(self.base.wrapping_add(page).wrapping_add((entry & 0xFFF) as u32));
                     }
                     other => {
                         return Err(PeError::Unsupported(format!("relocation type {other}")));
@@ -284,13 +276,7 @@ impl Image {
     /// Reads one byte; zero for the uninitialised tail of a section.
     pub fn read_u8(&self, va: u32) -> Option<u8> {
         let section = self.section_at(va)?;
-        Some(
-            section
-                .data
-                .get((va - section.va) as usize)
-                .copied()
-                .unwrap_or(0),
-        )
+        Some(section.data.get((va - section.va) as usize).copied().unwrap_or(0))
     }
 
     /// Reads a little-endian `u32` that lies entirely inside one section.
@@ -367,10 +353,7 @@ mod tests {
 
     #[test]
     fn rejects_garbage() {
-        assert_eq!(
-            Image::parse(b"").unwrap_err(),
-            PeError::Truncated("DOS header")
-        );
+        assert_eq!(Image::parse(b"").unwrap_err(), PeError::Truncated("DOS header"));
         assert_eq!(
             Image::parse(&[0u8; 64]).unwrap_err(),
             PeError::BadMagic("DOS signature")
@@ -379,10 +362,7 @@ mod tests {
         dos[0] = b'M';
         dos[1] = b'Z';
         dos[0x3C] = 0x40;
-        assert_eq!(
-            Image::parse(&dos).unwrap_err(),
-            PeError::BadMagic("PE signature")
-        );
+        assert_eq!(Image::parse(&dos).unwrap_err(), PeError::BadMagic("PE signature"));
     }
 
     #[test]

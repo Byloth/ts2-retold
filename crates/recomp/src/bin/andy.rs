@@ -51,8 +51,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let exe = match positional.get(1) {
         Some(path) => PathBuf::from(path),
         None => {
-            let dir =
-                env::var_os("TS2_GAME_DIR").ok_or("no EXE given and TS2_GAME_DIR is not set")?;
+            let dir = env::var_os("TS2_GAME_DIR").ok_or("no EXE given and TS2_GAME_DIR is not set")?;
             Path::new(&dir).join("toy2.exe")
         }
     };
@@ -76,8 +75,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     match command.as_str() {
         "info" => info(&image),
         "analyze" => {
-            let analysis =
-                analysis::analyze(&image).ok_or("no executable section at the entry point")?;
+            let analysis = analysis::analyze(&image).ok_or("no executable section at the entry point")?;
             report(&analysis);
             if let Some(path) = json {
                 let text = serde_json::to_string_pretty(&analysis).map_err(|e| e.to_string())?;
@@ -85,8 +83,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     fs::create_dir_all(parent)
                         .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
                 }
-                fs::write(&path, text)
-                    .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+                fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
                 println!("\nfull analysis written to {}", path.display());
             }
         }
@@ -98,10 +95,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 fn info(image: &Image) {
     println!("base      {:#010x}", image.base);
     println!("entry     {:#010x}", image.entry);
-    println!(
-        "linker    {}.{}",
-        image.linker_version.0, image.linker_version.1
-    );
+    println!("linker    {}.{}", image.linker_version.0, image.linker_version.1);
     println!("timestamp {:#010x}", image.timestamp);
     println!("relocs    {}", image.relocs.len());
     println!("\nsections");
@@ -136,10 +130,7 @@ fn percent(part: u32, whole: u32) -> f64 {
 
 fn report(a: &Analysis) {
     let b = &a.bytes;
-    println!(
-        "\ncode section {:#010x}, {} bytes",
-        a.code_start, a.code_len
-    );
+    println!("\ncode section {:#010x}, {} bytes", a.code_start, a.code_len);
     for (label, count) in [
         ("instructions", b.code),
         ("jump tables", b.jump_tables),
@@ -168,10 +159,7 @@ fn report(a: &Analysis) {
         "jump tables             {} ({} entries)",
         a.jump_tables, a.jump_table_entries
     );
-    println!(
-        "unresolved indirect jmp {}",
-        a.unresolved_indirect_jumps.len()
-    );
+    println!("unresolved indirect jmp {}", a.unresolved_indirect_jumps.len());
     let certain = a.conflicts.iter().filter(|c| !c.speculative).count();
     println!(
         "conflicts               {} ({certain} on certain paths)",

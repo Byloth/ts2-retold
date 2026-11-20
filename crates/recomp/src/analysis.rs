@@ -189,12 +189,21 @@ impl<'a> Discovery<'a> {
 
     /// Reads the jump table used by `jmp [index*4 + table]`.
     ///
+    /// Leading slots without a relocation are skipped (tables indexed from 1).
     /// The table ends where relocations stop, where an entry leaves the code
     /// section, or where known code begins. Two tables laid out back to back
     /// are read as one: an over-approximation of the successors, never a miss.
     fn read_jump_table(&mut self, table: u32) -> Vec<u32> {
         let mut targets = Vec::new();
         let mut slot = table;
+        // Hand-written runtime code indexes some tables from 1 or higher, so
+        // the nominal base lies before the first real entry.
+        for _ in 0..8 {
+            if self.image.is_reloc(slot) {
+                break;
+            }
+            slot += 4;
+        }
         while self.in_text(slot)
             && self.in_text(slot + 3)
             && self.image.is_reloc(slot)
@@ -214,12 +223,7 @@ impl<'a> Discovery<'a> {
     }
 
     /// Classifies the relocated operands of an instruction and its control flow.
-    fn examine(
-        &mut self,
-        instruction: &Instruction,
-        decoder: &Decoder<'_>,
-        confidence: Confidence,
-    ) -> Flow {
+    fn examine(&mut self, instruction: &Instruction, decoder: &Decoder<'_>, confidence: Confidence) -> Flow {
         let ip = instruction.ip() as u32;
         let next = instruction.next_ip() as u32;
         let offsets = decoder.get_constant_offsets(instruction);
@@ -368,6 +372,10 @@ impl<'a> Discovery<'a> {
                 self.conflict(ip, ConflictKind::Invalid, confidence);
                 return;
             };
+            if is_unexpected(&instruction) {
+                self.conflict(ip, ConflictKind::Unexpected, confidence);
+                return;
+            }
             let at = self.index(ip);
             let len = instruction.len();
             if self.kind[at..at + len].iter().any(|&k| k != UNKNOWN) {
@@ -429,10 +437,7 @@ impl<'a> Discovery<'a> {
     fn classify_gaps(&mut self) {
         let is_filler = |b: u8| b == 0x90 || b == 0xCC;
         for gap in self.runs(UNKNOWN) {
-            let (mut lo, mut hi) = (
-                self.index(gap.start),
-                self.index(gap.start) + gap.len as usize,
-            );
+            let (mut lo, mut hi) = (self.index(gap.start), self.index(gap.start) + gap.len as usize);
             while lo < hi && is_filler(self.text.data[lo]) {
                 self.kind[lo] = PADDING;
                 lo += 1;
@@ -441,12 +446,22 @@ impl<'a> Discovery<'a> {
                 hi -= 1;
                 self.kind[hi] = PADDING;
             }
-            // From the first data reference onwards the gap is data.
+            // From the first data reference the gap is data, up to filler that
+            // ends on a 16-byte boundary: what follows may be a function.
             let first = self.text.va + lo as u32;
             let last = self.text.va + hi as u32;
             if let Some(&data) = self.data_refs.range(first..last).next() {
                 let from = self.index(data);
-                self.kind[from..hi].fill(DATA);
+                let boundary = |at: usize| (self.text.va as usize + at).is_multiple_of(16);
+                let end = (from + 1..hi)
+                    .find(|&at| boundary(at) && is_filler(self.text.data[at - 1]))
+                    .unwrap_or(hi);
+                let mut data_end = end;
+                while data_end > from + 1 && end < hi && is_filler(self.text.data[data_end - 1]) {
+                    data_end -= 1;
+                }
+                self.kind[from..data_end].fill(DATA);
+                self.kind[data_end..end].fill(PADDING);
             }
         }
     }
@@ -455,6 +470,14 @@ impl<'a> Discovery<'a> {
     fn plausible_code(&self, gap: &Gap) -> bool {
         let end = gap.start + gap.len;
         let mut ip = gap.start;
+        // Compiled functions are aligned to 16 bytes. Hand-written runtime
+        // routines are not, but they directly follow other code. Anything
+        // else that merely happens to decode is data.
+        let follows_code = gap.start > self.text.va
+            && matches!(self.kind[self.index(gap.start) - 1], INSN_START | INSN_TAIL);
+        if !gap.start.is_multiple_of(16) && !follows_code {
+            return false;
+        }
         let lands_on_code = |target: u32| {
             self.in_text(target) && matches!(self.kind[self.index(target)], INSN_START | UNKNOWN)
         };
@@ -466,7 +489,7 @@ impl<'a> Discovery<'a> {
             let Some((instruction, _)) = self.decode(ip) else {
                 return false;
             };
-            if instruction.next_ip() as u32 > end {
+            if instruction.next_ip() as u32 > end || is_unexpected(&instruction) {
                 return false;
             }
             match instruction.flow_control() {
@@ -560,6 +583,57 @@ impl<'a> Discovery<'a> {
     fn is_code(&self, va: u32) -> bool {
         self.in_text(va) && self.kind[self.index(va)] == INSN_START
     }
+}
+
+/// Instructions that a 32-bit Windows program built by this compiler never
+/// executes. Meeting one means the bytes are data, not code.
+fn is_unexpected(instruction: &Instruction) -> bool {
+    use Mnemonic::*;
+    matches!(
+        instruction.mnemonic(),
+        Iret | Iretd
+            | Retf
+            | In
+            | Out
+            | Insb
+            | Insw
+            | Insd
+            | Outsb
+            | Outsw
+            | Outsd
+            | Hlt
+            | Cli
+            | Sti
+            | Aaa
+            | Aas
+            | Aam
+            | Aad
+            | Daa
+            | Das
+            | Into
+            | Bound
+            | Arpl
+            | Lds
+            | Les
+            | Lfs
+            | Lgs
+            | Lss
+            | Int
+            | Int1
+            | Salc
+            | Lahf
+            | Enter
+            | Loop
+            | Loope
+            | Loopne
+            | Jecxz
+            | Jcxz
+    ) || matches!(
+        instruction.segment_prefix(),
+        Register::ES | Register::CS | Register::SS | Register::DS | Register::GS
+    ) || (0..instruction.op_count()).any(|i| {
+        instruction.op_kind(i) == OpKind::Register && instruction.op_register(i).is_segment_register()
+    })
 }
 
 /// Analyses the code section of `image`.
@@ -694,11 +768,8 @@ pub fn analyze(image: &Image) -> Option<Analysis> {
         .imports
         .iter()
         .map(|import| {
-            let [call_sites, jump_sites, other_refs] = d
-                .import_uses
-                .get(&import.iat_va)
-                .copied()
-                .unwrap_or_default();
+            let [call_sites, jump_sites, other_refs] =
+                d.import_uses.get(&import.iat_va).copied().unwrap_or_default();
             ImportUse {
                 dll: import.dll.clone(),
                 name: import.name.to_string(),
@@ -756,11 +827,7 @@ mod tests {
     }
 
     fn entries(analysis: &Analysis) -> Vec<(u32, EntryKind)> {
-        analysis
-            .functions
-            .iter()
-            .map(|f| (f.entry, f.kind))
-            .collect()
+        analysis.functions.iter().map(|f| (f.entry, f.kind)).collect()
     }
 
     #[test]
@@ -821,33 +888,61 @@ mod tests {
         let analysis = analyze(&image(&code, &[BASE + 1, BASE + 7])).unwrap();
         assert_eq!(
             entries(&analysis),
-            [
-                (BASE, EntryKind::Entry),
-                (BASE + 0x10, EntryKind::AddressTaken)
-            ]
+            [(BASE, EntryKind::Entry), (BASE + 0x10, EntryKind::AddressTaken)]
         );
         assert_eq!(analysis.bytes.data, 4);
         assert_eq!(analysis.bytes.unknown, 0);
     }
 
     #[test]
-    fn adopts_unreferenced_code_but_not_garbage() {
+    fn function_after_a_data_table_is_still_found() {
         #[rustfmt::skip]
-        let code = [
-            0xC3,                         // 1000: ret
-            0x90, 0x90, 0x90,             // 1001: padding
-            0x31, 0xC0, 0xC3,             // 1004: orphan: xor eax, eax; ret
-            0x90,                         // 1007: padding
-            0x0F, 0x0B, 0xFF, 0xFF,       // 1008: garbage (ud2, invalid)
+        let mut code = vec![
+            0x8A, 0x80, 0x08, 0x10, 0x40, 0x00,       // 1000: mov al, [eax + 0x401008]
+            0xC3,                                     // 1006: ret
+            0x90,                                     // 1007: padding
+            0x00, 0x01, 0x02, 0x03,                   // 1008: byte table
+            0x90, 0x90, 0x90, 0x90,                   // 100C: padding to the boundary
         ];
+        code.extend([0x31, 0xC0, 0xC3]); // 1010: unreferenced function
+        let analysis = analyze(&image(&code, &[BASE + 2])).unwrap();
+        assert_eq!(
+            entries(&analysis),
+            [(BASE, EntryKind::Entry), (BASE + 0x10, EntryKind::Orphan)]
+        );
+        assert_eq!(analysis.bytes.data, 4);
+        assert_eq!(analysis.bytes.unknown, 0);
+    }
+
+    #[test]
+    fn adopts_aligned_unreferenced_code_only() {
+        let mut code = vec![0xC3]; // 1000: ret
+        code.extend([0x90; 15]); // 1001: padding up to the next 16-byte boundary
+        code.extend([0x31, 0xC0, 0xC3]); // 1010: orphan: xor eax, eax; ret
+        code.push(0x90); // 1013: padding
+        code.extend([0x40, 0xC3]); // 1014: decodes (inc eax; ret) but is unaligned
         let analysis = analyze(&image(&code, &[])).unwrap();
         assert_eq!(
             entries(&analysis),
-            [(BASE, EntryKind::Entry), (BASE + 4, EntryKind::Orphan)]
+            [(BASE, EntryKind::Entry), (BASE + 0x10, EntryKind::Orphan)]
         );
-        assert_eq!(analysis.bytes.unknown, 4);
+        assert_eq!(analysis.bytes.unknown, 2);
         assert_eq!(analysis.unknown_gaps.len(), 1);
-        assert_eq!(analysis.unknown_gaps[0].start, BASE + 8);
+        assert_eq!(analysis.unknown_gaps[0].start, BASE + 0x14);
+    }
+
+    #[test]
+    fn jump_table_indexed_from_one() {
+        #[rustfmt::skip]
+        let code = [
+            0xFF, 0x24, 0x85, 0x08, 0x10, 0x40, 0x00, // 1000: jmp [eax*4 + 0x401008]
+            0x90,                                     // 1007
+            0x40, 0xC3, 0x90, 0x90,                   // 1008: nominal base: code, no relocation
+            0x08, 0x10, 0x40, 0x00,                   // 100C: table[1] = 1008
+        ];
+        let analysis = analyze(&image(&code, &[BASE + 3, BASE + 0xC])).unwrap();
+        assert_eq!(analysis.jump_table_entries, 1);
+        assert_eq!(analysis.bytes.unknown, 0);
     }
 
     #[test]

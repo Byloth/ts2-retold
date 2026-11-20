@@ -23,10 +23,7 @@ pub const KNOWN_BUILDS: &[Build] = &[Build {
 }];
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub fn identify(executable: &[u8]) -> Option<&'static Build> {
