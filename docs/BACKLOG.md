@@ -99,6 +99,14 @@ out of here into the roadmap or an ADR when work on them starts.
 - **The other languages**: French, Spanish, Dutch, Swedish, Norwegian and
   Finnish are at hand as disc images; German, Danish and Portuguese have
   not been found (ADR 0003).
+- **German from the Dreamcast release.** No German PC disc has been found,
+  but the German Dreamcast disc (seen 2026-11-20, not kept) is the same
+  game by the same engine and holds: the German texts in its executable,
+  in the PC's own markup; 23 movies as MPEG-1 system streams (`.SFD`:
+  video our decoder reads, audio in CRI's ADX); speech in console sound
+  banks (`.KAT`, `.VB`/`.VH`). Using it means an ADX decoder, decoders for
+  the sound banks, and matching its texts and files to the PC's. The same
+  may hold for other console releases.
 - **A settings file** for the screen mode and the project's own settings
   (ADR 0016).
 - Reference screenshots of the original game, once the port draws.

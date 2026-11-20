@@ -18,8 +18,12 @@ and the energy display on top. Run to 1260 million instructions it has
 shown 4313 frames, the last 141 of the demo at about 4,500 triangles each
 (37 draw states in all).
 
-Known to be wrong in the picture: magenta patches on Buzz, and a white
-vertical streak above him. Nothing has been compared with the original yet.
+The pictures look right as far as can be told without the original beside
+them: the room, Buzz, an enemy robot, the lives, coins and battery
+displays. (What was first taken for wrong colours on Buzz was that robot
+standing against him.) Nothing has been compared with the original yet;
+two things to check when it is: a bright vertical line at the edge of the
+open door, and a black area beside it in some frames.
 
 Before that it shows the trademark and rating screens with their fades,
 plays its introduction movies through DirectShow (ADR 0015) and draws the
@@ -140,7 +144,7 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-The wrong pixels in the demo, and a comparison with the original. Then
-input, to press "jump" at the title and play; sound output with the Layer II
+A comparison of the demo with the original, when the owner can supply
+pictures of it. Then input, to press "jump" at the title and play; sound output with the Layer II
 audio decoder (movies are silent, like all sound so far); and a window to
 present in.
