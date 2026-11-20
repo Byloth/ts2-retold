@@ -1,0 +1,14 @@
+[package]
+name = "andy-gpu"
+version = "0.0.0"
+description = "The video backend on the GPU: surfaces as textures and triangles through wgpu, for native targets and WebGPU"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+andy-runtime = { path = "../runtime" }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "1"
+wgpu = "30"

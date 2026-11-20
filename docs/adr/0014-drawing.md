@@ -32,9 +32,7 @@ transformation came with DirectX 7.
    transformed itself are put back into clip space: the viewport maps the
    clip square onto its rectangle, `w` is `1 / rhw`, and half a pixel is
    added because a Direct3D screen coordinate names a pixel's centre while
-   the viewport maps to pixel edges. With `TEXTUREPERSPECTIVE` off, `w` is 1
-   and interpolation is linear on the screen, as on a rasteriser without
-   perspective correction.
+   the viewport maps to pixel edges.
 4. **Strips and fans are turned into lists in the runtime**, keeping each
    triangle's winding and its first vertex (which gives a flat-shaded
    triangle its colour). The backend sees one topology.
@@ -52,6 +50,19 @@ transformation came with DirectX 7.
 7. **`Headless` does not rasterise.** It fills, copies and presents
    surfaces, counts triangles and keeps the last batch. Tests of the layers
    above the backend use it; pictures need the GPU backend.
+
+## The adapter's own behaviour
+
+- **Perspective correction is always on.** `TEXTUREPERSPECTIVE` starts off
+  under DirectX 6 and the game never sets it, yet on the accelerators of
+  the time its textures were corrected, because those cards corrected
+  whatever the state said. The adapter of ADR 0012 does the same: the state
+  is stored and not looked at. (That it starts off is from the DirectX
+  documentation as remembered: `UNVERIFIED`.)
+- **Specular highlights start off** on an `IDirect3DDevice3`, and a device
+  starts as if `TEXTUREMAPBLEND` had been set to "modulate": both from
+  Wine's DirectDraw. The game's first quad carries an uninitialised
+  specular colour in one vertex, which shows at once if this is wrong.
 
 ## Known differences from a card of 1999
 

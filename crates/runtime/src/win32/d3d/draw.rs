@@ -39,7 +39,6 @@ pub(super) mod render_state {
     pub const TEXTUREHANDLE: usize = 1;
     pub const ANTIALIAS: usize = 2;
     pub const TEXTUREADDRESS: usize = 3;
-    pub const TEXTUREPERSPECTIVE: usize = 4;
     pub const WRAPU: usize = 5;
     pub const WRAPV: usize = 6;
     pub const ZENABLE: usize = 7;
@@ -313,10 +312,11 @@ fn layout(format: u32) -> Option<Layout> {
 ///
 /// A screen position (x, y) names the centre of a pixel, and the viewport
 /// maps the clip-space square onto pixel edges, hence the half pixel. `rhw`
-/// is one over the clip-space w; without perspective correction every w is
-/// one and everything is interpolated linearly on the screen. An `rhw` that
-/// is not a positive number is taken as one (UNVERIFIED on hardware).
-fn transformed_vertices(bytes: &[u8], layout: &Layout, viewport: Rect, perspective: bool) -> Vec<Vertex> {
+/// is one over the clip-space w, which corrects textures and colours for
+/// perspective. The adapter always corrects, as the cards of the time did:
+/// `TEXTUREPERSPECTIVE` is not looked at (ADR 0014). An `rhw` that is not
+/// a positive number is taken as one (UNVERIFIED on hardware).
+fn transformed_vertices(bytes: &[u8], layout: &Layout, viewport: Rect) -> Vec<Vertex> {
     let float =
         |vertex: &[u8], at: usize| f32::from_le_bytes(vertex[at..at + 4].try_into().expect("four bytes"));
     let word =
@@ -325,7 +325,7 @@ fn transformed_vertices(bytes: &[u8], layout: &Layout, viewport: Rect, perspecti
         .chunks_exact(layout.size as usize)
         .map(|vertex| {
             let (x, y, z, rhw) = (float(vertex, 0), float(vertex, 4), float(vertex, 8), float(vertex, 12));
-            let w = if perspective && rhw.is_finite() && rhw > 0.0 { 1.0 / rhw } else { 1.0 };
+            let w = if rhw.is_finite() && rhw > 0.0 { 1.0 / rhw } else { 1.0 };
             let across = (x + 0.5 - viewport.x as f32) / viewport.width as f32 * 2.0 - 1.0;
             let up = 1.0 - (y + 0.5 - viewport.y as f32) / viewport.height as f32 * 2.0;
             Vertex {
@@ -406,34 +406,48 @@ fn draw(m: &mut Machine, this: u32, primitive: Primitive, indices: Option<Vec<u1
         return unsupported("a viewport without dimensions".into());
     };
     let mut state = draw_state(device)?;
-    let perspective = device.render_states[render_state::TEXTUREPERSPECTIVE] != 0;
     let color_key = device.render_states[render_state::COLORKEYENABLE] != 0;
     let (target, depth, texture) = (device.target, device.depth, device.textures[0]);
     let stage = device.stage_states[0];
 
     if let Some(texture) = texture {
+        let (magnify, minify) = (
+            filter(stage[stage_state::MAGFILTER], "magnification filter")?,
+            filter(stage[stage_state::MINFILTER], "minification filter")?,
+        );
+        let color_key = match m.surface_color_key(texture).filter(|_| color_key) {
+            None => None,
+            Some((low, high)) if low != high => {
+                return unsupported(format!("a colour key range {low:#x}..{high:#x}"));
+            }
+            Some(_) if (magnify, minify) != (Filter::Nearest, Filter::Nearest) => {
+                return unsupported("a colour key on a filtered texture".into());
+            }
+            Some((key, _)) => Some(key),
+        };
         state.texture = Some(Sampling {
             surface: m.ensure_video(texture),
-            magnify: filter(stage[stage_state::MAGFILTER], "magnification filter")?,
-            minify: filter(stage[stage_state::MINFILTER], "minification filter")?,
+            magnify,
+            minify,
             // Textures have one level, so the filter between levels has
             // nothing to choose from.
             address_u: address(stage[stage_state::ADDRESSU])?,
             address_v: address(stage[stage_state::ADDRESSV])?,
-            color_key: m.surface_color_key(texture).filter(|_| color_key),
+            color_key,
         });
     }
-    let vertices = transformed_vertices(&bytes, &layout, viewport, perspective);
+    let vertices = transformed_vertices(&bytes, &layout, viewport);
     m.note(|| format!("{} triangles, {state:?}", indices.len() / 3));
     if indices.is_empty() {
         return Ok(DD_OK);
     }
     let draw = Draw {
         target: m.draw_on_video(target),
-        depth: match (state.depth, depth) {
-            (Some(_), Some(depth)) => Some(m.draw_on_video(depth)),
-            _ => None,
-        },
+        // The depth surface changes only if depth is written.
+        depth: depth.map(|depth| match state.depth {
+            Some(DepthState { write: true, .. }) => m.draw_on_video(depth),
+            _ => m.ensure_video(depth),
+        }),
         viewport,
         state,
         vertices: &vertices,
@@ -500,26 +514,19 @@ mod tests {
         }
         let viewport = Rect::whole(640, 480);
         // The pixel centre in the middle of the screen is the middle of clip space.
-        let [vertex] = transformed_vertices(&bytes, &layout, viewport, true)[..] else {
-            panic!("one vertex")
-        };
+        let [vertex] = transformed_vertices(&bytes, &layout, viewport)[..] else { panic!("one vertex") };
         assert_eq!(vertex.position, [0.0, 0.0, 0.5, 2.0]);
         assert_eq!((vertex.diffuse, vertex.specular, vertex.uv), (0x8040_2010, 0xFF00_0001, [0.75, 0.125]));
-        // Without perspective correction w is one.
-        let [vertex] = transformed_vertices(&bytes, &layout, viewport, false)[..] else {
-            panic!("one vertex")
-        };
-        assert_eq!(vertex.position, [0.0, 0.0, 0.25, 1.0]);
-        // The top-left pixel's centre is half a pixel inside the corner.
+        // An rhw of zero is taken as one. The top-left pixel's centre is
+        // half a pixel inside the corner.
         bytes[..8].fill(0);
-        let [vertex] = transformed_vertices(&bytes, &layout, viewport, false)[..] else {
-            panic!("one vertex")
-        };
-        assert_eq!(vertex.position[..2], [-1.0 + 1.0 / 640.0, 1.0 - 1.0 / 480.0]);
+        bytes[12..16].fill(0);
+        let [vertex] = transformed_vertices(&bytes, &layout, viewport)[..] else { panic!("one vertex") };
+        assert_eq!(vertex.position, [-1.0 + 1.0 / 640.0, 1.0 - 1.0 / 480.0, 0.25, 1.0]);
 
         // A format with only a position gets white, no specular, no texture.
         let layout = super::layout(0x004).unwrap();
-        let [vertex] = transformed_vertices(&bytes[..16], &layout, viewport, false)[..] else {
+        let [vertex] = transformed_vertices(&bytes[..16], &layout, viewport)[..] else {
             panic!("one vertex")
         };
         assert_eq!((vertex.diffuse, vertex.specular, vertex.uv), (0xFFFF_FFFF, 0, [0.0, 0.0]));

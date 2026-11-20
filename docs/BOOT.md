@@ -18,6 +18,13 @@ triangles, one draw state), released DirectSound and now wants a DirectShow
 multimedia stream to play its introduction movie.
 
 With the `Headless` backend triangles are counted, not drawn (ADR 0014).
+With `--gpu` they are drawn by the GPU backend (`crates/gpu`), and
+`--frames out/frames --frame-step 10` writes what the game shows as PNG
+files. Seen so far, on a software Vulkan driver: the trademark screen
+fading in from black (frames 1 to 21), held, fading out (571 to 591); the
+ESRB rating screen fading in (to 611), held, and out (1171 to 1181).
+The fade is the full-screen quad: black, alpha-blended, its alpha changing
+from frame to frame.
 
 `andy boot --surfaces out/surfaces` writes every DirectDraw surface as a PNG
 at the stop: the back buffer shows the trademark screen and the textures
@@ -123,7 +130,6 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-The GPU backend (ADR 0012) behind the draw call of ADR 0014, with
-off-screen rendering for tests. Then the movie (a decision: this copy has
-only `data\FMV\fmv.bin`), and Direct3D's own transformation and lighting,
-which the game needs for its untransformed vertex buffer and four lights.
+The movie (a decision: this copy has only `data\FMV\fmv.bin`), then
+Direct3D's own transformation and lighting, which the game needs for its
+untransformed vertex buffer and four lights, and a window to present in.

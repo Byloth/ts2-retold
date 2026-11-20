@@ -1,5 +1,7 @@
 //! Command-line front end of the recompiler.
 
+mod capture;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::{env, fs};
@@ -20,6 +22,7 @@ USAGE:
     andy analyze [EXE] [--json OUT] Discover code and functions
     andy boot    [EXE] [--trace] [--limit N] [--args TEXT]
                  [--stop-at ADDR] [--dump ADDR:LEN]... [--surfaces DIR]
+                 [--gpu] [--frames DIR [--frame-step N]]
                                     Run the game in the interpreter until it
                                     stops, and report how far it got. --args
                                     is the game's own command line: -log
@@ -27,7 +30,11 @@ USAGE:
                                     --stop-at halts before an instruction;
                                     --dump prints guest memory at the end;
                                     --surfaces writes every DirectDraw
-                                    surface as a PNG file into DIR
+                                    surface as a PNG file into DIR; --gpu
+                                    draws on the graphics adapter (without
+                                    it triangles are counted, not drawn);
+                                    --frames writes every Nth frame the
+                                    game shows as a PNG file into DIR
                                     --with/--without ID switch a modification
     andy mods                       List the modifications (docs/MODIFICATIONS.md)
     andy difftest [EXE] --out FILE [--rounds N]
@@ -57,6 +64,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut stop_at = None;
     let mut dumps = Vec::new();
     let mut surfaces = None;
+    let mut gpu = false;
+    let mut frames = None;
+    let mut frame_step = 1u64;
     let mut game_args = String::new();
     let mut limit = 2_000_000_000u64;
     let mut args = args.into_iter();
@@ -81,6 +91,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let text = args.next().ok_or("--dump needs ADDR:LEN")?;
                 let range = text.split_once(':').and_then(|(a, l)| Some((parse_hex(a)?, parse_hex(l)?)));
                 dumps.push(range.ok_or("--dump needs ADDR:LEN in hexadecimal")?);
+            }
+            "--gpu" => gpu = true,
+            "--frames" => frames = Some(PathBuf::from(args.next().ok_or("--frames needs a directory")?)),
+            "--frame-step" => {
+                frame_step = args.next().and_then(|n| n.parse().ok()).ok_or("--frame-step needs a number")?;
             }
             "--surfaces" => {
                 surfaces = Some(PathBuf::from(args.next().ok_or("--surfaces needs a directory")?));
@@ -152,6 +167,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 stop_at,
                 dumps,
                 surfaces,
+                gpu,
+                frames: frames.map(|directory| (directory, frame_step)),
             },
         ),
         "difftest" => {
@@ -186,6 +203,9 @@ struct BootOptions {
     stop_at: Option<u32>,
     dumps: Vec<(u32, u32)>,
     surfaces: Option<PathBuf>,
+    gpu: bool,
+    /// Where to write presented frames, and every how many.
+    frames: Option<(PathBuf, u64)>,
 }
 
 fn list_modifications() {
@@ -206,7 +226,8 @@ fn parse_hex(text: &str) -> Option<u32> {
 }
 
 fn boot(image: &Image, options: BootOptions) {
-    let BootOptions { mods, game_dir, trace, limit, game_args, stop_at, dumps, surfaces } = options;
+    let BootOptions { mods, game_dir, trace, limit, game_args, stop_at, dumps, surfaces, gpu, frames } =
+        options;
     // The program reads the game directory and writes only to `out/run`.
     let write_dir = PathBuf::from("out/run");
     let log_path = write_dir.join("toy2.log");
@@ -217,6 +238,28 @@ fn boot(image: &Image, options: BootOptions) {
     os.mods = mods;
     let mut machine = Machine::load(image, os);
     machine.breakpoint = stop_at;
+    if gpu {
+        match andy_gpu::Gpu::new() {
+            Ok(gpu) => {
+                println!("graphics adapter       {}", gpu.adapter_name());
+                machine.video = Box::new(gpu);
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                return;
+            }
+        }
+    }
+    if let Some((directory, step)) = frames {
+        let inner = std::mem::replace(&mut machine.video, Box::new(andy_runtime::video::Headless::default()));
+        match capture::Capture::new(inner, directory.clone(), step) {
+            Ok(capture) => machine.video = Box::new(capture),
+            Err(error) => {
+                eprintln!("{}: {error}", directory.display());
+                return;
+            }
+        }
+    }
     if trace {
         machine.trace = Some(Vec::new());
     }
@@ -274,6 +317,21 @@ fn boot(image: &Image, options: BootOptions) {
             println!("  {:>8} batches {:>8} triangles  {state:?}", used.draws, used.triangles);
         }
     }
+    let mut backend = machine.video.as_ref();
+    if let Some(capture) = backend.as_any().downcast_ref::<capture::Capture>() {
+        match &capture.error {
+            Some(error) => println!("frames written         {}, then failed: {error}", capture.written),
+            None => println!("frames written         {}", capture.written),
+        }
+        backend = capture.inner();
+    }
+    if let Some(gpu) = backend.as_any().downcast_ref::<andy_gpu::Gpu>() {
+        let statistics = gpu.statistics;
+        println!(
+            "on the graphics adapter {} triangles in {} batches, {} render passes",
+            statistics.triangles, statistics.batches, statistics.passes
+        );
+    }
     let missing = machine.os.files.log.iter().filter(|(_, found)| !found).count();
     println!("files opened           {} ({missing} not found)", machine.os.files.log.len());
     if let Ok(log) = fs::read_to_string(&log_path) {
@@ -320,11 +378,7 @@ fn write_surfaces(machine: &mut Machine, directory: &Path) -> Result<usize, Box<
             "surface-{:03}-{}x{}-{:?}-caps{:08x}.png",
             image.index, image.width, image.height, image.format, image.caps
         );
-        let file = std::io::BufWriter::new(fs::File::create(directory.join(name))?);
-        let mut encoder = png::Encoder::new(file, image.width, image.height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header()?.write_image_data(&image.rgba)?;
+        capture::write_png(&directory.join(name), image.width, image.height, &image.rgba)?;
     }
     Ok(images.len())
 }

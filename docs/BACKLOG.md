@@ -38,6 +38,16 @@ out of here into the roadmap or an ADR when work on them starts.
 - **GDI cannot draw on a DirectDraw surface.** `GetDC` gives a context that
   serves as the model for a compatible one (all the game does with it);
   drawing through it stops the machine.
+- **Reading a surface back from the GPU blocks** (`Video::download`). A
+  browser cannot block on it: the web target needs a way to suspend the
+  machine there (JavaScript Promise Integration, or never needing the
+  transfer). So far the game has caused no transfer back at all.
+- **The GPU backend presents nowhere.** It renders off screen; `present`
+  only records which surface is shown. A window (native) and a canvas
+  (browser) are still to come.
+- **One render pass per frame is not yet reached when the frame mixes
+  copies and triangles**: a fill or copy between two batches ends the pass.
+  Fills and copies could join the pass as commands.
 - **Render targets are 8 bits per channel on the GPU** whatever the
   surface's format (ADR 0014); the original's 16-bit banding and dithering
   are not reproduced. A faithful path would quantise and dither in the
@@ -73,10 +83,8 @@ out of here into the roadmap or an ADR when work on them starts.
 - Reference screenshots of the original game, once the port draws.
 - Which font Windows picks for the face name "ariel" (the game's spelling;
   no such font exists). The runtime answers with its Arial substitute.
-- Direct3D 6 default render states written from recollection:
-  `TEXTUREPERSPECTIVE` off and `SPECULARENABLE` on
-  (`crates/runtime/src/win32/d3d/device.rs`). To check against the DirectX 6
-  documentation.
+- That `TEXTUREPERSPECTIVE` starts off under DirectX 6 (it changes nothing
+  here: the adapter always corrects perspective, ADR 0014).
 - What a texture stage without a texture reads as (white here), and what
   an `rhw` of zero or less does (taken as 1 here): ADR 0014.
 - `IDirectDrawSurface4::Unlock` on a surface whose lock is held by `GetDC`

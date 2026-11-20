@@ -16,6 +16,9 @@ ADR 0014.
 for the Windows API and DirectX (ADR 0011, ADR 0012); how far the game boots is
 in `docs/BOOT.md`. DirectX layouts are checked against the headers in the
 git-ignored `ref/dx` (see `docs/LICENSES.md`), never copied from them.
+`crates/gpu` (`andy-gpu`): the video backend on the GPU (`wgpu`), behind the
+runtime's `Video` interface; its tests need a graphics adapter, a software
+Vulkan driver (lavapipe) will do.
 `crates/recomp` (`andy-recomp`): PE loader, code discovery, test generation.
 `crates/cpu` (`andy-cpu`): instruction semantics written once over a backend
 trait, plus the interpreter backend (ADR 0009) and the x87 model (ADR 0010).
@@ -113,6 +116,8 @@ cargo run --release --bin andy -- difftest --out out/difftest.jsonl --rounds 40
 # --args "-log" turns on the game's own log, printed at the end.
 # Always give --limit: a looping game otherwise runs for 2 billion instructions.
 cargo run --release --bin andy -- boot --trace --limit 400000000 --args "-log"
+# The same on the graphics adapter, writing every tenth frame shown
+cargo run --release --bin andy -- boot --limit 600000000 --gpu --frames out/frames --frame-step 10
 ```
 
 `.venv` is created with `python3 -m venv .venv && .venv/bin/pip install unicorn==2.1.4`.

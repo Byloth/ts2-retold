@@ -47,7 +47,9 @@ pub(super) const STAGE_STATES: usize = 32;
 const D3DERR_SCENE_IN_SCENE: u32 = ddraw::dd_error(760);
 const D3DERR_SCENE_NOT_IN_SCENE: u32 = ddraw::dd_error(761);
 
-/// Render states as a device starts with them under DirectX 6.
+/// Render states as an `IDirect3DDevice3` starts with them. Specular
+/// highlights start off: Wine's DirectDraw, tested against Windows, turns
+/// them on at creation only for the DirectX 5 device interface.
 fn default_render_states(has_depth: bool) -> [u32; 256] {
     let mut states = [0; 256];
     for (state, value) in [
@@ -65,7 +67,6 @@ fn default_render_states(has_depth: bool) -> [u32; 256] {
         (22, 3),                // CULLMODE: counter-clockwise
         (23, 4),                // ZFUNC: less or equal
         (25, 8),                // ALPHAFUNC: always
-        (29, 1),                // SPECULARENABLE
         (37, 1.0f32.to_bits()), // FOGTABLEEND
         (38, 1.0f32.to_bits()), // FOGTABLEDENSITY
         (3, 1),                 // TEXTUREADDRESS: wrap
@@ -158,7 +159,9 @@ pub(super) fn create_device(m: &mut Machine, a: &[u32]) -> HostResult {
         current_viewport: None,
         in_scene: false,
         render_states: default_render_states(depth.is_some()),
-        legacy_blending: false,
+        // A device older than DirectX 7 starts as if `TEXTUREMAPBLEND` had
+        // just been set to "modulate".
+        legacy_blending: true,
         light_states: default_light_states(),
         textures: [None; STAGES],
         stage_states: default_stage_states(),

@@ -290,9 +290,9 @@ pub struct Sampling {
     pub minify: Filter,
     pub address_u: Address,
     pub address_v: Address,
-    /// Raw pixel values of the texture, from the first to the second
-    /// inclusive, that are not drawn at all.
-    pub color_key: Option<(u32, u32)>,
+    /// The raw pixel value of the texture that is not drawn at all. Only
+    /// with nearest filtering.
+    pub color_key: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -330,7 +330,8 @@ pub struct DrawState {
 #[derive(Debug, Clone, Copy)]
 pub struct Draw<'a> {
     pub target: SurfaceId,
-    /// The depth surface, of the same size as the target.
+    /// The depth surface that goes with the target, of the same size. It is
+    /// read and written only as the state says.
     pub depth: Option<SurfaceId>,
     /// The part of the target the clip-space square maps to; nothing is
     /// drawn outside it.
