@@ -136,17 +136,41 @@ impl Memory {
         self.write(address.wrapping_add(4), 4, (value >> 32) as u32)
     }
 
-    /// Copies host bytes into guest memory without logging. Fails if unmapped.
+    /// Copies host bytes into guest memory without logging. Fails if any
+    /// byte is unmapped; bytes before the failure may have been written.
     pub fn load(&mut self, address: u32, bytes: &[u8]) -> Option<()> {
-        for (i, &byte) in bytes.iter().enumerate() {
-            self.write_u8_raw(address.wrapping_add(i as u32), byte)?;
+        let mut done = 0;
+        while done < bytes.len() {
+            // One page at a time: whole runs of bytes are copied at once.
+            let at = address.wrapping_add(done as u32);
+            let offset = at as usize & (PAGE_SIZE - 1);
+            let run = (PAGE_SIZE - offset).min(bytes.len() - done);
+            let page = self.page(at >> PAGE_BITS)?;
+            page[offset..offset + run].copy_from_slice(&bytes[done..done + run]);
+            done += run;
+        }
+        Some(())
+    }
+
+    /// Copies guest bytes into `out`. Fails if any byte is unmapped.
+    pub fn read_bytes(&mut self, address: u32, out: &mut [u8]) -> Option<()> {
+        let mut done = 0;
+        while done < out.len() {
+            let at = address.wrapping_add(done as u32);
+            let offset = at as usize & (PAGE_SIZE - 1);
+            let run = (PAGE_SIZE - offset).min(out.len() - done);
+            let page = self.page(at >> PAGE_BITS)?;
+            out[done..done + run].copy_from_slice(&page[offset..offset + run]);
+            done += run;
         }
         Some(())
     }
 
     /// Copies guest bytes out. Fails if any byte is unmapped.
     pub fn dump(&mut self, address: u32, len: u32) -> Option<Vec<u8>> {
-        (0..len).map(|i| self.read_u8(address.wrapping_add(i))).collect()
+        let mut bytes = vec![0; len as usize];
+        self.read_bytes(address, &mut bytes)?;
+        Some(bytes)
     }
 
     /// Reads a NUL-terminated string of at most `limit` bytes.
@@ -190,5 +214,19 @@ mod tests {
         memory.write(0x5000, 2, 0xBEEF).unwrap();
         memory.write_u64(0x6000, 1).unwrap();
         assert_eq!(memory.write_log.as_deref(), Some(&[(0x5000, 2), (0x6000, 4), (0x6004, 4)][..]));
+    }
+
+    #[test]
+    fn bulk_copies_cross_page_boundaries_and_stop_at_unmapped_memory() {
+        let mut memory = Memory::new(Unmapped::Fault);
+        memory.map(0x1000, 0x3000);
+        let data: Vec<u8> = (0..0x1F00u32).map(|i| (i * 7) as u8).collect();
+        assert_eq!(memory.load(0x1F80, &data), Some(()));
+        assert_eq!(memory.dump(0x1F80, data.len() as u32).as_deref(), Some(&data[..]));
+        assert_eq!(memory.read_u8(0x2000), Some(data[0x80]));
+        let mut out = [0u8; 4];
+        assert_eq!(memory.read_bytes(0x3FFE, &mut out), None);
+        assert_eq!(memory.load(0x3FFE, &[1, 2, 3, 4]), None);
+        assert_eq!(memory.dump(0x1000, 0), Some(Vec::new()));
     }
 }

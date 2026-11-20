@@ -17,6 +17,7 @@ pub mod game;
 pub mod mods;
 pub mod os;
 pub mod threads;
+pub mod video;
 pub mod win32;
 
 use andy_cpu::interp::{self, Cpu, Fault};
@@ -27,6 +28,7 @@ use iced_x86::Instruction;
 use crate::game::Replacement;
 use crate::os::Os;
 use crate::threads::{Pause, Threads};
+use crate::video::{Headless, Video};
 use crate::win32::Function;
 
 /// Host functions are reached through addresses in this unmapped range: the
@@ -115,6 +117,8 @@ pub struct Machine {
     pub cpu: Cpu,
     pub memory: Memory,
     pub os: Os,
+    /// What draws and shows the game's surfaces. Headless until replaced.
+    pub video: Box<dyn Video>,
     pub threads: Threads,
     host: Vec<HostEntry>,
     /// Addresses already given to host functions, by the function's identity.
@@ -168,6 +172,7 @@ impl Machine {
             cpu,
             memory,
             os,
+            video: Box::new(Headless::default()),
             threads: Threads::new(),
             host: Vec::new(),
             host_addresses: std::collections::HashMap::new(),
@@ -466,6 +471,20 @@ pub(crate) mod testing {
             let function = win32::lookup(dll, name).expect("host function exists");
             assert_eq!(function.args as usize, args.len(), "{name} argument count");
             (function.handler)(self, args).expect("host function does not stop the machine")
+        }
+
+        /// Calls method number `slot` of a COM object the runtime created.
+        pub fn method(&mut self, object: u32, slot: u32, args: &[u32]) -> u32 {
+            let table = self.memory.read(object, 4).expect("an interface pointer");
+            let stub = self.memory.read(table + 4 * slot, 4).expect("a method table");
+            let function: &'static Function = match &self.host[((stub - HOST_BASE) / 4) as usize] {
+                HostEntry::Function(function) => function,
+                HostEntry::Missing { .. } => panic!("slot {slot} is not a host function"),
+            };
+            let all: Vec<u32> = std::iter::once(object).chain(args.iter().copied()).collect();
+            assert_eq!(function.args as usize, all.len(), "{} argument count", function.name);
+            (function.handler)(self, &all)
+                .unwrap_or_else(|stop| panic!("{} stopped: {stop:?}", function.name))
         }
 
         /// Scratch memory for a test's structures.

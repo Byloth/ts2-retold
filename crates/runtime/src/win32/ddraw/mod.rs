@@ -4,6 +4,7 @@
 //! in [`caps`]. Layouts and constants follow the DirectX 6 headers.
 
 mod caps;
+pub mod surface;
 
 use super::com::{E_INVALIDARG, E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
 use super::d3d::{self, DIRECT_3D_2, DIRECT_3D_3, IID_IDIRECT3D2, IID_IDIRECT3D3};
@@ -56,6 +57,8 @@ pub mod surface_desc {
     pub const REFRESH_RATE: usize = 6;
     pub const SURFACE: usize = 9;
     /// `DDPIXELFORMAT`: size, flags, FourCC, bit count, red, green, blue and alpha masks.
+    /// `DDCOLORKEY` for copies from the surface: low and high value.
+    pub const SOURCE_BLIT_COLOR_KEY: usize = 16;
     pub const PIXEL_FORMAT: usize = 18;
     pub const CAPS: usize = 26;
 
@@ -89,6 +92,13 @@ pub struct State {
     pub(crate) device_strings: Option<d3d::DeviceStrings>,
     /// The desktop's display mode, while the program has changed it.
     desktop: Option<Display>,
+    pub(crate) surfaces: Vec<surface::Surface>,
+    /// Whole-surface transfers from memory to the video backend, and back.
+    /// The second kind is the expensive one.
+    pub uploads: u64,
+    pub downloads: u64,
+    /// Frames shown by flipping.
+    pub frames: u64,
 }
 
 /// The display modes the adapter offers, in the order Windows lists them.
@@ -478,7 +488,7 @@ interface! { static DIRECT_DRAW_4 = "IDirectDraw4";
     Compact(1),
     CreateClipper(4),
     CreatePalette(5),
-    CreateSurface(4),
+    CreateSurface(4) => surface::create_surface,
     DuplicateSurface(3),
     EnumDisplayModes(5) => |m, a| enum_display_modes(m, a, surface_desc::WORDS_V2),
     EnumSurfaces(5),

@@ -130,9 +130,18 @@ pub trait Video {
     /// Copies between surfaces of the same format, scaling to the target
     /// rectangle without filtering. Source pixels whose raw value is inside
     /// `color_key` (inclusive) are not copied.
-    fn copy(&mut self, source: SurfaceId, from: Rect, target: SurfaceId, to: Rect, color_key: Option<(u32, u32)>);
+    fn copy(
+        &mut self,
+        source: SurfaceId,
+        from: Rect,
+        target: SurfaceId,
+        to: Rect,
+        color_key: Option<(u32, u32)>,
+    );
     /// Shows a surface on the display.
     fn present(&mut self, surface: SurfaceId);
+    /// The backend as its concrete type, for code that knows which one it set up.
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Reads the pixel at byte offset `at`.
@@ -255,7 +264,16 @@ impl Video for Headless {
         let (own_pitch, start) = (surface.pitch(), surface.offset(area));
         let size = surface.format.bytes_per_pixel() as usize;
         let (width, height) = (area.width, area.height);
-        copy_pixels(pixels, pitch, (width, height), &mut surface.pixels[start..], own_pitch, (width, height), size, None);
+        copy_pixels(
+            pixels,
+            pitch,
+            (width, height),
+            &mut surface.pixels[start..],
+            own_pitch,
+            (width, height),
+            size,
+            None,
+        );
     }
 
     fn download(&mut self, surface: SurfaceId, area: Rect, pitch: usize, pixels: &mut [u8]) {
@@ -263,7 +281,16 @@ impl Video for Headless {
         let (own_pitch, start) = (surface.pitch(), surface.offset(area));
         let size = surface.format.bytes_per_pixel() as usize;
         let (width, height) = (area.width, area.height);
-        copy_pixels(&surface.pixels[start..], own_pitch, (width, height), pixels, pitch, (width, height), size, None);
+        copy_pixels(
+            &surface.pixels[start..],
+            own_pitch,
+            (width, height),
+            pixels,
+            pitch,
+            (width, height),
+            size,
+            None,
+        );
     }
 
     fn fill(&mut self, surface: SurfaceId, area: Rect, value: u32) {
@@ -273,7 +300,14 @@ impl Video for Headless {
         fill_pixels(&mut surface.pixels[start..], pitch, area.width, area.height, size, value);
     }
 
-    fn copy(&mut self, source: SurfaceId, from: Rect, target: SurfaceId, to: Rect, color_key: Option<(u32, u32)>) {
+    fn copy(
+        &mut self,
+        source: SurfaceId,
+        from: Rect,
+        target: SurfaceId,
+        to: Rect,
+        color_key: Option<(u32, u32)>,
+    ) {
         // The source is copied out first: source and target may be one surface.
         let (source_pitch, size, rows) = {
             let surface = self.surface(source);
@@ -306,6 +340,10 @@ impl Video for Headless {
         };
         self.last_frame = Some(frame);
         self.frames_presented += 1;
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
