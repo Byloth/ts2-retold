@@ -111,4 +111,47 @@ So "bringing Italian to the reference build" means one of:
    build; simulations differ between builds, so a replay or a multiplayer
    session belongs to one build.
 
-The choice is the owner's and is open.
+**Decided by the owner (2026-11-21): the hybrid.** English code and level
+data; from the Italian disc the texts, the speech, the movies and the
+screens, and the Italian text drawing and menus on top of the English
+functions.
+
+## How the hybrid is to be made
+
+Not by rewriting forty functions by hand from a reading of the Italian
+ones: by **transplanting**, with the two executables as they are.
+
+1. **An address map between the two builds.** The code of both is cut at
+   its relocation sites; the pieces between sites are the same in both
+   wherever the code is the same, so aligning the two sequences of pieces
+   pairs the sites, and each pair of sites gives a pair of addresses: the
+   same variable, function, table or text in the one build and in the
+   other. Tried: of 33,186 sites in the English code 33,021 align, giving
+   7,384 pairs of addresses, 4 of them with more than one answer. The
+   addresses referred to only from tables in the data (about 1,300) are
+   to be reached by walking paired tables side by side.
+2. **Texts**: where a pair is two different strings, the places that
+   refer to the English one are made to refer to the Italian one, stored
+   beside the image. The pairs come from the code that uses the texts,
+   not from their order in the file.
+3. **Functions**: each of the forty that differ is looked at once, to say
+   whether its difference is language (text drawing, a menu's layout) or
+   revision (which stays English). A function of the first kind is taken
+   from the Italian executable as it is, placed beside the English image
+   with its addresses translated through the map, and the English
+   function's entry leads to it. What it draws is then what the Italian
+   game draws, by the Italian game's own code.
+4. **Files**: speech, movies and screens are served from the Italian disc
+   in place of the English ones, by a list of which files are language
+   and which are the revision's level data.
+
+The result is an image the interpreter and the recompiler take like any
+other; with the modification off the English image is untouched. The
+user's Italian disc is read when the game is built or started; nothing
+of it is in the repository, where the transplant is described by
+addresses of the two builds.
+
+What the look at the glyph functions already showed: the Italian ones
+draw an accented letter as the letter and, above it, an accent that is a
+glyph of its own in the same sheet, and set the letters 7 pixels apart
+where the English ones use 8, which is how the longer texts fit.

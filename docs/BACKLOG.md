@@ -160,12 +160,13 @@ out of here into the roadmap or an ADR when work on them starts.
 
 - A verified dump of a pressed disc as a second witness for the reference
   copy in `ref/disc` (ADR 0003).
-- **Italian** (ADR 0016): how the texts are stored and referred to is
-  known (through the relocation table), and what else differs between
-  the English and the Italian disc: the font and some 40 functions, and
-  level data of a later revision. Whether Italian is a hybrid on the
-  reference build or its own executable is for the owner to decide
-  (ADR 0016, "What the Italian disc shows").
+- **Italian** (ADR 0016): to be a hybrid on the reference build, made by
+  transplanting texts and the language's own functions from the Italian
+  executable through an address map between the two builds. The map has
+  been tried in a script and works; nothing of it is in the tools yet.
+  Next: the map in `crates/recomp`, the texts, the files served from the
+  Italian disc, then the functions one by one, the glyph functions first
+  (where the font's accents come from in the data is not yet known).
 - **The other languages**: French, Spanish, Dutch, Swedish, Norwegian and
   Finnish are at hand as disc images; German, Danish and Portuguese have
   not been found (ADR 0003).
