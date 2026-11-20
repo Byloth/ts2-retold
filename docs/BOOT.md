@@ -11,11 +11,11 @@ cargo run --release --bin andy -- boot --trace
 
 ## How far it gets
 
-**About 766 million instructions and 4155 frames**, then the sound
-thread faults: after the movies the game reaches its title screen
-("PRESS JUMP"), which starts to fade, and `IDirectSoundBuffer::Stop` on a
-buffer the runtime does not know returns an error the game does not expect
-(a read of address 0 at `0x4132CF`).
+**About 1136 million instructions and 4170 frames**, then it stops at
+`IDirect3DDevice3::SetTransform`: after the movies and the title screen
+("PRESS JUMP"), which fades out when nobody presses anything, the game
+starts drawing in three dimensions and needs Direct3D's transformation and
+lighting.
 
 Before that it shows the trademark and rating screens with their fades,
 plays its introduction movies through DirectShow (ADR 0015) and draws the
@@ -59,7 +59,8 @@ by eye.
 | Backdrop | `glueSetBackdrop()`: a 640×480 off-screen surface filled from an 8-bit bitmap through `GetDIBColorTable`, then `BltFast` to the back buffer |
 | Loading screen | Each frame: `Clear2`, `BeginScene`, the backdrop copied with `BltFast`, `DrawIndexedPrimitive` (a strip of four transformed-and-lit vertices: "LOADING…"), `EndScene`, `Flip` |
 | Movies | `IDirectSound::Release`, `CoInitialize`, a multimedia stream per movie: `Initialize`, `AddMediaStream` for video and audio, `OpenFile` (`rtlibs\\acti.dll`, then the others of the introduction), `GetMediaStream`, `CreateSample`, `GetSurface`, `SetState`; per picture the sample's `Update`, `GetSurfaceDesc` and a stretching `Blt` to the back buffer, until `Update` reports the end |
-| Title screen | DirectSound again, the title backdrop and "PRESS JUMP" drawn as textured quads; the music stream thread then faults (see above) |
+| Title screen | DirectSound again, the title backdrop and "PRESS JUMP" drawn as textured quads. The music is streamed: a looping buffer with `IDirectSoundNotify` positions, refilled by the stream thread from `audio\*.wav` each time an event is signalled |
+| First 3D scene | The title fades out; `SetTransform` — not implemented yet |
 
 ## The game's own log
 
@@ -135,7 +136,7 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-The fault in the sound thread at the title screen. Then input, to get
-past "PRESS JUMP"; the Layer II audio decoder (movies are silent, like all
-sound so far); Direct3D's own transformation and lighting; and a window to
-present in.
+Direct3D's own transformation and lighting (`SetTransform`, untransformed
+vertices, materials and lights: ADR 0014). Then input, to press "jump" at
+the title; the Layer II audio decoder (movies are silent, like all sound so
+far); and a window to present in.
