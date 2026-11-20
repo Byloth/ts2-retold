@@ -9,6 +9,7 @@
 //! released for (ADR 0011).
 
 mod advapi32;
+pub mod amstream;
 pub mod com;
 pub mod d3d;
 pub mod ddraw;

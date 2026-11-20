@@ -37,6 +37,10 @@ USAGE:
                                     game shows as a PNG file into DIR
                                     --with/--without ID switch a modification
     andy mods                       List the modifications (docs/MODIFICATIONS.md)
+    andy movie FILE --yuv OUT [--pictures N]
+                                    Decode a movie of the game and write its
+                                    pictures as planar YUV 4:2:0, to compare
+                                    with another decoder
     andy difftest [EXE] --out FILE [--rounds N]
                                     Write differential test cases for every
                                     distinct instruction in the executable
@@ -67,6 +71,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut gpu = false;
     let mut frames = None;
     let mut frame_step = 1u64;
+    let mut yuv = None;
+    let mut pictures = u64::MAX;
     let mut game_args = String::new();
     let mut limit = 2_000_000_000u64;
     let mut args = args.into_iter();
@@ -94,6 +100,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
             }
             "--gpu" => gpu = true,
             "--frames" => frames = Some(PathBuf::from(args.next().ok_or("--frames needs a directory")?)),
+            "--yuv" => yuv = Some(PathBuf::from(args.next().ok_or("--yuv needs a path")?)),
+            "--pictures" => {
+                pictures = args.next().and_then(|n| n.parse().ok()).ok_or("--pictures needs a number")?;
+            }
             "--frame-step" => {
                 frame_step = args.next().and_then(|n| n.parse().ok()).ok_or("--frame-step needs a number")?;
             }
@@ -119,6 +129,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
     if command == "mods" {
         list_modifications();
         return Ok(());
+    }
+    if command == "movie" {
+        let file = positional.get(1).ok_or("movie needs a file")?;
+        return movie(Path::new(file), &yuv.ok_or("movie needs --yuv OUT")?, pictures);
     }
     let exe = match positional.get(1) {
         Some(path) => PathBuf::from(path),
@@ -381,6 +395,39 @@ fn write_surfaces(machine: &mut Machine, directory: &Path) -> Result<usize, Box<
         capture::write_png(&directory.join(name), image.width, image.height, &image.rgba)?;
     }
     Ok(images.len())
+}
+
+/// Decodes a movie and writes its pictures one after another as planar
+/// YUV 4:2:0, the form other decoders can write too.
+fn movie(file: &Path, out: &Path, limit: u64) -> Result<(), String> {
+    use std::io::Write;
+    let bytes = fs::read(file).map_err(|error| format!("{}: {error}", file.display()))?;
+    let streams = andy_mpeg::demux::demux(&bytes).ok_or("not an MPEG-1 system stream")?;
+    println!("video stream  {} bytes, {} time stamps", streams.video.bytes.len(), streams.video.times.len());
+    println!("audio stream  {} bytes, {} time stamps", streams.audio.bytes.len(), streams.audio.times.len());
+    let mut decoder =
+        andy_mpeg::video::Decoder::new(&streams.video.bytes).map_err(|error| format!("{error:?}"))?;
+    let (width, height, rate) = (decoder.width(), decoder.height(), decoder.rate());
+    println!("pictures      {width} x {height}, {}/{} per second", rate.0, rate.1);
+    let mut writer = std::io::BufWriter::new(fs::File::create(out).map_err(|error| error.to_string())?);
+    let started = std::time::Instant::now();
+    let mut count = 0;
+    while count < limit {
+        let Some(frame) = decoder.decode() else { break };
+        for (plane, stride, (width, height)) in [
+            (&frame.y, frame.stride, (width, height)),
+            (&frame.cb, frame.stride / 2, (width / 2, height / 2)),
+            (&frame.cr, frame.stride / 2, (width / 2, height / 2)),
+        ] {
+            for row in plane.chunks(stride).take(height) {
+                writer.write_all(&row[..width]).map_err(|error| error.to_string())?;
+            }
+        }
+        count += 1;
+    }
+    let seconds = started.elapsed().as_secs_f64();
+    println!("decoded       {count} pictures in {seconds:.2} s ({:.0} per second)", count as f64 / seconds);
+    Ok(())
 }
 
 fn describe(stop: &Stop) -> String {

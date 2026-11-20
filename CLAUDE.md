@@ -19,6 +19,7 @@ git-ignored `ref/dx` (see `docs/LICENSES.md`), never copied from them.
 `crates/gpu` (`andy-gpu`): the video backend on the GPU (`wgpu`), behind the
 runtime's `Video` interface; its tests need a graphics adapter, a software
 Vulkan driver (lavapipe) will do.
+`crates/mpeg` (`andy-mpeg`): the decoder of the game's movies (ADR 0015).
 `crates/recomp` (`andy-recomp`): PE loader, code discovery, test generation.
 `crates/cpu` (`andy-cpu`): instruction semantics written once over a backend
 trait, plus the interpreter backend (ADR 0009) and the x87 model (ADR 0010).

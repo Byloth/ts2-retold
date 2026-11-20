@@ -80,7 +80,10 @@ out of here into the roadmap or an ADR when work on them starts.
 ## To verify with the owner's help
 
 - The executable's hash against an original disc (ADR 0003).
-- Reference screenshots of the original game, once the port draws.
+- Reference screenshots of the original game, once the port draws. Until
+  the owner can take some, `ref/presskit/assets/download/*.bmp` (press-kit
+  screenshots, 632×434, platform not stated) and `assets/assets/clip*.mov`
+  show the original's look.
 - Which font Windows picks for the face name "ariel" (the game's spelling;
   no such font exists). The runtime answers with its Arial substitute.
 - That `TEXTUREPERSPECTIVE` starts off under DirectX 6 (it changes nothing

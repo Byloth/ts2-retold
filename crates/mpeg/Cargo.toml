@@ -1,0 +1,10 @@
+[package]
+name = "andy-mpeg"
+version = "0.0.0"
+description = "MPEG-1 system streams: demultiplexer, video decoder and Layer II audio decoder, after pl_mpeg"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
