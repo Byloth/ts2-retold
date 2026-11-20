@@ -41,6 +41,9 @@ and a fourth press (`7000 press SPACE`) starts **the first level**: Andy's
 room, Buzz standing in it and turning his head, a toy helicopter flying
 about, at some 3,500 triangles a frame (51 draw states in all by then).
 Left alone for two minutes of its clock it goes on without stopping.
+The level is played by the recording too: with the arrow keys and "jump"
+held for stretches of reads Buzz runs under the desk, jumps (his shadow
+stays on the floor), turns and opens his wings, and the camera follows.
 
 The pictures look right as far as can be told without the original beside
 them: the room, Buzz, an enemy robot, the lives, coins and battery
