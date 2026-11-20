@@ -160,10 +160,12 @@ out of here into the roadmap or an ADR when work on them starts.
 
 - A verified dump of a pressed disc as a second witness for the reference
   copy in `ref/disc` (ADR 0003).
-- **Italian on the reference build** (ADR 0016): find how the game looks
-  its texts up, then bring the Italian disc's texts, movies, speech and
-  graphics over as a catalogued modification, chosen by `LANGUAGE IT` in
-  `toy2.ini` until the Options menu has it.
+- **Italian** (ADR 0016): how the texts are stored and referred to is
+  known (through the relocation table), and what else differs between
+  the English and the Italian disc: the font and some 40 functions, and
+  level data of a later revision. Whether Italian is a hybrid on the
+  reference build or its own executable is for the owner to decide
+  (ADR 0016, "What the Italian disc shows").
 - **The other languages**: French, Spanish, Dutch, Swedish, Norwegian and
   Finnish are at hand as disc images; German, Danish and Portuguese have
   not been found (ADR 0003).
