@@ -11,11 +11,15 @@ cargo run --release --bin andy -- boot --trace
 
 ## How far it gets
 
-**About 412 million instructions and 1196 frames**, then it stops at
-`CoCreateInstance`: the game has shown the trademark screen with a
-"LOADING…" quad drawn over it (82 batches of two alpha-blended, textured
-triangles, one draw state), released DirectSound and now wants a DirectShow
-multimedia stream to play its introduction movie.
+**About 766 million instructions and 4155 frames**, then the sound
+thread faults: after the movies the game reaches its title screen
+("PRESS JUMP"), which starts to fade, and `IDirectSoundBuffer::Stop` on a
+buffer the runtime does not know returns an error the game does not expect
+(a read of address 0 at `0x4132CF`).
+
+Before that it shows the trademark and rating screens with their fades,
+plays its introduction movies through DirectShow (ADR 0015) and draws the
+title screen: 16,824 triangles in 8,412 batches, two draw states.
 
 With the `Headless` backend triangles are counted, not drawn (ADR 0014).
 With `--gpu` they are drawn by the GPU backend (`crates/gpu`), and
@@ -54,7 +58,8 @@ by eye.
 | Level 0 | Writes `Toy200.sav` and `toy2.cfg`, reads `rand.dat`, releases the duplicated sound buffers, loads `level00\level.raw` and `level00\level.ngn`; each texture is read as a bitmap into a DIB section (24-bit, or 8-bit with a colour table) and copied into a texture surface; three more materials |
 | Backdrop | `glueSetBackdrop()`: a 640×480 off-screen surface filled from an 8-bit bitmap through `GetDIBColorTable`, then `BltFast` to the back buffer |
 | Loading screen | Each frame: `Clear2`, `BeginScene`, the backdrop copied with `BltFast`, `DrawIndexedPrimitive` (a strip of four transformed-and-lit vertices: "LOADING…"), `EndScene`, `Flip` |
-| Movie | `IDirectSound::Release`, `CoInitialize`, `CoCreateInstance` of a multimedia stream, `Initialize`, `AddMediaStream` for video (on the DirectDraw object) and audio, `OpenFile("C:\\TOY2\\rtlibs\\acti.dll")` — the file is there, so the machine stops: playing is not implemented yet |
+| Movies | `IDirectSound::Release`, `CoInitialize`, a multimedia stream per movie: `Initialize`, `AddMediaStream` for video and audio, `OpenFile` (`rtlibs\\acti.dll`, then the others of the introduction), `GetMediaStream`, `CreateSample`, `GetSurface`, `SetState`; per picture the sample's `Update`, `GetSurfaceDesc` and a stretching `Blt` to the back buffer, until `Update` reports the end |
+| Title screen | DirectSound again, the title backdrop and "PRESS JUMP" drawn as textured quads; the music stream thread then faults (see above) |
 
 ## The game's own log
 
@@ -130,12 +135,7 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-Delivering the movie's pictures to the game (ADR 0015; the decoder is
-done). After `OpenFile` the game calls `GetMediaStream` for the video,
-asks it for `IDirectDrawMediaStream`, `CreateSample` without a surface,
-`GetSurface` on the sample, `IDirectDrawSurface3` on that surface, then
-`SetState` to run and, per picture, the sample's `Update` followed by
-`GetSurfaceDesc` and `Blt`. Needed: those three objects, surfaces seen
-through `IDirectDrawSurface3`, `Update` waiting on the virtual clock for
-the picture's time, and the Layer II audio decoder. Then Direct3D's own
-transformation and lighting, and a window to present in.
+The fault in the sound thread at the title screen. Then input, to get
+past "PRESS JUMP"; the Layer II audio decoder (movies are silent, like all
+sound so far); Direct3D's own transformation and lighting; and a window to
+present in.

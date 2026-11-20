@@ -136,7 +136,7 @@ impl Machine {
         (surface.references > 0 && surface.pointer == this).then_some(index)
     }
 
-    fn new_surface(&mut self, width: u32, height: u32, format: PixelFormat, caps: u32) -> usize {
+    pub(crate) fn new_surface(&mut self, width: u32, height: u32, format: PixelFormat, caps: u32) -> usize {
         let pitch = super::pitch(width, 8 * format.bytes_per_pixel());
         let memory = self.os.allocate(&mut self.memory, pitch * height);
         let video = self.video.create_surface(width, height, format);
@@ -265,6 +265,25 @@ impl Machine {
         let video = self.ensure_video(index);
         self.os.ddraw.surfaces[index].store.memory_current = false;
         video
+    }
+
+    /// A surface's interface pointer and size.
+    pub(crate) fn surface_pointer_and_size(&self, index: usize) -> (u32, u32, u32) {
+        let surface = &self.os.ddraw.surfaces[index];
+        (surface.pointer, surface.width, surface.height)
+    }
+
+    /// Replaces the whole contents of a surface with rows of pixels in its
+    /// format, without padding.
+    pub(crate) fn write_surface(&mut self, index: usize, pixels: &[u8]) {
+        let surface = &mut self.os.ddraw.surfaces[index];
+        let row = (surface.width * surface.format.bytes_per_pixel()) as usize;
+        let (memory, pitch) = (surface.store.memory, surface.pitch);
+        surface.store.memory_current = true;
+        surface.store.video_current = false;
+        for (y, line) in pixels.chunks(row).take(surface.height as usize).enumerate() {
+            self.memory.load(memory + y as u32 * pitch, line).expect("surface memory is mapped");
+        }
     }
 
     /// The pixel values of a surface that are transparent when it is the

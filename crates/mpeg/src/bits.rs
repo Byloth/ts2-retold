@@ -1,21 +1,28 @@
 //! Reading bits, start codes and variable-length codes from a stream.
 
-/// A position in a stream of bytes, read most significant bit first.
-/// Reading past the end gives zero bits.
+use std::sync::Arc;
+
+/// A stream of bytes and a position in it, read most significant bit
+/// first. Reading past the end gives zero bits.
 #[derive(Debug, Clone)]
-pub struct Bits<'a> {
-    bytes: &'a [u8],
+pub struct Bits {
+    bytes: Arc<[u8]>,
     /// The next bit to read, counted from the start.
     position: usize,
 }
 
-impl<'a> Bits<'a> {
-    pub fn new(bytes: &'a [u8]) -> Bits<'a> {
-        Bits { bytes, position: 0 }
+impl Bits {
+    pub fn new(bytes: impl Into<Arc<[u8]>>) -> Bits {
+        Bits { bytes: bytes.into(), position: 0 }
     }
 
-    pub fn at(bytes: &'a [u8], byte: usize) -> Bits<'a> {
-        Bits { bytes, position: 8 * byte }
+    /// Moves to the start of a byte.
+    pub fn seek(&mut self, byte: usize) {
+        self.position = 8 * byte;
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
     /// The byte the next bit is in.
@@ -96,8 +103,14 @@ impl<'a> Bits<'a> {
     }
 
     /// Whether the next `count` bits are there and not all zero.
-    pub fn peek_non_zero(&self, count: u32) -> bool {
-        self.has(count as usize) && self.clone().read(count) != 0
+    pub fn peek_non_zero(&mut self, count: u32) -> bool {
+        if !self.has(count as usize) {
+            return false;
+        }
+        let position = self.position;
+        let value = self.read(count);
+        self.position = position;
+        value != 0
     }
 
     /// Reads one variable-length code (see [`crate::tables`]).
@@ -120,20 +133,20 @@ mod tests {
 
     #[test]
     fn bits_are_read_most_significant_first_and_zero_past_the_end() {
-        let mut bits = Bits::new(&[0b1010_0101, 0xFF, 0x12, 0x34, 0x56]);
+        let mut bits = Bits::new(vec![0b1010_0101, 0xFF, 0x12, 0x34, 0x56]);
         assert_eq!((bits.read(1), bits.read(3), bits.read(4)), (1, 0b010, 0b0101));
         assert_eq!(bits.read(12), 0xFF1);
         assert!(bits.has(20) && !bits.has(21));
         assert_eq!(bits.read(32), 0x2345_6000);
         assert!(!bits.has(1));
-        let mut bits = Bits::new(&[0x12, 0x34, 0x56, 0x78]);
+        let mut bits = Bits::new(vec![0x12, 0x34, 0x56, 0x78]);
         assert_eq!(bits.read(32), 0x1234_5678);
     }
 
     #[test]
     fn start_codes_are_found_on_byte_boundaries() {
         let stream = [0xFF, 0, 0, 1, 0xB3, 9, 0, 0, 0, 1, 0x00, 7, 0, 0, 1];
-        let mut bits = Bits::new(&stream);
+        let mut bits = Bits::new(stream.to_vec());
         bits.read(3);
         assert_eq!(bits.next_start_code(), Some(0xB3));
         assert_eq!(bits.read(8), 9);
@@ -146,11 +159,11 @@ mod tests {
     #[test]
     fn variable_length_codes_follow_the_tree() {
         // Macroblock address increment: "1" is 1, "011" is 2, "010" is 3.
-        let mut bits = Bits::new(&[0b1011_0100]);
+        let mut bits = Bits::new(vec![0b1011_0100]);
         let table = &tables::MACROBLOCK_ADDRESS_INCREMENT;
         assert_eq!((bits.read_vlc(table), bits.read_vlc(table), bits.read_vlc(table)), (1, 2, 3));
         // Motion: "1" is 0, "010" is 1, "011" is -1.
-        let mut bits = Bits::new(&[0b1010_0110]);
+        let mut bits = Bits::new(vec![0b1010_0110]);
         let table = &tables::MOTION;
         assert_eq!((bits.read_vlc(table), bits.read_vlc(table), bits.read_vlc(table)), (0, 1, -1));
     }

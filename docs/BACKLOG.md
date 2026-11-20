@@ -64,6 +64,10 @@ out of here into the roadmap or an ADR when work on them starts.
   blocks the game frees, and the runtime's own blocks (surface memory,
   DIB sections, vertex buffers), are never returned. A long session will
   need a real allocator.
+- **Movies are silent.** Their pictures are decoded and shown
+  (`crates/mpeg`, ADR 0015); the Layer II audio decoder is not written yet
+  and there is no sound output for it to feed. Only seeking to the start
+  and synchronous `Update` are implemented.
 - **Sound is not heard.** DirectSound buffers hold their samples and their
   play cursors advance, but nothing mixes them to an output yet.
 - **No input yet.** Nothing delivers keyboard, mouse or joystick events.

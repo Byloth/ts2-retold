@@ -88,8 +88,8 @@ pub enum Error {
 }
 
 /// A decoder of one video stream held in memory.
-pub struct Decoder<'a> {
-    bits: Bits<'a>,
+pub struct Decoder {
+    bits: Bits,
     width: usize,
     height: usize,
     /// Macroblocks across and down.
@@ -121,9 +121,9 @@ pub struct Decoder<'a> {
     frames_decoded: u64,
 }
 
-impl<'a> Decoder<'a> {
+impl Decoder {
     /// Reads the sequence header of a video stream.
-    pub fn new(stream: &'a [u8]) -> Result<Decoder<'a>, Error> {
+    pub fn new(stream: impl Into<std::sync::Arc<[u8]>>) -> Result<Decoder, Error> {
         let mut bits = Bits::new(stream);
         if !bits.find_start_code(START_SEQUENCE) || !bits.has(64) {
             return Err(Error::NoSequenceHeader);

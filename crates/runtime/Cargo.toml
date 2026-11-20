@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 andy-cpu = { path = "../cpu" }
+andy-mpeg = { path = "../mpeg" }
 andy-recomp = { path = "../recomp" }
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info"] }
 bytemuck = { version = "1", features = ["derive"] }

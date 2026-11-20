@@ -72,6 +72,7 @@ name = "andy-runtime"
 version = "0.0.0"
 dependencies = [
  "andy-cpu",
+ "andy-mpeg",
  "andy-recomp",
  "bytemuck",
  "fontdue",

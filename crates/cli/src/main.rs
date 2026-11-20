@@ -401,11 +401,11 @@ fn write_surfaces(machine: &mut Machine, directory: &Path) -> Result<usize, Box<
 fn movie(file: &Path, out: &Path, limit: u64) -> Result<(), String> {
     use std::io::Write;
     let bytes = fs::read(file).map_err(|error| format!("{}: {error}", file.display()))?;
-    let streams = andy_mpeg::demux::demux(&bytes).ok_or("not an MPEG-1 system stream")?;
+    let streams = andy_mpeg::demux::demux(bytes).ok_or("not an MPEG-1 system stream")?;
     println!("video stream  {} bytes, {} time stamps", streams.video.bytes.len(), streams.video.times.len());
     println!("audio stream  {} bytes, {} time stamps", streams.audio.bytes.len(), streams.audio.times.len());
     let mut decoder =
-        andy_mpeg::video::Decoder::new(&streams.video.bytes).map_err(|error| format!("{error:?}"))?;
+        andy_mpeg::video::Decoder::new(streams.video.bytes).map_err(|error| format!("{error:?}"))?;
     let (width, height, rate) = (decoder.width(), decoder.height(), decoder.rate());
     println!("pictures      {width} x {height}, {}/{} per second", rate.0, rate.1);
     let mut writer = std::io::BufWriter::new(fs::File::create(out).map_err(|error| error.to_string())?);

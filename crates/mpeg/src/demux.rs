@@ -38,7 +38,7 @@ fn time(bits: &mut Bits) -> f64 {
 
 /// Takes an MPEG-1 system stream apart. `None` if the bytes do not start
 /// one.
-pub fn demux(file: &[u8]) -> Option<Streams> {
+pub fn demux(file: impl Into<std::sync::Arc<[u8]>>) -> Option<Streams> {
     let mut bits = Bits::new(file);
     // A system stream starts with a pack, whose header starts with 0010.
     if bits.next_start_code() != Some(PACK) || bits.read(4) != 0b0010 {
@@ -88,12 +88,12 @@ pub fn demux(file: &[u8]) -> Option<Streams> {
         }
         length -= header;
         let start = bits.byte_position();
-        let Some(payload) = file.get(start..start + length) else { break };
+        let Some(payload) = bits.bytes().get(start..start + length) else { break };
         if let Some(stamp) = stamp {
             stream.times.push((stream.bytes.len(), stamp));
         }
         stream.bytes.extend_from_slice(payload);
-        bits = Bits::at(file, start + length);
+        bits.seek(start + length);
     }
     Some(streams)
 }
@@ -134,11 +134,11 @@ mod tests {
         file.extend(packet(0xBE, 0, false, None, &[0xFF; 6])); // padding
         file.extend(packet(VIDEO, 2, false, None, &[4, 5]));
         file.extend(packet(VIDEO, 0, true, Some(0x1_2345_6789), &[6]));
-        let streams = demux(&file).unwrap();
+        let streams = demux(file).unwrap();
         assert_eq!(streams.video.bytes, [1, 2, 3, 4, 5, 6]);
         assert_eq!(streams.video.times, [(0, 1.0), (5, 0x1_2345_6789u64 as f64 / 90_000.0)]);
         assert_eq!(streams.audio.bytes, [9, 8]);
         assert_eq!(streams.audio.times, [(0, 0.5)]);
-        assert_eq!(demux(&[0, 0, 1, 0xB3, 0, 0, 0, 0]), None);
+        assert_eq!(demux(vec![0, 0, 1, 0xB3, 0, 0, 0, 0]), None);
     }
 }
