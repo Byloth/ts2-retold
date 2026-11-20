@@ -11,7 +11,8 @@ pub struct Build {
     pub id: &'static str,
     pub sha256: &'static str,
     pub description: &'static str,
-    /// False while the hash has not been compared with an original disc.
+    /// False while the hash has not been compared with a verified dump of
+    /// a pressed disc (ADR 0003).
     pub confirmed_retail: bool,
 }
 

@@ -79,7 +79,8 @@ out of here into the roadmap or an ADR when work on them starts.
 
 ## To verify with the owner's help
 
-- The executable's hash against an original disc (ADR 0003).
+- The executable's hash against a verified dump of a pressed disc. It
+  already matches the installation disc's files in `ref/disc` (ADR 0003).
 - Reference screenshots of the original game, once the port draws. Until
   the owner can take some, `ref/presskit/assets/download/*.bmp` (press-kit
   screenshots, 632×434, platform not stated) and `assets/assets/clip*.mov`

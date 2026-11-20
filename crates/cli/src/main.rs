@@ -148,8 +148,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
     println!("sha256    {}", builds::sha256_hex(&bytes));
     match builds::identify(&bytes) {
         Some(build) => {
-            let status =
-                if build.confirmed_retail { "retail" } else { "provisional, not yet compared with a disc" };
+            let status = if build.confirmed_retail {
+                "retail"
+            } else {
+                "matches the installation disc's files; not yet compared with a verified disc dump"
+            };
             println!("build     {} - {} ({status})", build.id, build.description);
         }
         None => println!("build     UNKNOWN - addresses and patches are not valid for this file"),
