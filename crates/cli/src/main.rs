@@ -5,10 +5,10 @@ use std::process::ExitCode;
 use std::{env, fs};
 
 use andy_recomp::analysis::{self, Analysis, EntryKind};
-use andy_recomp::pe::Image;
+use andy_recomp::pe::{Image, ResourceId, resource_type};
 use andy_recomp::{builds, difftest};
 use andy_runtime::files::Files;
-use andy_runtime::win32::Os;
+use andy_runtime::os::Os;
 use andy_runtime::{Machine, Stop};
 
 const USAGE: &str = "\
@@ -142,23 +142,25 @@ fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64) {
     // The program reads the game directory and writes only to `out/run`.
     let files = Files::new(game_dir, Some(PathBuf::from("out/run")));
     let mut machine = Machine::load(image, Os::new(files));
-    machine.trace = Some(Vec::new());
+    if trace {
+        machine.trace = Some(Vec::new());
+    }
     let started = std::time::Instant::now();
     let stop = machine.run(limit);
     let elapsed = started.elapsed().as_secs_f64();
 
-    let calls = machine.trace.take().unwrap_or_default();
-    if trace {
+    if let Some(calls) = machine.trace.take() {
         println!();
         for call in &calls {
             let args: Vec<String> = call.args.iter().map(|a| format!("{a:#x}")).collect();
-            let detail = call
-                .detail
+            let note = call
+                .note
                 .as_deref()
-                .map(|d| format!("   ; {d}"))
+                .map(|n| format!("   ; {n}"))
                 .unwrap_or_default();
+            let indent = "  ".repeat(call.depth as usize);
             println!(
-                "  {:#010x}  {}({}) = {:#x}{detail}",
+                "  {:#010x}  {indent}{}({}) = {:#x}{note}",
                 call.caller,
                 call.name,
                 args.join(", "),
@@ -166,18 +168,15 @@ fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64) {
             );
         }
     }
+    let mut counts = machine.call_counts();
+    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    let total: u64 = counts.iter().map(|(_, count)| count).sum();
     println!("\ninstructions executed  {}", machine.cpu.instructions);
     println!(
         "speed                  {:.1} million/s",
         machine.cpu.instructions as f64 / elapsed / 1e6
     );
-    println!(
-        "system calls           {} ({} distinct)",
-        calls.len(),
-        machine.import_counts.len()
-    );
-    let mut counts: Vec<_> = machine.import_counts.iter().collect();
-    counts.sort_by(|a, b| b.1.cmp(a.1));
+    println!("host calls             {total} ({} distinct)", counts.len());
     for (name, count) in counts.iter().take(12) {
         println!("  {count:>8}  {name}");
     }
@@ -189,18 +188,10 @@ fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64) {
         Some(address) => println!("x87 model inexact      first at {address:#010x}"),
         None => println!("x87 model inexact      never"),
     }
-    let missing: Vec<&str> = machine
-        .os
-        .files
-        .log
-        .iter()
-        .filter(|(_, found)| !found)
-        .map(|(name, _)| name.as_str())
-        .collect();
+    let missing = machine.os.files.log.iter().filter(|(_, found)| !found).count();
     println!(
-        "files opened           {} ({} not found)",
-        machine.os.files.log.len(),
-        missing.len()
+        "files opened           {} ({missing} not found)",
+        machine.os.files.log.len()
     );
     println!("\nstopped at eip {:#010x}: {}", machine.cpu.eip, describe(&stop));
     if let Stop::Fault(_) = stop {
@@ -216,7 +207,12 @@ fn describe(stop: &Stop) -> String {
     match stop {
         Stop::Exit(code) => format!("the program exited with code {code}"),
         Stop::Fault(fault) => format!("fault: {fault:?}"),
-        Stop::UnimplementedImport { dll, name } => format!("import not implemented yet: {dll} {name}"),
+        Stop::Unimplemented { dll, name } => format!("not implemented yet: {dll} {name}"),
+        Stop::CallbackStack {
+            address,
+            expected,
+            actual,
+        } => format!("callback {address:#x} returned with esp {actual:#x}, expected {expected:#x}"),
         Stop::Budget => "instruction limit reached".into(),
     }
 }
@@ -236,6 +232,19 @@ fn info(image: &Image) {
             s.virtual_size,
             s.data.len(),
             s.flags
+        );
+    }
+    println!("\nresources");
+    for r in &image.resources {
+        let kind = match &r.kind {
+            ResourceId::Id(id) => resource_type::name(*id).to_string(),
+            ResourceId::Name(name) => name.clone(),
+        };
+        println!(
+            "  {kind:<13} {:<16} {:>6} bytes at {:#010x}",
+            r.name.to_string(),
+            r.size,
+            r.va
         );
     }
     println!("\nimports");

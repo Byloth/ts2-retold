@@ -14,6 +14,7 @@ pub const SCN_MEM_WRITE: u32 = 0x8000_0000;
 const IMAGE_FILE_MACHINE_I386: u16 = 0x014C;
 const PE32_MAGIC: u16 = 0x010B;
 const DIR_IMPORT: usize = 1;
+const DIR_RESOURCE: usize = 2;
 const DIR_BASERELOC: usize = 5;
 const REL_BASED_ABSOLUTE: u16 = 0;
 const REL_BASED_HIGHLOW: u16 = 3;
@@ -96,6 +97,8 @@ pub struct Image {
     pub imports: Vec<Import>,
     /// Virtual addresses of every 32-bit absolute fixup, sorted ascending.
     pub relocs: Vec<u32>,
+    /// Every resource, in directory order.
+    pub resources: Vec<Resource>,
 }
 
 impl Image {
@@ -175,10 +178,15 @@ impl Image {
             sections,
             imports: Vec::new(),
             relocs: Vec::new(),
+            resources: Vec::new(),
         };
         let (import_rva, _) = dir(DIR_IMPORT)?;
         if import_rva != 0 {
             image.parse_imports(base.wrapping_add(import_rva))?;
+        }
+        let (resource_rva, _) = dir(DIR_RESOURCE)?;
+        if resource_rva != 0 {
+            image.parse_resources(base.wrapping_add(resource_rva))?;
         }
         let (reloc_rva, reloc_size) = dir(DIR_BASERELOC)?;
         if reloc_rva != 0 {
@@ -320,6 +328,162 @@ impl Image {
     pub fn import_at(&self, iat_va: u32) -> Option<&Import> {
         self.imports.iter().find(|i| i.iat_va == iat_va)
     }
+
+    /// Walks the three-level resource directory: type, name, language.
+    fn parse_resources(&mut self, root: u32) -> Result<(), PeError> {
+        const WHAT: &str = "resource directory";
+        let mut found = Vec::new();
+        for (kind, types) in self.resource_entries(root, root)? {
+            let Some(names) = types else { continue };
+            for (name, languages) in self.resource_entries(root, names)? {
+                let Some(languages) = languages else { continue };
+                for (language, _) in self.resource_entries(root, languages)? {
+                    // At the last level the entry points at a data descriptor.
+                    let descriptor = self.resource_leaf(root, languages, &language)?;
+                    let rva = self.need_u32(descriptor, WHAT)?;
+                    let size = self.need_u32(descriptor + 4, WHAT)?;
+                    let language = match language {
+                        ResourceId::Id(id) => id,
+                        ResourceId::Name(_) => 0,
+                    };
+                    found.push(Resource {
+                        kind: kind.clone(),
+                        name: name.clone(),
+                        language,
+                        va: self.base.wrapping_add(rva),
+                        size,
+                    });
+                }
+            }
+        }
+        self.resources = found;
+        Ok(())
+    }
+
+    /// Entries of one directory: identifier, and the address of the
+    /// subdirectory it leads to (`None` for a data entry).
+    fn resource_entries(&self, root: u32, directory: u32) -> Result<Vec<(ResourceId, Option<u32>)>, PeError> {
+        const WHAT: &str = "resource directory";
+        let counts = self.need_u32(directory + 12, WHAT)?;
+        let count = (counts & 0xFFFF) + (counts >> 16);
+        if count > 0x1_0000 {
+            return Err(PeError::Unsupported(
+                "resource directory with too many entries".into(),
+            ));
+        }
+        let mut entries = Vec::with_capacity(count as usize);
+        for n in 0..count {
+            let entry = directory + 16 + 8 * n;
+            let id = self.need_u32(entry, WHAT)?;
+            let target = self.need_u32(entry + 4, WHAT)?;
+            let id = if id & 0x8000_0000 != 0 {
+                // A length-prefixed UTF-16 string.
+                let at = root.wrapping_add(id & 0x7FFF_FFFF);
+                let len = self.need_u32(at, WHAT)? & 0xFFFF;
+                let mut units = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    units.push(self.need_u32(at + 2 + 2 * i, WHAT)? as u16);
+                }
+                ResourceId::Name(String::from_utf16_lossy(&units))
+            } else {
+                ResourceId::Id(id as u16)
+            };
+            let subdirectory = (target & 0x8000_0000 != 0).then(|| root.wrapping_add(target & 0x7FFF_FFFF));
+            entries.push((id, subdirectory));
+        }
+        Ok(entries)
+    }
+
+    fn resource_leaf(&self, root: u32, directory: u32, wanted: &ResourceId) -> Result<u32, PeError> {
+        const WHAT: &str = "resource directory";
+        let counts = self.need_u32(directory + 12, WHAT)?;
+        let count = (counts & 0xFFFF) + (counts >> 16);
+        for (n, (id, _)) in self
+            .resource_entries(root, directory)?
+            .iter()
+            .enumerate()
+            .take(count as usize)
+        {
+            if id == wanted {
+                let target = self.need_u32(directory + 16 + 8 * n as u32 + 4, WHAT)?;
+                return Ok(root.wrapping_add(target & 0x7FFF_FFFF));
+            }
+        }
+        Err(PeError::Truncated(WHAT))
+    }
+
+    /// Finds a resource by type and name, in any language. Names compare
+    /// without regard to case, as the resource functions do.
+    pub fn resource(&self, kind: &ResourceId, name: &ResourceId) -> Option<&Resource> {
+        self.resources
+            .iter()
+            .find(|r| r.kind.matches(kind) && r.name.matches(name))
+    }
+}
+
+/// Identifier of a resource type or of a resource: a number or a name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceId {
+    Id(u16),
+    Name(String),
+}
+
+impl ResourceId {
+    pub fn matches(&self, other: &ResourceId) -> bool {
+        match (self, other) {
+            (ResourceId::Id(a), ResourceId::Id(b)) => a == b,
+            (ResourceId::Name(a), ResourceId::Name(b)) => a.eq_ignore_ascii_case(b),
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Display for ResourceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ResourceId::Id(id) => write!(f, "#{id}"),
+            ResourceId::Name(name) => write!(f, "{name:?}"),
+        }
+    }
+}
+
+/// One resource: its data stays in the image, addressed by `va`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resource {
+    pub kind: ResourceId,
+    pub name: ResourceId,
+    pub language: u16,
+    pub va: u32,
+    pub size: u32,
+}
+
+/// Standard resource types (`RT_*`).
+pub mod resource_type {
+    pub const CURSOR: u16 = 1;
+    pub const BITMAP: u16 = 2;
+    pub const ICON: u16 = 3;
+    pub const MENU: u16 = 4;
+    pub const DIALOG: u16 = 5;
+    pub const STRING: u16 = 6;
+    pub const ACCELERATOR: u16 = 9;
+    pub const GROUP_CURSOR: u16 = 12;
+    pub const GROUP_ICON: u16 = 14;
+
+    pub fn name(kind: u16) -> &'static str {
+        match kind {
+            CURSOR => "cursor",
+            BITMAP => "bitmap",
+            ICON => "icon",
+            MENU => "menu",
+            DIALOG => "dialog",
+            STRING => "string table",
+            ACCELERATOR => "accelerators",
+            GROUP_CURSOR => "cursor group",
+            GROUP_ICON => "icon group",
+            16 => "version",
+            _ => "other",
+        }
+    }
 }
 
 /// Bounds-checked little-endian reads on the raw file.
@@ -363,6 +527,57 @@ mod tests {
         dos[1] = b'Z';
         dos[0x3C] = 0x40;
         assert_eq!(Image::parse(&dos).unwrap_err(), PeError::BadMagic("PE signature"));
+    }
+
+    #[test]
+    fn walks_the_resource_directory() {
+        // One resource: type #5 (dialog), name "MAIN", language 0x409, 3 bytes at RVA 0x2080.
+        let mut rsrc = vec![0u8; 0x100];
+        let mut put = |at: usize, value: u32| rsrc[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        put(0x0C, 1 << 16); // root: one id entry
+        put(0x10, 5);
+        put(0x14, 0x8000_0020);
+        put(0x2C, 1); // type directory: one named entry
+        put(0x30, 0x8000_0060);
+        put(0x34, 0x8000_0040);
+        put(0x4C, 1 << 16); // name directory: one id entry
+        put(0x50, 0x409);
+        put(0x54, 0x70);
+        put(0x70, 0x2080); // data descriptor: rva, size
+        put(0x74, 3);
+        rsrc[0x60..0x6A].copy_from_slice(&[4, 0, b'M', 0, b'A', 0, b'I', 0, b'N', 0]);
+        let mut image = Image {
+            base: 0x40_0000,
+            sections: vec![Section {
+                name: ".rsrc".into(),
+                va: 0x40_2000,
+                virtual_size: 0x100,
+                flags: 0,
+                data: rsrc,
+            }],
+            ..Image::default()
+        };
+        image.parse_resources(0x40_2000).unwrap();
+        assert_eq!(
+            image.resources,
+            [Resource {
+                kind: ResourceId::Id(5),
+                name: ResourceId::Name("MAIN".into()),
+                language: 0x409,
+                va: 0x40_2080,
+                size: 3,
+            }]
+        );
+        let found = image.resource(
+            &ResourceId::Id(resource_type::DIALOG),
+            &ResourceId::Name("main".into()),
+        );
+        assert_eq!(found.map(|r| r.va), Some(0x40_2080));
+        assert!(
+            image
+                .resource(&ResourceId::Id(4), &ResourceId::Name("main".into()))
+                .is_none()
+        );
     }
 
     #[test]

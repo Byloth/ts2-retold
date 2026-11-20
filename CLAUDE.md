@@ -54,8 +54,12 @@ Talk to the user in **Italian**. Code, comments, commit messages and docs are in
 - Commit after each completed task with a clear message.
 - No large downloads without asking.
 - Roadmap phases are strictly ordered; each has a gate (see `docs/BRIEF.md`).
-- **Quality and performance over speed of delivery.** No deadlines. Prefer the
-  correct, measured solution to the quick one.
+- **Quality and performance come first; this is the owner's most important
+  requirement.** No deadlines. No cheap solutions, shortcuts, workarounds or
+  quick-and-dirty code: model the real behaviour, measure, and do it properly
+  even when it takes much longer. A host function either implements the
+  documented behaviour or stops the machine naming what is missing; it never
+  returns a made-up value to get past a call.
 - **Every deviation from the original game's behaviour is a named, catalogued,
   individually toggleable modification** (ADR 0004). The faithful baseline must
   always remain reachable by switching all of them off.

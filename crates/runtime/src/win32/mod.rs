@@ -1,0 +1,128 @@
+//! Replacement for the Windows API functions the game calls.
+//!
+//! Functions are added as execution reaches them; an import without an
+//! implementation stops the machine and names itself. Each handler receives
+//! its arguments as raw 32-bit values read from the guest stack, in
+//! declaration order, and returns the value for `eax`.
+//!
+//! The machine presents itself as Windows 98, the system the game was
+//! released for (ADR 0011).
+
+mod advapi32;
+mod gdi32;
+mod kernel32;
+mod ole32;
+pub mod user32;
+mod winmm;
+
+use crate::{Machine, Stop};
+
+pub type HostResult = Result<u32, Stop>;
+pub type Handler = fn(&mut Machine, &[u32]) -> HostResult;
+
+pub struct Function {
+    pub dll: &'static str,
+    pub name: &'static str,
+    /// Number of 32-bit arguments the function removes from the stack.
+    pub args: u8,
+    pub handler: Handler,
+}
+
+/// What a handler may return: a plain value, or a result when it can stop
+/// the machine (by calling back into the program, or by ending it).
+pub trait IntoHostResult {
+    fn into_host_result(self) -> HostResult;
+}
+
+impl IntoHostResult for u32 {
+    fn into_host_result(self) -> HostResult {
+        Ok(self)
+    }
+}
+
+impl IntoHostResult for HostResult {
+    fn into_host_result(self) -> HostResult {
+        self
+    }
+}
+
+/// Gives a handler written as a closure its argument types.
+#[inline(always)]
+pub(crate) fn invoke<R: IntoHostResult>(
+    handler: impl Fn(&mut Machine, &[u32]) -> R,
+    machine: &mut Machine,
+    args: &[u32],
+) -> HostResult {
+    handler(machine, args).into_host_result()
+}
+
+/// Declares the functions of one DLL as a table of `Name(argument count) => handler`.
+macro_rules! functions {
+    ($dll:literal; $($name:ident($args:literal) => $handler:expr,)*) => {
+        pub(super) static FUNCTIONS: &[$crate::win32::Function] = &[$(
+            $crate::win32::Function {
+                dll: $dll,
+                name: stringify!($name),
+                args: $args,
+                handler: {
+                    fn handler(m: &mut $crate::Machine, a: &[u32]) -> $crate::win32::HostResult {
+                        $crate::win32::invoke($handler, m, a)
+                    }
+                    handler
+                },
+            },
+        )*];
+    };
+}
+pub(crate) use functions;
+
+pub fn lookup(dll: &str, name: &str) -> Option<&'static Function> {
+    [
+        kernel32::FUNCTIONS,
+        advapi32::FUNCTIONS,
+        user32::FUNCTIONS,
+        gdi32::FUNCTIONS,
+        winmm::FUNCTIONS,
+        ole32::FUNCTIONS,
+    ]
+    .into_iter()
+    .flatten()
+    .find(|f| f.name == name && f.dll.eq_ignore_ascii_case(dll))
+}
+
+pub(crate) const ERROR_FILE_NOT_FOUND: u32 = 2;
+pub(crate) const ERROR_CALL_NOT_IMPLEMENTED: u32 = 120;
+
+/// Reading and writing the program's data from host functions.
+impl Machine {
+    /// A NUL-terminated string, for display.
+    pub(crate) fn text(&mut self, address: u32) -> String {
+        self.memory
+            .c_string(address, 4096)
+            .unwrap_or_else(|| format!("<bad pointer {address:#x}>"))
+    }
+
+    /// The bytes of a NUL-terminated string, terminator excluded.
+    pub(crate) fn bytes(&mut self, address: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        while let Some(byte) = self.memory.read_u8(address.wrapping_add(bytes.len() as u32)) {
+            if byte == 0 {
+                break;
+            }
+            bytes.push(byte);
+        }
+        bytes
+    }
+
+    /// Writes a string and its terminator, truncating to `capacity` bytes.
+    /// Returns the number of characters written, terminator excluded.
+    pub(crate) fn put_string(&mut self, address: u32, capacity: u32, text: &[u8]) -> u32 {
+        if capacity == 0 {
+            return 0;
+        }
+        let len = text.len().min(capacity as usize - 1);
+        let ok = self.memory.load(address, &text[..len]).is_some()
+            && self.memory.load(address + len as u32, &[0]).is_some();
+        if ok { len as u32 } else { 0 }
+    }
+}
