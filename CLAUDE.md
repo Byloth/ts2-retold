@@ -69,6 +69,11 @@ Talk to the user in **Italian**. Code, comments, commit messages and docs are in
   even when it takes much longer. A host function either implements the
   documented behaviour or stops the machine naming what is missing; it never
   returns a made-up value to get past a call.
+- **No workarounds, ever.** The cleanest mechanism is the only acceptable one.
+  The example to remember: the start-up mode-select window was first passed
+  by feeding it synthetic key presses; the owner rejected that outright, and
+  it became a native replacement of the game's function (ADR 0004). When a
+  shortcut suggests itself, build the mechanism it is avoiding.
 - **Every deviation from the original game's behaviour is a named, catalogued,
   individually toggleable modification** (ADR 0004). The faithful baseline must
   always remain reachable by switching all of them off.
