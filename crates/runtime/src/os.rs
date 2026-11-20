@@ -11,7 +11,7 @@ use crate::mods::Modifications;
 use crate::win32::com::Com;
 use crate::win32::gdi32::Gdi;
 use crate::win32::user32::User;
-use crate::win32::{ddraw, dsound, winmm};
+use crate::win32::{ddraw, dinput, dsound, winmm};
 
 const HEAP_START: u32 = 0x1000_0000;
 const HEAP_LIMIT: u32 = 0x4000_0000;
@@ -50,6 +50,9 @@ pub struct Os {
     pub(crate) com: Com,
     pub(crate) ddraw: ddraw::State,
     pub(crate) dsound: dsound::State,
+    pub(crate) dinput: dinput::State,
+    /// What the keyboard and mouse are doing; written by the embedder.
+    pub input: dinput::Input,
     pub(crate) mmio: winmm::State,
     pub(crate) movable_blocks: Vec<crate::win32::kernel32::MovableBlock>,
     /// Open registry keys: handle to lower-case path.

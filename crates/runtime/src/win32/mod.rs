@@ -12,6 +12,7 @@ mod advapi32;
 pub mod com;
 pub mod d3d;
 pub mod ddraw;
+pub mod dinput;
 pub mod dsound;
 pub mod gdi32;
 pub(crate) mod kernel32;
@@ -95,6 +96,7 @@ pub fn lookup(dll: &str, name: &str) -> Option<&'static Function> {
         kernel32::FUNCTIONS,
         ddraw::FUNCTIONS,
         dsound::FUNCTIONS,
+        dinput::FUNCTIONS,
         advapi32::FUNCTIONS,
         user32::FUNCTIONS,
         gdi32::FUNCTIONS,

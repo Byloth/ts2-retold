@@ -69,6 +69,10 @@ Talk to the user in **Italian**. Code, comments, commit messages and docs are in
   even when it takes much longer. A host function either implements the
   documented behaviour or stops the machine naming what is missing; it never
   returns a made-up value to get past a call.
+- **Constants come from the reference, not from memory.** Error codes, flag
+  values, structure offsets and method orders are checked against the headers
+  in `ref/dx` (or another named source) when they are written. Several
+  Direct3D error codes first written from memory were wrong.
 - **No workarounds, ever.** The cleanest mechanism is the only acceptable one.
   The example to remember: the start-up mode-select window was first passed
   by feeding it synthetic key presses; the owner rejected that outright, and

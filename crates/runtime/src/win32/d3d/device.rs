@@ -26,14 +26,20 @@ pub struct Device {
     in_scene: bool,
     /// `D3DRENDERSTATE` values by number.
     render_states: [u32; 256],
+    /// `D3DLIGHTSTATE` values by number: material handle, ambient light,
+    /// colour model, fog mode and range.
+    light_states: [u32; LIGHT_STATES],
+    /// The texture surface selected into each stage.
+    textures: [Option<usize>; STAGES],
     /// `D3DTEXTURESTAGESTATE` values of each stage, by number.
     stage_states: [[u32; STAGE_STATES]; STAGES],
 }
 
+const LIGHT_STATES: usize = 16;
 const STAGES: usize = 8;
 const STAGE_STATES: usize = 32;
-const D3DERR_SCENE_IN_SCENE: u32 = 0x8876_02E0 + 0x20;
-const D3DERR_SCENE_NOT_IN_SCENE: u32 = 0x8876_02E0 + 0x21;
+const D3DERR_SCENE_IN_SCENE: u32 = ddraw::dd_error(760);
+const D3DERR_SCENE_NOT_IN_SCENE: u32 = ddraw::dd_error(761);
 
 /// Render states as a device starts with them under DirectX 6.
 fn default_render_states(has_depth: bool) -> [u32; 256] {
@@ -63,6 +69,22 @@ fn default_render_states(has_depth: bool) -> [u32; 256] {
         states[state] = value;
     }
     states
+}
+
+/// Light states as a device starts with them: no material, no ambient
+/// light, the RGB colour model, no vertex fog, fog from 1.0 to 100.0.
+fn default_light_states() -> [u32; LIGHT_STATES] {
+    let mut states = [0; LIGHT_STATES];
+    states[3] = 2; // COLORMODEL: RGB
+    states[5] = 1.0f32.to_bits(); // FOGSTART
+    states[6] = 100.0f32.to_bits(); // FOGEND
+    states[7] = 1.0f32.to_bits(); // FOGDENSITY
+    states
+}
+
+/// Whether an interface pointer names a device still in use.
+pub(super) fn is_device(m: &mut Machine, this: u32) -> bool {
+    m.device_index(this).is_some()
 }
 
 /// Texture stage states as a device starts with them: stage 0 modulates the
@@ -130,6 +152,8 @@ pub(super) fn create_device(m: &mut Machine, a: &[u32]) -> HostResult {
         current_viewport: None,
         in_scene: false,
         render_states: default_render_states(depth.is_some()),
+        light_states: default_light_states(),
+        textures: [None; STAGES],
         stage_states: default_stage_states(),
     });
     if cooperative_level & DDSCL_FPUPRESERVE == 0 {
@@ -177,7 +201,7 @@ fn get_caps(m: &mut Machine, a: &[u32]) -> u32 {
     for (address, description) in [(a[1], super::caps::hardware()), (a[2], super::caps::emulation())] {
         // The caller's size selects how much of the description it gets.
         let size = m.memory.read(address, 4).unwrap_or(0) as usize;
-        if size < 4 || size > 4 * super::caps::WORDS || size % 4 != 0 {
+        if !(4..=4 * super::caps::WORDS).contains(&size) || !size.is_multiple_of(4) {
             return DDERR_INVALIDPARAMS;
         }
         let mut words = description;
@@ -243,6 +267,47 @@ fn get_render_state(m: &mut Machine, a: &[u32]) -> u32 {
     if m.memory.write(a[2], 4, value).is_some() { DD_OK } else { DDERR_INVALIDPARAMS }
 }
 
+fn set_light_state(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
+    // Light states are numbered from 1.
+    match m.os.ddraw.devices[index].light_states.get_mut(a[1] as usize).filter(|_| a[1] != 0) {
+        Some(state) => {
+            *state = a[2];
+            DD_OK
+        }
+        None => DDERR_INVALIDPARAMS,
+    }
+}
+
+fn get_light_state(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
+    let Some(&value) = m.os.ddraw.devices[index].light_states.get(a[1] as usize).filter(|_| a[1] != 0) else {
+        return DDERR_INVALIDPARAMS;
+    };
+    if m.memory.write(a[2], 4, value).is_some() { DD_OK } else { DDERR_INVALIDPARAMS }
+}
+
+fn set_texture(m: &mut Machine, a: &[u32]) -> u32 {
+    let (stage, texture) = (a[1] as usize, a[2]);
+    let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
+    // A null pointer takes the texture out of the stage.
+    let selected = if texture == 0 {
+        None
+    } else {
+        match m.texture_index(texture) {
+            Some(surface) => Some(surface),
+            None => return DDERR_INVALIDOBJECT,
+        }
+    };
+    match m.os.ddraw.devices[index].textures.get_mut(stage) {
+        Some(slot) => {
+            *slot = selected;
+            DD_OK
+        }
+        None => DDERR_INVALIDPARAMS,
+    }
+}
+
 fn stage_state<'m>(m: &'m mut Machine, a: &[u32]) -> Option<&'m mut u32> {
     let index = m.device_index(a[0])?;
     m.os.ddraw.devices[index].stage_states.get_mut(a[1] as usize)?.get_mut(a[2] as usize)
@@ -287,8 +352,8 @@ interface! { static DEVICE_3 = "IDirect3DDevice3";
     End(2),
     GetRenderState(3) => get_render_state,
     SetRenderState(3) => set_render_state,
-    GetLightState(3),
-    SetLightState(3),
+    GetLightState(3) => get_light_state,
+    SetLightState(3) => set_light_state,
     SetTransform(3),
     GetTransform(3),
     MultiplyTransform(3),
@@ -302,7 +367,7 @@ interface! { static DEVICE_3 = "IDirect3DDevice3";
     DrawIndexedPrimitiveVB(6),
     ComputeSphereVisibility(6),
     GetTexture(3),
-    SetTexture(3),
+    SetTexture(3) => set_texture,
     GetTextureStageState(4) => get_texture_stage_state,
     SetTextureStageState(4) => set_texture_stage_state,
     ValidateDevice(2),

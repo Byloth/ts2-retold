@@ -21,7 +21,8 @@ pub const DDERR_INVALIDDIRECTDRAWGUID: u32 = dd_error(561);
 pub const DDERR_NOEXCLUSIVEMODE: u32 = dd_error(225);
 pub const DDERR_EXCLUSIVEMODEALREADYSET: u32 = dd_error(581);
 
-const fn dd_error(code: u32) -> u32 {
+/// A DirectDraw or Direct3D failure code (`MAKE_DDHRESULT`).
+pub(crate) const fn dd_error(code: u32) -> u32 {
     0x8876_0000 | code
 }
 
@@ -95,6 +96,8 @@ pub struct State {
     pub(crate) surfaces: Vec<surface::Surface>,
     pub(crate) devices: Vec<d3d::device::Device>,
     pub(crate) viewports: Vec<d3d::viewport::Viewport>,
+    pub(crate) materials: Vec<d3d::material::Material>,
+    pub(crate) vertex_buffers: Vec<d3d::vertex_buffer::VertexBuffer>,
     /// Whole-surface transfers from memory to the video backend, and back.
     /// The second kind is the expensive one.
     pub uploads: u64,

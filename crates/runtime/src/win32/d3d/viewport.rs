@@ -12,8 +12,8 @@ const IID_IDIRECT3DVIEWPORT3: Guid =
     guid(0xB0AB3B61, 0x33D7, 0x11D1, [0xA9, 0x81, 0x00, 0xC0, 0x4F, 0xD7, 0xB1, 0x74]);
 const CLASS_E_NOAGGREGATION: u32 = 0x8004_0110;
 /// The viewport has not been given its dimensions yet.
-const D3DERR_VIEWPORTDATANOTSET: u32 = 0x8876_02E0 + 0x0A;
-const D3DERR_VIEWPORTHASNODEVICE: u32 = 0x8876_02E0 + 0x0B;
+const D3DERR_VIEWPORTDATANOTSET: u32 = ddraw::dd_error(773);
+const D3DERR_VIEWPORTHASNODEVICE: u32 = ddraw::dd_error(774);
 const D3DCLEAR_TARGET: u32 = 1;
 const D3DCLEAR_ZBUFFER: u32 = 2;
 /// `D3DVIEWPORT2`: size, x, y, width, height, then the clip volume as six floats.

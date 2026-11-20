@@ -27,6 +27,9 @@ const DDERR_NOCOLORKEY: u32 = dd_error(215);
 const DDERR_CANNOTATTACHSURFACE: u32 = dd_error(10);
 const DDERR_NOTFLIPPABLE: u32 = dd_error(582);
 
+/// A texture is a surface seen through this interface.
+const IID_IDIRECT3DTEXTURE2: Guid =
+    guid(0x93281502, 0x8CF8, 0x11D0, [0x89, 0xAB, 0x00, 0xA0, 0xC9, 0x05, 0x41, 0x29]);
 const IID_IDIRECTDRAWSURFACE4: Guid =
     guid(0x0B2B8630, 0xAD35, 0x11D0, [0x8E, 0xA6, 0x00, 0x60, 0x97, 0x97, 0xEA, 0x5B]);
 
@@ -77,6 +80,8 @@ struct Store {
 pub struct Surface {
     references: u32,
     pointer: u32,
+    /// Its `IDirect3DTexture2` interface pointer, once asked for.
+    texture_pointer: u32,
     pub width: u32,
     pub height: u32,
     pub format: PixelFormat,
@@ -121,6 +126,7 @@ impl Machine {
         self.os.ddraw.surfaces.push(Surface {
             references: 1,
             pointer,
+            texture_pointer: 0,
             width,
             height,
             format,
@@ -134,6 +140,13 @@ impl Machine {
             locked: false,
         });
         index
+    }
+
+    /// The surface behind an `IDirect3DTexture2` pointer.
+    pub(crate) fn texture_index(&mut self, this: u32) -> Option<usize> {
+        let index = self.object_index(this)?;
+        let surface = self.os.ddraw.surfaces.get(index)?;
+        (surface.references > 0 && surface.texture_pointer == this).then_some(index)
     }
 
     pub(crate) fn surface_format(&self, index: usize) -> PixelFormat {
@@ -382,16 +395,33 @@ pub(super) fn create_surface(m: &mut Machine, a: &[u32]) -> HostResult {
     Ok(if m.memory.write(out, 4, pointer).is_some() { DD_OK } else { DDERR_INVALIDPARAMS })
 }
 
-fn query_interface(m: &mut Machine, a: &[u32]) -> u32 {
-    let Some(wanted) = m.read_guid(a[1]) else { return DDERR_INVALIDPARAMS };
-    let Some(index) = m.surface_index(a[0]) else { return DDERR_INVALIDOBJECT };
-    if wanted != IID_IUNKNOWN && wanted != IID_IDIRECTDRAWSURFACE4 {
-        m.note(|| format!("interface {} not offered", super::format_guid(&wanted)));
-        let _ = m.memory.write(a[2], 4, 0);
-        return E_NOINTERFACE;
-    }
+/// `QueryInterface` of a surface, reached through either of its interfaces.
+fn query(m: &mut Machine, index: usize, wanted_at: u32, out: u32) -> u32 {
+    let Some(wanted) = m.read_guid(wanted_at) else { return DDERR_INVALIDPARAMS };
+    let pointer = match wanted {
+        IID_IUNKNOWN | IID_IDIRECTDRAWSURFACE4 => m.os.ddraw.surfaces[index].pointer,
+        IID_IDIRECT3DTEXTURE2 if m.os.ddraw.surfaces[index].caps & DDSCAPS_TEXTURE != 0 => {
+            if m.os.ddraw.surfaces[index].texture_pointer == 0 {
+                let pointer = m.interface_pointer(&TEXTURE_2, index as u32);
+                m.os.ddraw.surfaces[index].texture_pointer = pointer;
+            }
+            m.os.ddraw.surfaces[index].texture_pointer
+        }
+        _ => {
+            m.note(|| format!("interface {} not offered", super::format_guid(&wanted)));
+            let _ = m.memory.write(out, 4, 0);
+            return E_NOINTERFACE;
+        }
+    };
     m.os.ddraw.surfaces[index].references += 1;
-    if m.memory.write(a[2], 4, a[0]).is_some() { S_OK } else { DDERR_INVALIDPARAMS }
+    if m.memory.write(out, 4, pointer).is_some() { S_OK } else { DDERR_INVALIDPARAMS }
+}
+
+fn query_interface(m: &mut Machine, a: &[u32]) -> u32 {
+    match m.surface_index(a[0]) {
+        Some(index) => query(m, index, a[1], a[2]),
+        None => DDERR_INVALIDOBJECT,
+    }
 }
 
 fn add_ref(m: &mut Machine, a: &[u32]) -> u32 {
@@ -662,6 +692,59 @@ interface! { static SURFACE_4 = "IDirectDrawSurface4";
     FreePrivateData(2),
     GetUniquenessValue(2),
     ChangeUniquenessValue(1),
+}
+
+// --- IDirect3DTexture2 ----------------------------------------------------
+
+fn texture_query_interface(m: &mut Machine, a: &[u32]) -> u32 {
+    match m.texture_index(a[0]) {
+        Some(index) => query(m, index, a[1], a[2]),
+        None => DDERR_INVALIDOBJECT,
+    }
+}
+
+fn texture_add_ref(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(index) = m.texture_index(a[0]) else { return 0 };
+    m.add_surface_reference(index);
+    m.os.ddraw.surfaces[index].references
+}
+
+fn texture_release(m: &mut Machine, a: &[u32]) -> u32 {
+    match m.texture_index(a[0]) {
+        Some(index) => m.release_surface(index),
+        None => 0,
+    }
+}
+
+/// `IDirect3DTexture2::Load`: fills this texture from another one, the way
+/// a program moves a texture it prepared in system memory to the card.
+fn texture_load(m: &mut Machine, a: &[u32]) -> HostResult {
+    let (Some(target), Some(source)) = (m.texture_index(a[0]), m.texture_index(a[1])) else {
+        return Ok(DDERR_INVALIDOBJECT);
+    };
+    let (to, from) = (&m.os.ddraw.surfaces[target], &m.os.ddraw.surfaces[source]);
+    if to.locked || from.locked {
+        return Ok(DDERR_SURFACEBUSY);
+    }
+    if to.format != from.format || (to.width, to.height) != (from.width, from.height) {
+        return Err(Stop::Unimplemented {
+            dll: "IDirect3DTexture2".into(),
+            name: "Load between textures of different size or format".into(),
+        });
+    }
+    let (area, key) = (from.area(), from.source_color_key);
+    m.copy_surface(source, area, target, area, None);
+    m.os.ddraw.surfaces[target].source_color_key = key;
+    Ok(DD_OK)
+}
+
+interface! { static TEXTURE_2 = "IDirect3DTexture2";
+    QueryInterface(3) => texture_query_interface,
+    AddRef(1) => texture_add_ref,
+    Release(1) => texture_release,
+    GetHandle(3),
+    PaletteChanged(3),
+    Load(2) => texture_load,
 }
 
 #[cfg(test)]

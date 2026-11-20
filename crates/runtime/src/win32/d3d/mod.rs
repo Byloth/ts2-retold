@@ -3,6 +3,8 @@
 
 pub mod caps;
 pub mod device;
+pub mod material;
+pub mod vertex_buffer;
 pub mod viewport;
 
 use super::HostResult;
@@ -149,11 +151,11 @@ interface! { pub(crate) static DIRECT_3D_3 = "IDirect3D3";
     Release(1) => ddraw::release,
     EnumDevices(3) => enum_devices,
     CreateLight(3),
-    CreateMaterial(3),
+    CreateMaterial(3) => material::create_material,
     CreateViewport(3) => viewport::create_viewport,
     FindDevice(3) => find_device,
     CreateDevice(5) => device::create_device,
-    CreateVertexBuffer(5),
+    CreateVertexBuffer(5) => vertex_buffer::create_vertex_buffer,
     EnumZBufferFormats(4) => enum_z_buffer_formats,
     EvictManagedTextures(1),
 }
