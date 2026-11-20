@@ -40,6 +40,14 @@ const DDSCL_EXCLUSIVE: u32 = 0x0010;
 pub(crate) const DDENUMRET_OK: u32 = 1;
 /// Refresh rate of every mode, in hertz.
 const DISPLAY_REFRESH_RATE: u32 = 60;
+
+/// The clock value, in milliseconds, of the first vertical blank after
+/// `now_ms`: the display draws `DISPLAY_REFRESH_RATE` pictures a second,
+/// counted from the machine's start.
+pub(crate) fn next_vertical_blank(now_ms: u64) -> u64 {
+    let rate = DISPLAY_REFRESH_RATE as u64;
+    ((now_ms * rate / 1000 + 1) * 1000).div_ceil(rate)
+}
 const DDEDM_REFRESHRATES: u32 = 0x1;
 
 /// `DDSURFACEDESC`, as an array of 27 words. All its fields are 32 bits wide.
@@ -119,6 +127,11 @@ pub struct State {
     pub downloads: u64,
     /// Frames shown by flipping.
     pub frames: u64,
+    /// The vertical blank at which the last flip takes place: until then
+    /// the display is still showing the picture before it.
+    pub(crate) flip_due: Option<u64>,
+    /// A `Flip` is waiting for that moment.
+    pub(crate) flip_waiting: bool,
     pub statistics: Statistics,
 }
 

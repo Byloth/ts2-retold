@@ -14,9 +14,17 @@ cargo run --release --bin andy -- boot --trace
 **It no longer stops by itself.** After the movies and the title screen
 ("PRESS JUMP"), which fades out when nobody presses anything, the game
 plays its demo: Andy's room in three dimensions, Buzz running, "DEMO MODE"
-and the energy display on top. Run to 1260 million instructions it has
-shown 4313 frames, the last 141 of the demo at about 4,500 triangles each
-(37 draw states in all).
+and the energy display on top, at about 4,500 triangles a frame.
+
+**It shows 60 pictures a second and no more.** `Flip` takes place at the
+display's next vertical blank and the next one waits for it, as DirectDraw
+does with a display in exclusive mode; the game itself does not limit its
+pace and relies on this. (Before this was modelled it showed about 190
+pictures in a second of its clock, and hundreds of thousands at a screen
+that only waits for a key.) Because the clock also passes while the game
+waits, `andy boot` takes `--seconds` beside `--limit`: a screen waiting for
+a key runs almost no instructions, and the instruction limit alone would
+never end the run.
 
 `andy play` runs the game in a window at the pace of its own clock, with
 the keyboard as its input.
@@ -26,7 +34,13 @@ saying `3700 press SPACE` and `3706 release SPACE` presses "jump" at the
 title screen and brings up the main menu (START GAME, OPTIONS, LOAD GAME,
 MOVIE VIEWER, EXIT), which the game then draws for as long as it is left. A
 second press chooses START GAME: the level map appears, drawn as an Etch
-A Sketch, and the view flies to "ANDY'S HOUSE" through grey fog.
+A Sketch, and the view flies to "ANDY'S HOUSE" through grey fog. A third
+press (`5000 press SPACE`) enters the level: its introduction is played as a
+movie, the loading screen ("LEVEL 1: ANDY'S HOUSE", "PRESS JUMP") waits,
+and a fourth press (`7000 press SPACE`) starts **the first level**: Andy's
+room, Buzz standing in it and turning his head, a toy helicopter flying
+about, at some 3,500 triangles a frame (51 draw states in all by then).
+Left alone for two minutes of its clock it goes on without stopping.
 
 The pictures look right as far as can be told without the original beside
 them: the room, Buzz, an enemy robot, the lives, coins and battery
@@ -154,7 +168,7 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-Going through the menu into a level with recorded input. A comparison
-with the original, when the owner can supply pictures of it. Sound output
-with the Layer II audio decoder (movies are silent, like all sound so
-far); and a window, which will supply input and present the picture.
+Playing the first level, in the window and with recordings that move
+Buzz. A comparison with the original, when the owner can supply pictures
+of it. Sound output with the Layer II audio decoder (movies are silent,
+like all sound so far).

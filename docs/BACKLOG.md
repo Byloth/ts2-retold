@@ -111,8 +111,15 @@ out of here into the roadmap or an ADR when work on them starts.
   and synchronous `Update` are implemented.
 - **Sound is not heard.** DirectSound buffers hold their samples and their
   play cursors advance, but nothing mixes them to an output yet.
-- **Input comes only from recordings** (ADR 0017): keyboard, by file. No
-  window supplies it live yet, and mouse and joystick have no events.
+- **Input** (ADR 0017) is the keyboard, from a recording or from the
+  window; mouse and joystick have no events.
+- **A pending flip holds back only the next flip.** On real drivers a lock
+  or a blit on the surfaces being flipped could also wait or answer
+  `DDERR_WASSTILLDRAWING` until the vertical blank; which did, and when, is
+  `UNVERIFIED`, and the game has not been seen to depend on it. The picture
+  is handed to the video backend when `Flip` is called, not at the blank.
+  `WaitForVerticalBlank`, `GetScanLine` and `GetVerticalBlankStatus` stop
+  the machine by name.
 - **x87 state save/restore** (`fnsave`, `frstor`, `fnstenv`, `fldenv`) is not
   implemented (ADR 0010).
 - **The streaming thread is run as the game wrote it**, by a scheduler that

@@ -14,6 +14,7 @@ use super::{
     DD_OK, DDERR_INVALIDOBJECT, DDERR_INVALIDPARAMS, DDERR_NOEXCLUSIVEMODE, DDERR_NOTFOUND, DDSCL_EXCLUSIVE,
     dd_error,
 };
+use crate::threads::Waiting;
 use crate::video::{PixelFormat, Rect, SurfaceId, copy_pixels, fill_pixels};
 use crate::win32::HostResult;
 use crate::win32::com::{E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
@@ -65,6 +66,7 @@ const DDBLTFAST_SRCCOLORKEY: u32 = 0x1;
 const DDBLTFAST_WAIT: u32 = 0x10;
 const DDCKEY_SRCBLT: u32 = 0x8;
 const DDFLIP_WAIT: u32 = 0x1;
+const DDERR_WASSTILLDRAWING: u32 = dd_error(540);
 /// Position of the fill colour (or depth) in `DDBLTFX`, in words.
 const BLTFX_FILL: u32 = 20;
 
@@ -727,6 +729,23 @@ fn flip(m: &mut Machine, a: &[u32]) -> HostResult {
     if surfaces[front].locked || surfaces[back].locked {
         return Ok(DDERR_SURFACEBUSY);
     }
+    // A flip takes place at the display's next vertical blank. Until the
+    // one before it has, another cannot be accepted: the call waits if it
+    // was asked to, and otherwise says that the display is still busy. So
+    // a program that flips in a loop shows as many pictures a second as
+    // the display draws, and no more.
+    let now = m.clock_ms();
+    if let Some(due) = m.os.ddraw.flip_due.filter(|&due| m.os.ddraw.flip_waiting || now < due) {
+        if flags & DDFLIP_WAIT == 0 {
+            return Ok(DDERR_WASSTILLDRAWING);
+        }
+        // The wait puts the thread to sleep and has this function called
+        // again when the time has passed; that call ends the wait.
+        m.os.ddraw.flip_waiting = true;
+        m.wait(Waiting::Time, due.saturating_sub(now) as u32)?;
+        m.os.ddraw.flip_waiting = false;
+    }
+    m.os.ddraw.flip_due = Some(super::next_vertical_blank(m.clock_ms()));
     // What was drawn to the back buffer becomes what the screen shows, and
     // the old front contents become the new back buffer.
     let shown = m.ensure_video(back);
@@ -963,6 +982,15 @@ mod tests {
         assert_eq!(frame_pixel(&m, 639, 479), 0x001F);
         // One transfer to the video side, none back.
         assert_eq!((m.os.ddraw.uploads, m.os.ddraw.downloads, m.os.ddraw.frames), (1, 0, 1));
+        // The flip takes place at the next vertical blank; before it no
+        // other is accepted.
+        assert_eq!(m.os.ddraw.flip_due, Some(17));
+        assert_eq!(m.method(front, FLIP, &[0, 0]), DDERR_WASSTILLDRAWING);
+        assert_eq!(m.os.ddraw.frames, 1);
+        assert_eq!(
+            [0, 16, 17, 33, 34, 49, 50, 999, 1000].map(crate::win32::ddraw::next_vertical_blank),
+            [17, 17, 34, 34, 50, 50, 67, 1000, 1017]
+        );
 
         // The back buffer now holds the old front contents: untouched zeros.
         assert_eq!(m.method(back, LOCK, &[0, description, DDLOCK_READONLY, 0]), DD_OK);

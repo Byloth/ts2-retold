@@ -22,7 +22,7 @@ andy - recompiler tools
 USAGE:
     andy info    [EXE]              Print the layout of the executable
     andy analyze [EXE] [--json OUT] Discover code and functions
-    andy boot    [EXE] [--trace] [--limit N] [--args TEXT]
+    andy boot    [EXE] [--trace] [--limit N] [--seconds N] [--args TEXT]
                  [--stop-at ADDR] [--dump ADDR:LEN]... [--surfaces DIR]
                  [--gpu] [--frames DIR [--frame-step N]] [--input FILE]
                                     Run the game in the interpreter until it
@@ -38,7 +38,11 @@ USAGE:
                                     --frames writes every Nth frame the
                                     game shows as a PNG file into DIR;
                                     --input plays back recorded input (one
-                                    line per change: READ press|release KEY)
+                                    line per change: READ press|release KEY);
+                                    --limit stops after N instructions,
+                                    --seconds after N seconds of the
+                                    machine's clock (which also passes
+                                    while the game waits)
                                     --with/--without ID switch a modification
     andy play    [EXE] [--args TEXT] [--with/--without ID]
                                     Run the game in a window, with the
@@ -83,6 +87,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut pictures = u64::MAX;
     let mut game_args = String::new();
     let mut limit = 2_000_000_000u64;
+    let mut seconds = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -122,6 +127,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--args" => game_args = args.next().ok_or("--args needs the command line text")?,
             "--limit" => {
                 limit = args.next().and_then(|n| n.parse().ok()).ok_or("--limit needs a number")?;
+            }
+            "--seconds" => {
+                seconds = Some(args.next().and_then(|n| n.parse().ok()).ok_or("--seconds needs a number")?);
             }
             "--rounds" => {
                 rounds = args.next().and_then(|n| n.parse().ok()).ok_or("--rounds needs a number")?;
@@ -185,6 +193,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 game_dir: exe.parent().map(Path::to_path_buf),
                 trace,
                 limit,
+                seconds,
                 game_args,
                 stop_at,
                 dumps,
@@ -235,6 +244,8 @@ struct BootOptions {
     game_dir: Option<PathBuf>,
     trace: bool,
     limit: u64,
+    /// How far the machine's clock may go.
+    seconds: Option<u64>,
     game_args: String,
     stop_at: Option<u32>,
     dumps: Vec<(u32, u32)>,
@@ -264,8 +275,20 @@ fn parse_hex(text: &str) -> Option<u32> {
 }
 
 fn boot(image: &Image, options: BootOptions) {
-    let BootOptions { mods, game_dir, trace, limit, game_args, stop_at, dumps, surfaces, gpu, frames, input } =
-        options;
+    let BootOptions {
+        mods,
+        game_dir,
+        trace,
+        limit,
+        seconds,
+        game_args,
+        stop_at,
+        dumps,
+        surfaces,
+        gpu,
+        frames,
+        input,
+    } = options;
     // The program reads the game directory and writes only to `out/run`.
     let write_dir = PathBuf::from("out/run");
     let log_path = write_dir.join("toy2.log");
@@ -314,7 +337,17 @@ fn boot(image: &Image, options: BootOptions) {
         machine.trace = Some(Vec::new());
     }
     let started = std::time::Instant::now();
-    let stop = machine.run(limit);
+    // The clock passes with the instructions run and while every thread
+    // waits: the first is bounded by the budget, the second by the limit.
+    let clock_limit = seconds.map(|seconds| seconds * 1000);
+    machine.clock_limit = clock_limit;
+    let budget = clock_limit.map_or(limit, |clock| {
+        limit.min(clock.saturating_sub(machine.clock()) * andy_runtime::INSTRUCTIONS_PER_MS)
+    });
+    let stop = match machine.run(budget) {
+        Stop::Budget if budget < limit => Stop::Idle,
+        stop => stop,
+    };
     let elapsed = started.elapsed().as_secs_f64();
 
     if let Some(calls) = machine.trace.take() {
@@ -476,7 +509,7 @@ fn describe(stop: &Stop) -> String {
             format!("callback {address:#x} returned with esp {actual:#x}, expected {expected:#x}")
         }
         Stop::Budget => "instruction limit reached".into(),
-        Stop::Idle => "waiting for time to pass".into(),
+        Stop::Idle => "the limit of the machine's clock reached".into(),
         Stop::Breakpoint => "breakpoint".into(),
         Stop::Deadlock => "every thread is waiting and nothing can wake one".into(),
         Stop::WouldBlock => "internal error: a wait escaped the scheduler".into(),

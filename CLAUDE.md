@@ -129,6 +129,9 @@ export GALLIUM_DRIVER=d3d12 LD_LIBRARY_PATH=/usr/lib/wsl/lib
 cargo run --release --bin andy -- play
 # With recorded input (one change per line: READ press|release KEY)
 cargo run --release --bin andy -- boot --limit 1300000000 --gpu --input out/input/title.txt --frames out/frames --frame-step 25
+# Into the first level. --seconds bounds the machine's clock, which also
+# passes while the game waits for a key (the instruction limit does not).
+cargo run --release --bin andy -- boot --limit 6000000000 --seconds 400 --gpu --input out/input/level.txt --frames out/frames --frame-step 50
 ```
 
 `.venv` is created with `python3 -m venv .venv && .venv/bin/pip install unicorn==2.1.4`.
