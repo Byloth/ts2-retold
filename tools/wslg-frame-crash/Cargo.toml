@@ -1,0 +1,16 @@
+# A minimal program for the crash of WSLg's compositor described in
+# docs/BACKLOG.md: a window with winit's own frame that is filled with one
+# colour through wgpu. Not part of the project's workspace or of any build.
+[package]
+name = "wslg-frame-crash"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+pollster = "1"
+wgpu = "30"
+winit = "0.30"

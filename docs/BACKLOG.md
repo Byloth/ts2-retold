@@ -48,10 +48,20 @@ out of here into the roadmap or an ADR when work on them starts.
   (`sctk-adwaita`, five subsurfaces around the window) makes WSLg's
   compositor (weston 9.0.0-215, WSLg 1.0.79) end with signal 11 about a
   second after it lists those subsurfaces as windows of the RDP shell, so
-  the feature is off and the window there has no title bar. **The cause
-  inside the compositor has not been found**: it leaves no dump or
-  backtrace by default. To do: turn its dumps on, or reproduce it with a
-  minimal program, and read the RDP shell's source; full screen; the mouse and joysticks; trying it on
+  the feature is off and the window there has no title bar. What is established
+  (2026-11-20): it is not the game or its drawing — `tools/wslg-frame-crash`,
+  a window with that frame filled with one colour, brings the compositor
+  down too, though not on every run; in the runs that were traced it fell
+  right after the window took the keyboard, when the frame is drawn again
+  in its active look with buffers of another size. In the compositor's
+  source (`microsoft/weston-mirror`, `backend-rdp/rdprail.c`) a window
+  whose buffer changes size while an update is still pending has its
+  shared buffer destroyed behind an `assert` — the leading suspect, **not
+  proven**: the compositor leaves no backtrace. To prove it: run it with
+  `WESTON_RDP_DEBUG_LEVEL=5` (in `%USERPROFILE%\.wslgconfig`, section
+  `[system-distro-env]`, then `wsl --shutdown`) and read
+  `/mnt/wslg/weston.log` after a crash. Then report it to WSLg with the
+  minimal program, and give the window a frame of the project's own; full screen; the mouse and joysticks; trying it on
   Windows with a real graphics card.
 - **One render pass per frame is not yet reached when the frame mixes
   copies and triangles**: a fill or copy between two batches ends the pass.
