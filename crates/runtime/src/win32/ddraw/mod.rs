@@ -93,6 +93,8 @@ pub struct State {
     /// The desktop's display mode, while the program has changed it.
     desktop: Option<Display>,
     pub(crate) surfaces: Vec<surface::Surface>,
+    pub(crate) devices: Vec<d3d::device::Device>,
+    pub(crate) viewports: Vec<d3d::viewport::Viewport>,
     /// Whole-surface transfers from memory to the video backend, and back.
     /// The second kind is the expensive one.
     pub uploads: u64,
@@ -168,6 +170,11 @@ fn driver_strings(m: &mut Machine) -> (u32, u32) {
         (m.os.string(&mut m.memory, b"Primary Display Driver"), m.os.string(&mut m.memory, b"display"));
     m.os.ddraw.driver_strings = Some(strings);
     strings
+}
+
+/// The flags given to `SetCooperativeLevel` on a DirectDraw object.
+pub(crate) fn cooperative_level(m: &mut Machine, this: u32) -> Option<u32> {
+    m.direct_draw(this).map(|object| object.cooperative_level)
 }
 
 /// Whether an interface pointer names a DirectDraw object still in use.
@@ -406,7 +413,7 @@ fn get_display_mode(m: &mut Machine, a: &[u32], description_words: usize) -> u32
     if m.write_words(a[1], &words[..description_words]) { DD_OK } else { DDERR_INVALIDPARAMS }
 }
 
-fn format_guid(g: &Guid) -> String {
+pub(crate) fn format_guid(g: &Guid) -> String {
     format!(
         "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
         u32::from_le_bytes([g[0], g[1], g[2], g[3]]),

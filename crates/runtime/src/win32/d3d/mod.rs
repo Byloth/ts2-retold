@@ -2,6 +2,8 @@
 //! (`IDirect3D2`, `IDirect3DDevice2` and friends).
 
 pub mod caps;
+pub mod device;
+pub mod viewport;
 
 use super::HostResult;
 use super::com::{Guid, guid, interface};
@@ -13,7 +15,7 @@ pub const IID_IDIRECT3D2: Guid =
 pub const IID_IDIRECT3D3: Guid =
     guid(0xBB223240, 0xE72B, 0x11D0, [0xA9, 0xB4, 0x00, 0xAA, 0x00, 0xC0, 0x99, 0x3E]);
 /// Identifies the hardware device.
-const IID_IDIRECT3DHALDEVICE: Guid =
+pub(crate) const IID_IDIRECT3DHALDEVICE: Guid =
     guid(0x84E63DE0, 0x46AA, 0x11CF, [0x81, 0x6F, 0x00, 0x00, 0xC0, 0x20, 0x15, 0x6E]);
 
 /// Guest copies of the constant data handed to enumeration callbacks.
@@ -148,9 +150,9 @@ interface! { pub(crate) static DIRECT_3D_3 = "IDirect3D3";
     EnumDevices(3) => enum_devices,
     CreateLight(3),
     CreateMaterial(3),
-    CreateViewport(3),
+    CreateViewport(3) => viewport::create_viewport,
     FindDevice(3) => find_device,
-    CreateDevice(5),
+    CreateDevice(5) => device::create_device,
     CreateVertexBuffer(5),
     EnumZBufferFormats(4) => enum_z_buffer_formats,
     EvictManagedTextures(1),

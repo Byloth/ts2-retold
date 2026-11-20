@@ -49,6 +49,27 @@ impl PixelFormat {
         }
     }
 
+    /// The raw pixel of this format nearest to a colour given as
+    /// `0xAARRGGBB`; channels narrower than eight bits keep their top bits.
+    /// Palettes and depth have no colour: the result is zero.
+    pub fn from_argb(self, color: u32) -> u32 {
+        let [blue, green, red, alpha] = color.to_le_bytes().map(u32::from);
+        match self {
+            PixelFormat::Rgb565 => (red >> 3) << 11 | (green >> 2) << 5 | blue >> 3,
+            PixelFormat::Xrgb1555 => (red >> 3) << 10 | (green >> 3) << 5 | blue >> 3,
+            PixelFormat::Argb1555 => (alpha >> 7) << 15 | (red >> 3) << 10 | (green >> 3) << 5 | blue >> 3,
+            PixelFormat::Argb4444 => (alpha >> 4) << 12 | (red >> 4) << 8 | (green >> 4) << 4 | blue >> 4,
+            PixelFormat::Xrgb8888 => color & 0x00FF_FFFF,
+            PixelFormat::Argb8888 => color,
+            PixelFormat::Indexed8 | PixelFormat::Depth16 => 0,
+        }
+    }
+
+    /// The 16-bit depth value for a depth between 0 (near) and 1 (far).
+    pub fn depth16(depth: f32) -> u32 {
+        (depth.clamp(0.0, 1.0) * 65535.0).round() as u32
+    }
+
     /// The eight words of a `DDPIXELFORMAT`: size, flags, FourCC, bit count,
     /// then the red, green, blue and alpha masks (for a depth format: the
     /// depth bit count, stencil bit count, depth mask and stencil mask).
@@ -366,6 +387,14 @@ mod tests {
             assert_eq!(PixelFormat::from_words(&format.to_words()), Some(format));
         }
         assert_eq!(PixelFormat::Rgb565.to_words(), [32, 0x40, 0, 16, 0xF800, 0x07E0, 0x001F, 0]);
+        assert_eq!(PixelFormat::Rgb565.from_argb(0xFFFF_8040), 0xFC08);
+        assert_eq!(PixelFormat::Argb1555.from_argb(0x80FF_FFFF), 0xFFFF);
+        assert_eq!(PixelFormat::Argb4444.from_argb(0x1234_5678), 0x1357);
+        assert_eq!(PixelFormat::Xrgb8888.from_argb(0xFF12_3456), 0x0012_3456);
+        assert_eq!(
+            (PixelFormat::depth16(1.0), PixelFormat::depth16(0.0), PixelFormat::depth16(7.0)),
+            (65535, 0, 65535)
+        );
         // 24-bit RGB is not offered.
         assert_eq!(PixelFormat::from_words(&[32, 0x40, 0, 24, 0xFF0000, 0xFF00, 0xFF, 0]), None);
     }

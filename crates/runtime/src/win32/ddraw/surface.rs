@@ -106,7 +106,7 @@ fn not_implemented(what: String) -> HostResult {
 }
 
 impl Machine {
-    fn surface_index(&mut self, this: u32) -> Option<usize> {
+    pub(crate) fn surface_index(&mut self, this: u32) -> Option<usize> {
         let index = self.object_index(this)?;
         let surface = self.os.ddraw.surfaces.get(index)?;
         (surface.references > 0 && surface.pointer == this).then_some(index)
@@ -134,6 +134,36 @@ impl Machine {
             locked: false,
         });
         index
+    }
+
+    pub(crate) fn surface_format(&self, index: usize) -> PixelFormat {
+        self.os.ddraw.surfaces[index].format
+    }
+
+    /// The surface attached to `index` that has all of the given capabilities.
+    pub(crate) fn attached_surface(&self, index: usize, caps: u32) -> Option<usize> {
+        let surfaces = &self.os.ddraw.surfaces;
+        surfaces[index].attached.iter().copied().find(|&other| surfaces[other].caps & caps == caps)
+    }
+
+    pub(crate) fn add_surface_reference(&mut self, index: usize) {
+        self.os.ddraw.surfaces[index].references += 1;
+    }
+
+    /// Drops one reference to a surface, destroying it with the last.
+    pub(crate) fn release_surface(&mut self, index: usize) -> u32 {
+        let surface = &mut self.os.ddraw.surfaces[index];
+        surface.references -= 1;
+        let remaining = surface.references;
+        if remaining == 0 {
+            // The surface goes, and with it its hold on what is attached to it.
+            let (video, attached) = (surface.store.video, std::mem::take(&mut surface.attached));
+            self.video.destroy_surface(video);
+            for other in attached {
+                self.release_surface(other);
+            }
+        }
+        remaining
     }
 
     /// Brings the memory home of a surface up to date.
@@ -202,7 +232,7 @@ impl Machine {
     }
 
     /// Sets a rectangle of a surface to one raw pixel value.
-    fn fill_surface(&mut self, index: usize, area: Rect, value: u32) {
+    pub(crate) fn fill_surface(&mut self, index: usize, area: Rect, value: u32) {
         let surface = &mut self.os.ddraw.surfaces[index];
         let (store, pitch, size) = (surface.store, surface.pitch, surface.format.bytes_per_pixel());
         if store.video_current {
@@ -372,20 +402,10 @@ fn add_ref(m: &mut Machine, a: &[u32]) -> u32 {
 }
 
 fn release(m: &mut Machine, a: &[u32]) -> u32 {
-    let Some(index) = m.surface_index(a[0]) else { return 0 };
-    let surface = &mut m.os.ddraw.surfaces[index];
-    surface.references -= 1;
-    let remaining = surface.references;
-    if remaining == 0 {
-        // The surface goes, and with it its hold on what is attached to it.
-        let (video, attached) = (surface.store.video, std::mem::take(&mut surface.attached));
-        m.video.destroy_surface(video);
-        for other in attached {
-            let pointer = m.os.ddraw.surfaces[other].pointer;
-            release(m, &[pointer]);
-        }
+    match m.surface_index(a[0]) {
+        Some(index) => m.release_surface(index),
+        None => 0,
     }
-    remaining
 }
 
 fn add_attached_surface(m: &mut Machine, a: &[u32]) -> u32 {
@@ -409,10 +429,7 @@ fn add_attached_surface(m: &mut Machine, a: &[u32]) -> u32 {
 fn get_attached_surface(m: &mut Machine, a: &[u32]) -> u32 {
     let Some(index) = m.surface_index(a[0]) else { return DDERR_INVALIDOBJECT };
     let Some(wanted) = m.memory.read(a[1], 4) else { return DDERR_INVALIDPARAMS };
-    let surfaces = &m.os.ddraw.surfaces;
-    let found =
-        surfaces[index].attached.iter().copied().find(|&other| surfaces[other].caps & wanted == wanted);
-    let Some(other) = found else {
+    let Some(other) = m.attached_surface(index, wanted) else {
         let _ = m.memory.write(a[2], 4, 0);
         return DDERR_NOTFOUND;
     };
@@ -558,8 +575,10 @@ fn flip(m: &mut Machine, a: &[u32]) -> HostResult {
         return not_implemented(format!("Flip with an override or flags {flags:#x}"));
     }
     let surfaces = &m.os.ddraw.surfaces;
-    let back = surfaces[front].attached.iter().copied().find(|&s| surfaces[s].caps & DDSCAPS_BACKBUFFER != 0);
-    let Some(back) = back.filter(|_| surfaces[front].caps & DDSCAPS_FRONTBUFFER != 0) else {
+    let Some(back) = m
+        .attached_surface(front, DDSCAPS_BACKBUFFER)
+        .filter(|_| surfaces[front].caps & DDSCAPS_FRONTBUFFER != 0)
+    else {
         return Ok(DDERR_NOTFLIPPABLE);
     };
     if surfaces[front].locked || surfaces[back].locked {
