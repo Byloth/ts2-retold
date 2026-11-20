@@ -79,8 +79,9 @@ out of here into the roadmap or an ADR when work on them starts.
 
 ## To verify with the owner's help
 
-- The executable's hash against a verified dump of a pressed disc. It
-  already matches the installation disc's files in `ref/disc` (ADR 0003).
+- A verified dump of a pressed disc as a second witness for the reference
+  copy in `ref/disc` (ADR 0003), and how localised releases were made
+  (`LANGUAGE` and `DEFTEXT` in `toy2.ini`, or their own executable).
 - Reference screenshots of the original game, once the port draws.
 - Which font Windows picks for the face name "ariel" (the game's spelling;
   no such font exists). The runtime answers with its Arial substitute.

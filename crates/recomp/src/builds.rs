@@ -11,8 +11,7 @@ pub struct Build {
     pub id: &'static str,
     pub sha256: &'static str,
     pub description: &'static str,
-    /// False while the hash has not been compared with a verified dump of
-    /// a pressed disc (ADR 0003).
+    /// Whether the hash is that of the reference copy of the game (ADR 0003).
     pub confirmed_retail: bool,
 }
 
@@ -20,7 +19,7 @@ pub const KNOWN_BUILDS: &[Build] = &[Build {
     id: "pc-1999-10-29",
     sha256: "023eb6a9459443b34d24cf685591bfeb3b95e1acf579405f6d8fa4407ccbdaf0",
     description: "PC, linked 1999-10-29, English text",
-    confirmed_retail: false,
+    confirmed_retail: true,
 }];
 
 pub fn sha256_hex(bytes: &[u8]) -> String {

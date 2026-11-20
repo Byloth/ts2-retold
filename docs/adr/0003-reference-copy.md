@@ -1,6 +1,6 @@
 # ADR 0003 — Reference copy of the game
 
-Status: Accepted, with an open action (2026-11-20)
+Status: Accepted; reference copy named by the owner (2026-11-20)
 
 ## Context
 
@@ -43,8 +43,30 @@ git-ignored `ref/disc`).
   `audio`, `validate.tta`).
 
 The executable and data of the working copy are therefore the disc's own.
-What is still not done is a comparison with a verified dump of a pressed
-disc (the archive's origin is unknown), and the list of regional builds:
-the archive's languages are the installer's; whether the game itself has
-other language builds is not known.
 
+**Decision of the owner (2026-11-20): this archive is the reference copy of
+the game.** The build `pc-1999-10-29` is no longer provisional. A verified
+dump of a pressed disc would still be welcome as a second witness.
+
+### What the reference copy contains
+
+- **One language: English.** The game's texts are in the executable, in
+  English only; no other language's text or language name is in it or in
+  `data`. Each of the 22 movies has one video and one audio stream. The
+  music (23 `.wav` files, 8-bit stereo at 22 kHz, named in the executable)
+  and the 61 sound effects have no language.
+- **The installer is the multilingual part**: "The Disney Installer" carries
+  strings for 13 languages (`Setup\STRINGS\*.lag`) and 14 licence texts,
+  and is configured for English with the language choice switched off.
+- **A hook for other languages exists**: `toy2.ini` accepts `LANGUAGE` and
+  `DEFTEXT` lines. How localised releases used them, and whether they had
+  their own executable, is not known (`UNVERIFIED`).
+- **Leftovers of development** are on the disc: PlayStation executables
+  (`data\SLES_020.67`, `SLUS_008.93`, `psx.exe`, `system.cnf`), `.bak` and
+  `.btm` build scripts.
+- **`audio\music21.wav` is not part of the game.** The installed copy has
+  it; the disc does not. It is 0.2 seconds of silence (4484 zero bytes,
+  11 kHz mono), dated 11 November 1999, the days of the files the 1999
+  repackaging added (`regsetup.exe`, `DeIsL1.isu`). The executable names
+  its music files and this name is not among them, nor anywhere else in it.
+  It is taken to be an artefact of that repackaging.
