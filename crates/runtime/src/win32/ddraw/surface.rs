@@ -259,6 +259,20 @@ impl Machine {
         store.video
     }
 
+    /// The video home of a surface about to be drawn on by the video
+    /// backend: brought up to date, and from now on the only current one.
+    pub(crate) fn draw_on_video(&mut self, index: usize) -> SurfaceId {
+        let video = self.ensure_video(index);
+        self.os.ddraw.surfaces[index].store.memory_current = false;
+        video
+    }
+
+    /// The pixel values of a surface that are transparent when it is the
+    /// source of a copy or a texture.
+    pub(crate) fn surface_color_key(&self, index: usize) -> Option<(u32, u32)> {
+        self.os.ddraw.surfaces[index].source_color_key
+    }
+
     /// Reads a `RECT` (left, top, right, bottom) of a surface; a null
     /// pointer means the whole surface.
     fn surface_rect(&mut self, index: usize, address: u32) -> Option<Rect> {

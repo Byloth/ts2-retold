@@ -43,6 +43,20 @@ const DISPLAY_REFRESH_RATE: u32 = 60;
 const DDEDM_REFRESHRATES: u32 = 0x1;
 
 /// `DDSURFACEDESC`, as an array of 27 words. All its fields are 32 bits wide.
+/// How much one combination of draw states was used.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StateUse {
+    /// Batches of triangles handed to the video backend.
+    pub draws: u64,
+    pub triangles: u64,
+}
+
+/// What the program has drawn so far.
+#[derive(Debug, Default)]
+pub struct Statistics {
+    pub draw_states: std::collections::HashMap<crate::video::DrawState, StateUse>,
+}
+
 pub mod surface_desc {
     pub const WORDS: usize = 27;
     /// `DDSURFACEDESC2` of DirectDraw 4 is the same with three more
@@ -105,6 +119,7 @@ pub struct State {
     pub downloads: u64,
     /// Frames shown by flipping.
     pub frames: u64,
+    pub statistics: Statistics,
 }
 
 /// The display modes the adapter offers, in the order Windows lists them.

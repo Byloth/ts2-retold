@@ -46,6 +46,11 @@ impl Machine {
     }
 }
 
+/// The rectangle a viewport covers, once it has been given one.
+pub(super) fn area(m: &Machine, viewport: usize) -> Option<Rect> {
+    m.os.ddraw.viewports[viewport].area()
+}
+
 /// `IDirect3D3::CreateViewport`.
 pub(super) fn create_viewport(m: &mut Machine, a: &[u32]) -> u32 {
     if a[2] != 0 {

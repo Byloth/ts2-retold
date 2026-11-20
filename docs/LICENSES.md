@@ -10,6 +10,7 @@ Every dependency or tool is listed here **before** it is adopted
 | `iced-x86` 1.22 | MIT | x86 decoder (pure Rust, builds for WASM) |
 | `sha2` 0.10 | MIT OR Apache-2.0 | identifying the executable build |
 | `serde`, `serde_json` | MIT OR Apache-2.0 | analysis reports |
+| `bytemuck` 1 | Zlib OR Apache-2.0 OR MIT | vertices as plain bytes for the video backend |
 | `fontdue` 0.9 | MIT OR Apache-2.0 OR Zlib | turning glyph outlines into pixels for GDI text |
 | `ttf-parser` 0.25 | MIT OR Apache-2.0 | reading the bundled font's metric tables |
 | `png` 0.17 | MIT OR Apache-2.0 | `andy boot --surfaces`: writing surfaces as images for inspection (command-line tool only) |
@@ -40,6 +41,7 @@ No copyleft and no noncommercial-only license is in the tree.
 | mingw-w64 / Wine DirectX headers (`ddraw.h`, `d3d.h`, `d3dtypes.h`, `d3dcaps.h`, `dinput.h`, `dsound.h`) | LGPL-2.1 | Structure layouts, method-table order and constant values of the DirectX 6 interfaces. Kept in the git-ignored `ref/` directory. The runtime's definitions are written from these facts, not transcribed. |
 
 | Wine `wingdi.h` (9.0) | LGPL-2.1 | Layout of `TEXTMETRICA` and GDI constant values. Kept in the git-ignored `ref/win`. Facts only, nothing transcribed. |
+| Wine `dlls/ddraw/device.c` (9.0) | LGPL-2.1 | How the DirectX 5 render states act on texture stage 0 (ADR 0014), a behaviour Wine established by tests on Windows. Kept in the git-ignored `ref/wine`. The rules are re-expressed, no code is copied. |
 
 ## External projects consulted, not used
 

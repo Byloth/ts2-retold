@@ -40,6 +40,10 @@ impl PixelFormat {
         }
     }
 
+    pub fn has_alpha(self) -> bool {
+        matches!(self, PixelFormat::Argb1555 | PixelFormat::Argb4444 | PixelFormat::Argb8888)
+    }
+
     /// The format of a display mode of the given depth.
     pub fn of_display(bits_per_pixel: u32) -> PixelFormat {
         match bits_per_pixel {
@@ -161,6 +165,193 @@ impl Rect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SurfaceId(pub u32);
 
+/// A vertex as the rasteriser takes it: already transformed and lit.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Vertex {
+    /// Position in clip space. After division by `w`, x and y run from -1
+    /// to 1 across the viewport (x to the right, y up) and z from 0 at the
+    /// near plane to 1 at the far plane. Colours and texture coordinates
+    /// are interpolated with perspective correction by `w`.
+    pub position: [f32; 4],
+    /// Colours as `0xAARRGGBB`.
+    pub diffuse: u32,
+    pub specular: u32,
+    /// Texture coordinates, 0 to 1 across the texture.
+    pub uv: [f32; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Compare {
+    Never,
+    Less,
+    Equal,
+    LessEqual,
+    Greater,
+    NotEqual,
+    GreaterEqual,
+    Always,
+}
+
+/// What a colour is multiplied by when blended with the target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlendFactor {
+    Zero,
+    One,
+    SourceColor,
+    InverseSourceColor,
+    SourceAlpha,
+    InverseSourceAlpha,
+    TargetAlpha,
+    InverseTargetAlpha,
+    TargetColor,
+    InverseTargetColor,
+    SourceAlphaSaturated,
+}
+
+/// Which triangles are left out, by the order of their vertices as seen on
+/// the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Cull {
+    None,
+    Clockwise,
+    CounterClockwise,
+}
+
+/// What texture coordinates outside 0 to 1 do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Address {
+    Wrap,
+    Mirror,
+    Clamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Filter {
+    Nearest,
+    Linear,
+}
+
+/// Where an input of the colour combiner comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Source {
+    /// The interpolated diffuse colour of the vertices.
+    Diffuse,
+    /// The result so far; with one texture stage, the diffuse colour.
+    Current,
+    Texture,
+    /// The interpolated specular colour of the vertices.
+    Specular,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Argument {
+    pub source: Source,
+    /// Use one minus the value.
+    pub complement: bool,
+    /// Use the alpha in every colour channel.
+    pub alpha_replicate: bool,
+}
+
+/// How the two inputs of the combiner make its result. Results are clamped
+/// to the range 0 to 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Operation {
+    SelectFirst,
+    SelectSecond,
+    /// The product; twice and four times the product.
+    Modulate,
+    Modulate2x,
+    Modulate4x,
+    Add,
+    /// The sum minus one half.
+    AddSigned,
+    /// The first minus the second.
+    Subtract,
+    /// The first and the second mixed by the diffuse alpha, the texture's
+    /// alpha, or the current alpha: `first * alpha + second * (1 - alpha)`.
+    BlendDiffuseAlpha,
+    BlendTextureAlpha,
+    BlendCurrentAlpha,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Combine {
+    pub operation: Operation,
+    pub first: Argument,
+    pub second: Argument,
+}
+
+/// A texture and the way it is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Sampling {
+    pub surface: SurfaceId,
+    pub magnify: Filter,
+    pub minify: Filter,
+    pub address_u: Address,
+    pub address_v: Address,
+    /// Raw pixel values of the texture, from the first to the second
+    /// inclusive, that are not drawn at all.
+    pub color_key: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DepthState {
+    /// A pixel is drawn where its depth compares this way with the depth
+    /// already there.
+    pub compare: Compare,
+    /// Whether drawn pixels replace the depth already there.
+    pub write: bool,
+}
+
+/// Everything that decides how triangles become pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DrawState {
+    /// `None`: depth is neither compared nor written.
+    pub depth: Option<DepthState>,
+    /// Factors for the drawn colour and the colour already there; `None`:
+    /// the drawn colour replaces it.
+    pub blend: Option<(BlendFactor, BlendFactor)>,
+    /// A pixel is drawn only where its alpha compares this way with the
+    /// reference value (0 to 255).
+    pub alpha_test: Option<(Compare, u8)>,
+    pub cull: Cull,
+    /// Every pixel of a triangle takes the colours of its first vertex.
+    pub flat: bool,
+    /// The specular colour is added after the combiner.
+    pub specular: bool,
+    pub color: Combine,
+    pub alpha: Combine,
+    /// `None`: no texture; the combiner's texture input is opaque white.
+    pub texture: Option<Sampling>,
+}
+
+/// One batch of triangles.
+#[derive(Debug, Clone, Copy)]
+pub struct Draw<'a> {
+    pub target: SurfaceId,
+    /// The depth surface, of the same size as the target.
+    pub depth: Option<SurfaceId>,
+    /// The part of the target the clip-space square maps to; nothing is
+    /// drawn outside it.
+    pub viewport: Rect,
+    pub state: DrawState,
+    pub vertices: &'a [Vertex],
+    /// Three per triangle.
+    pub indices: &'a [u16],
+}
+
+/// A batch of triangles as [`Headless`] remembers it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedDraw {
+    pub target: SurfaceId,
+    pub depth: Option<SurfaceId>,
+    pub viewport: Rect,
+    pub state: DrawState,
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u16>,
+}
+
 pub trait Video {
     /// Creates a surface whose contents are undefined until written.
     fn create_surface(&mut self, width: u32, height: u32, format: PixelFormat) -> SurfaceId;
@@ -184,6 +375,8 @@ pub trait Video {
         color_key: Option<(u32, u32)>,
     );
     /// Shows a surface on the display.
+    /// Draws triangles onto a surface.
+    fn draw(&mut self, draw: &Draw);
     fn present(&mut self, surface: SurfaceId);
     /// The backend as its concrete type, for code that knows which one it set up.
     fn as_any(&self) -> &dyn std::any::Any;
@@ -270,10 +463,16 @@ pub struct Frame {
     pub pixels: Vec<u8>,
 }
 
-/// The video backend without a display.
+/// The video backend without a display and without a rasteriser: surfaces
+/// are filled, copied and presented, but **triangles are not drawn**. They
+/// are counted and the last batch is kept, which is what tests of the layers
+/// above need.
 #[derive(Default)]
 pub struct Headless {
     surfaces: Vec<Option<HeadlessSurface>>,
+    pub draws: u64,
+    pub triangles: u64,
+    pub last_draw: Option<RecordedDraw>,
     pub last_frame: Option<Frame>,
     pub frames_presented: u64,
 }
@@ -373,6 +572,19 @@ impl Video for Headless {
             size,
             color_key,
         );
+    }
+
+    fn draw(&mut self, draw: &Draw) {
+        self.draws += 1;
+        self.triangles += draw.indices.len() as u64 / 3;
+        self.last_draw = Some(RecordedDraw {
+            target: draw.target,
+            depth: draw.depth,
+            viewport: draw.viewport,
+            state: draw.state,
+            vertices: draw.vertices.to_vec(),
+            indices: draw.indices.to_vec(),
+        });
     }
 
     fn present(&mut self, surface: SurfaceId) {

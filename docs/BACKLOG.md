@@ -38,6 +38,14 @@ out of here into the roadmap or an ADR when work on them starts.
 - **GDI cannot draw on a DirectDraw surface.** `GetDC` gives a context that
   serves as the model for a compatible one (all the game does with it);
   drawing through it stops the machine.
+- **Render targets are 8 bits per channel on the GPU** whatever the
+  surface's format (ADR 0014); the original's 16-bit banding and dithering
+  are not reproduced. A faithful path would quantise and dither in the
+  shader and blend at 16 bits.
+- **Draw states not implemented** stop the machine by name: fog, a second
+  texture stage, wireframe and point fill, points and lines, depth bias,
+  stencil, the texture factor, border addressing, `DrawPrimitiveVB` and
+  untransformed vertices (Direct3D's transformation and lighting).
 - **A run starts from what the previous one wrote.** `andy boot` keeps
   `out/run` (saves, `toy2.cfg`) between runs, as an installed game would,
   so two runs are identical only if that directory is. Tests and replays
@@ -69,5 +77,7 @@ out of here into the roadmap or an ADR when work on them starts.
   `TEXTUREPERSPECTIVE` off and `SPECULARENABLE` on
   (`crates/runtime/src/win32/d3d/device.rs`). To check against the DirectX 6
   documentation.
+- What a texture stage without a texture reads as (white here), and what
+  an `rhw` of zero or less does (taken as 1 here): ADR 0014.
 - `IDirectDrawSurface4::Unlock` on a surface whose lock is held by `GetDC`
   returns `DDERR_NOTLOCKED` here; the real code is not known.

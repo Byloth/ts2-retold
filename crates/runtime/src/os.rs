@@ -48,7 +48,7 @@ pub struct Os {
     /// The modifications switched on for this run.
     pub mods: Modifications,
     pub(crate) com: Com,
-    pub(crate) ddraw: ddraw::State,
+    pub ddraw: ddraw::State,
     pub(crate) dsound: dsound::State,
     pub(crate) dinput: dinput::State,
     /// What the keyboard and mouse are doing; written by the embedder.

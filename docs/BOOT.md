@@ -11,11 +11,13 @@ cargo run --release --bin andy -- boot --trace
 
 ## How far it gets
 
-**About 296.6 million instructions**, then it stops at its first
-`IDirect3DDevice3::DrawIndexedPrimitive`: everything is initialised, the
-first level's packet and textures are loaded, the trademark screen has been
-copied to the back buffer, and the game wants to draw its first textured
-quad (four transformed-and-lit vertices, six indices) on top of it.
+**About 412 million instructions and 1196 frames**, then it stops at
+`CoCreateInstance`: the game has shown the trademark screen with a
+"LOADING…" quad drawn over it (82 batches of two alpha-blended, textured
+triangles, one draw state), released DirectSound and now wants a DirectShow
+multimedia stream to play its introduction movie.
+
+With the `Headless` backend triangles are counted, not drawn (ADR 0014).
 
 `andy boot --surfaces out/surfaces` writes every DirectDraw surface as a PNG
 at the stop: the back buffer shows the trademark screen and the textures
@@ -44,7 +46,8 @@ by eye.
 | Lights | A second initialisation pass repeats the render set-up, then four lights are created and added to the viewport |
 | Level 0 | Writes `Toy200.sav` and `toy2.cfg`, reads `rand.dat`, releases the duplicated sound buffers, loads `level00\level.raw` and `level00\level.ngn`; each texture is read as a bitmap into a DIB section (24-bit, or 8-bit with a colour table) and copied into a texture surface; three more materials |
 | Backdrop | `glueSetBackdrop()`: a 640×480 off-screen surface filled from an 8-bit bitmap through `GetDIBColorTable`, then `BltFast` to the back buffer |
-| First draw | Render states, `SetTexture`, `DrawIndexedPrimitive(TRIANGLELIST, TLVERTEX, 4 vertices, 6 indices)` — not implemented yet |
+| Loading screen | Each frame: `Clear2`, `BeginScene`, the backdrop copied with `BltFast`, `DrawIndexedPrimitive` (a strip of four transformed-and-lit vertices: "LOADING…"), `EndScene`, `Flip` |
+| Movie | `IDirectSound::Release`, `CoInitialize`, `CoCreateInstance` — not implemented yet |
 
 ## The game's own log
 
@@ -120,8 +123,7 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-Drawing: the `Video` interface gains a draw call for transformed-and-lit
-triangles with the device's render and texture-stage states, and the GPU
-backend (ADR 0012) is built against it with off-screen rendering for tests.
-The game also keeps a vertex buffer of untransformed vertices and four
-lights, so Direct3D's own transformation and lighting will be needed too.
+The GPU backend (ADR 0012) behind the draw call of ADR 0014, with
+off-screen rendering for tests. Then the movie (a decision: this copy has
+only `data\FMV\fmv.bin`), and Direct3D's own transformation and lighting,
+which the game needs for its untransformed vertex buffer and four lights.

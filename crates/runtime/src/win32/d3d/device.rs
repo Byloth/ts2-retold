@@ -1,6 +1,7 @@
 //! The 3D device (`IDirect3DDevice3`).
 
 use super::IID_IDIRECT3DHALDEVICE;
+use super::draw::{self, argument, operation, render_state, stage_state};
 use crate::Machine;
 use crate::video::PixelFormat;
 use crate::win32::HostResult;
@@ -23,22 +24,26 @@ pub struct Device {
     pub target: usize,
     pub depth: Option<usize>,
     viewports: Vec<usize>,
-    current_viewport: Option<usize>,
+    pub(super) current_viewport: Option<usize>,
     in_scene: bool,
-    /// `D3DRENDERSTATE` values by number.
-    render_states: [u32; 256],
+    /// `D3DRENDERSTATE` values by number. The states DirectX 5 had for the
+    /// one texture are kept as they were set, and applied to stage 0.
+    pub(super) render_states: [u32; 256],
+    /// Whether stage 0's operations follow `TEXTUREMAPBLEND`, the DirectX 5
+    /// way of setting them, rather than having been set one by one.
+    legacy_blending: bool,
     /// `D3DLIGHTSTATE` values by number: material handle, ambient light,
     /// colour model, fog mode and range.
     light_states: [u32; LIGHT_STATES],
     /// The texture surface selected into each stage.
-    textures: [Option<usize>; STAGES],
+    pub(super) textures: [Option<usize>; STAGES],
     /// `D3DTEXTURESTAGESTATE` values of each stage, by number.
-    stage_states: [[u32; STAGE_STATES]; STAGES],
+    pub(super) stage_states: [[u32; STAGE_STATES]; STAGES],
 }
 
 const LIGHT_STATES: usize = 16;
 const STAGES: usize = 8;
-const STAGE_STATES: usize = 32;
+pub(super) const STAGE_STATES: usize = 32;
 const D3DERR_SCENE_IN_SCENE: u32 = ddraw::dd_error(760);
 const D3DERR_SCENE_NOT_IN_SCENE: u32 = ddraw::dd_error(761);
 
@@ -118,7 +123,7 @@ pub(super) fn targets(m: &Machine, device: usize) -> (usize, Option<usize>) {
 }
 
 impl Machine {
-    fn device_index(&mut self, this: u32) -> Option<usize> {
+    pub(super) fn device_index(&mut self, this: u32) -> Option<usize> {
         let index = self.object_index(this)?;
         let device = self.os.ddraw.devices.get(index)?;
         (device.references > 0 && device.pointer == this).then_some(index)
@@ -153,6 +158,7 @@ pub(super) fn create_device(m: &mut Machine, a: &[u32]) -> HostResult {
         current_viewport: None,
         in_scene: false,
         render_states: default_render_states(depth.is_some()),
+        legacy_blending: false,
         light_states: default_light_states(),
         textures: [None; STAGES],
         stage_states: default_stage_states(),
@@ -249,15 +255,124 @@ fn end_scene(m: &mut Machine, a: &[u32]) -> u32 {
     if std::mem::replace(&mut device.in_scene, false) { DD_OK } else { D3DERR_SCENE_NOT_IN_SCENE }
 }
 
-fn set_render_state(m: &mut Machine, a: &[u32]) -> u32 {
-    let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
-    match m.os.ddraw.devices[index].render_states.get_mut(a[1] as usize) {
-        Some(state) => {
-            *state = a[2];
-            DD_OK
-        }
-        None => DDERR_INVALIDPARAMS,
+/// With `TEXTUREMAPBLEND` at "modulate", the alpha comes from the texture
+/// if it has any and from the vertices otherwise; which, depends on the
+/// texture selected.
+fn follow_texture_alpha(m: &mut Machine, index: usize) {
+    const D3DTBLEND_MODULATE: u32 = 2;
+    let device = &m.os.ddraw.devices[index];
+    if !device.legacy_blending || device.render_states[render_state::TEXTUREMAPBLEND] != D3DTBLEND_MODULATE {
+        return;
     }
+    let has_alpha = device.textures[0].is_none_or(|texture| m.surface_format(texture).has_alpha());
+    m.os.ddraw.devices[index].stage_states[0][stage_state::ALPHAOP] =
+        if has_alpha { operation::SELECTARG1 } else { operation::SELECTARG2 };
+}
+
+/// `SetRenderState`. The states DirectX 5 had for its one texture (handle,
+/// filters, addressing, blending with the vertex colour) set the
+/// corresponding states of stage 0, in the way Wine's DirectDraw does it,
+/// which was written against tests on Windows.
+fn set_render_state(m: &mut Machine, a: &[u32]) -> HostResult {
+    use render_state::*;
+    let (state, value) = (a[1] as usize, a[2]);
+    let Some(index) = m.device_index(a[0]) else { return Ok(DDERR_INVALIDOBJECT) };
+    let device = &mut m.os.ddraw.devices[index];
+    if state >= device.render_states.len() {
+        return Ok(DDERR_INVALIDPARAMS);
+    }
+    let unchanged = device.render_states[state] == value;
+    let stage = &mut device.stage_states[0];
+    match state {
+        TEXTUREHANDLE if value != 0 => {
+            return Err(crate::Stop::Unimplemented {
+                dll: "IDirect3DDevice3".into(),
+                name: "SetRenderState of a texture handle".into(),
+            });
+        }
+        // `D3DFILTER_*`: nearest, linear, then four that also choose
+        // between the texture's levels.
+        TEXTUREMAG => stage[stage_state::MAGFILTER] = if matches!(value, 2 | 4 | 6) { 2 } else { 1 },
+        TEXTUREMIN => {
+            let (minify, between_levels) = match value {
+                2 => (2, 1),
+                3 => (1, 2),
+                4 => (2, 2),
+                5 => (1, 3),
+                6 => (2, 3),
+                _ => (1, 1),
+            };
+            stage[stage_state::MINFILTER] = minify;
+            stage[stage_state::MIPFILTER] = between_levels;
+        }
+        TEXTUREADDRESS => {
+            stage[stage_state::ADDRESSU] = value;
+            stage[stage_state::ADDRESSV] = value;
+        }
+        TEXTUREADDRESSU => stage[stage_state::ADDRESSU] = value,
+        TEXTUREADDRESSV => stage[stage_state::ADDRESSV] = value,
+        // `D3DTBLEND_*`. Setting the value it already has does nothing.
+        TEXTUREMAPBLEND if !unchanged => {
+            use stage_state::{ALPHAARG1, ALPHAARG2, ALPHAOP, COLORARG1, COLORARG2, COLOROP};
+            let settings: &[(usize, u32)] = match value {
+                // Decal and copy: the texture alone.
+                1 | 7 => &[
+                    (COLORARG1, argument::TEXTURE),
+                    (ALPHAARG1, argument::TEXTURE),
+                    (COLOROP, operation::SELECTARG1),
+                    (ALPHAOP, operation::SELECTARG1),
+                ],
+                // Modulate: colours multiplied; the alpha is chosen below.
+                2 => &[
+                    (ALPHAARG1, argument::TEXTURE),
+                    (ALPHAARG2, argument::CURRENT),
+                    (COLORARG1, argument::TEXTURE),
+                    (COLORARG2, argument::CURRENT),
+                    (COLOROP, operation::MODULATE),
+                ],
+                // Decal with alpha: texture over the vertex colour by the
+                // texture's alpha; the vertex alpha.
+                3 => &[
+                    (COLOROP, operation::BLENDTEXTUREALPHA),
+                    (COLORARG1, argument::TEXTURE),
+                    (COLORARG2, argument::CURRENT),
+                    (ALPHAOP, operation::SELECTARG2),
+                    (ALPHAARG2, argument::CURRENT),
+                ],
+                // Modulate with alpha: colours and alphas multiplied.
+                4 => &[
+                    (COLORARG1, argument::TEXTURE),
+                    (ALPHAARG1, argument::TEXTURE),
+                    (COLORARG2, argument::CURRENT),
+                    (ALPHAARG2, argument::CURRENT),
+                    (COLOROP, operation::MODULATE),
+                    (ALPHAOP, operation::MODULATE),
+                ],
+                // Add: colours added; the vertex alpha.
+                8 => &[
+                    (COLOROP, operation::ADD),
+                    (COLORARG1, argument::TEXTURE),
+                    (COLORARG2, argument::CURRENT),
+                    (ALPHAOP, operation::SELECTARG2),
+                    (ALPHAARG2, argument::CURRENT),
+                ],
+                other => {
+                    return Err(crate::Stop::Unimplemented {
+                        dll: "IDirect3DDevice3".into(),
+                        name: format!("texture blending mode {other}"),
+                    });
+                }
+            };
+            for &(state, value) in settings {
+                stage[state] = value;
+            }
+            device.legacy_blending = true;
+        }
+        _ => {}
+    }
+    device.render_states[state] = value;
+    follow_texture_alpha(m, index);
+    Ok(DD_OK)
 }
 
 fn get_render_state(m: &mut Machine, a: &[u32]) -> u32 {
@@ -327,6 +442,7 @@ fn set_texture(m: &mut Machine, a: &[u32]) -> u32 {
     match m.os.ddraw.devices[index].textures.get_mut(stage) {
         Some(slot) => {
             *slot = selected;
+            follow_texture_alpha(m, index);
             DD_OK
         }
         None => DDERR_INVALIDPARAMS,
@@ -339,13 +455,28 @@ fn stage_state<'m>(m: &'m mut Machine, a: &[u32]) -> Option<&'m mut u32> {
 }
 
 fn set_texture_stage_state(m: &mut Machine, a: &[u32]) -> u32 {
-    match stage_state(m, a) {
-        Some(state) => {
-            *state = a[3];
-            DD_OK
+    let (stage, value) = (a[1] as usize, a[3]);
+    let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
+    let device = &mut m.os.ddraw.devices[index];
+    let Some(states) = device.stage_states.get_mut(stage) else { return DDERR_INVALIDPARAMS };
+    match a[2] as usize {
+        // One state sets the addressing along both axes.
+        stage_state::ADDRESS => {
+            states[stage_state::ADDRESS] = value;
+            states[stage_state::ADDRESSU] = value;
+            states[stage_state::ADDRESSV] = value;
         }
-        None => DDERR_INVALIDPARAMS,
+        state if state < STAGE_STATES => {
+            // Setting a state one by one ends the DirectX 5 way of blending,
+            // unless the value is the one it already has.
+            if states[state] != value {
+                states[state] = value;
+                device.legacy_blending = false;
+            }
+        }
+        _ => return DDERR_INVALIDPARAMS,
     }
+    DD_OK
 }
 
 fn get_texture_stage_state(m: &mut Machine, a: &[u32]) -> u32 {
@@ -382,8 +513,8 @@ interface! { static DEVICE_3 = "IDirect3DDevice3";
     SetTransform(3),
     GetTransform(3),
     MultiplyTransform(3),
-    DrawPrimitive(6),
-    DrawIndexedPrimitive(8),
+    DrawPrimitive(6) => draw::draw_primitive,
+    DrawIndexedPrimitive(8) => draw::draw_indexed_primitive,
     SetClipStatus(2),
     GetClipStatus(2),
     DrawPrimitiveStrided(6),

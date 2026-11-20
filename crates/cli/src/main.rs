@@ -260,6 +260,20 @@ fn boot(image: &Image, options: BootOptions) {
         Some(address) => println!("x87 model inexact      first at {address:#010x}"),
         None => println!("x87 model inexact      never"),
     }
+    let video = &machine.os.ddraw;
+    println!("frames shown           {}", video.frames);
+    println!("surface transfers      {} to video, {} back", video.uploads, video.downloads);
+    let mut states: Vec<_> = video.statistics.draw_states.iter().collect();
+    states.sort_by_key(|(_, used)| std::cmp::Reverse(used.draws));
+    let (draws, triangles) = states
+        .iter()
+        .fold((0, 0), |(draws, triangles), (_, used)| (draws + used.draws, triangles + used.triangles));
+    println!("drawn                  {triangles} triangles in {draws} batches, {} draw states", states.len());
+    if trace {
+        for (state, used) in &states {
+            println!("  {:>8} batches {:>8} triangles  {state:?}", used.draws, used.triangles);
+        }
+    }
     let missing = machine.os.files.log.iter().filter(|(_, found)| !found).count();
     println!("files opened           {} ({missing} not found)", machine.os.files.log.len());
     if let Ok(log) = fs::read_to_string(&log_path) {

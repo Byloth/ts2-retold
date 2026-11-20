@@ -8,7 +8,8 @@ Recon findings: `docs/RECON.md`. Decisions: `docs/adr/`. Deferred work and
 known gaps: `docs/BACKLOG.md`. The catalogue of modifications:
 `docs/MODIFICATIONS.md` (keep it in step with `crates/runtime/src/mods.rs`). Analysis results:
 `docs/CODE-DISCOVERY.md`. Instruction semantics and their verification:
-`docs/SEMANTICS.md`.
+`docs/SEMANTICS.md`. How drawing is split between runtime and video backend:
+ADR 0014.
 
 **Crates.** `crates/cli` (`andy`): the command-line tool.
 `crates/runtime` (`andy-runtime`): the machine, the loader and the replacement
