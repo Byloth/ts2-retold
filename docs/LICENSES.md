@@ -21,6 +21,12 @@ No copyleft and no noncommercial-only license is in the tree.
 |---|---|---|
 | Unicorn 2.1.4 (Python package, QEMU CPU core) | GPL-2.0 | Test oracle for `tools/difftest.py`. Runs as a separate process in a local virtualenv; no code of it is copied or linked into the project. |
 
+## Reference material (read as specification, nothing copied)
+
+| Material | License | Used for |
+|---|---|---|
+| mingw-w64 / Wine DirectX headers (`ddraw.h`, `d3d.h`, `d3dtypes.h`, `d3dcaps.h`, `dinput.h`, `dsound.h`) | LGPL-2.1 | Structure layouts, method-table order and constant values of the DirectX 6 interfaces. Kept in the git-ignored `ref/` directory. The runtime's definitions are written from these facts, not transcribed. |
+
 ## External projects consulted, not used
 
 Nothing has been copied from these; their licenses are not yet verified and

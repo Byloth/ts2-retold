@@ -9,6 +9,8 @@
 //! released for (ADR 0011).
 
 mod advapi32;
+pub mod com;
+pub mod ddraw;
 mod gdi32;
 mod kernel32;
 mod ole32;
@@ -79,6 +81,7 @@ pub(crate) use functions;
 pub fn lookup(dll: &str, name: &str) -> Option<&'static Function> {
     [
         kernel32::FUNCTIONS,
+        ddraw::FUNCTIONS,
         advapi32::FUNCTIONS,
         user32::FUNCTIONS,
         gdi32::FUNCTIONS,
@@ -112,6 +115,19 @@ impl Machine {
             bytes.push(byte);
         }
         bytes
+    }
+
+    /// Reads consecutive 32-bit words; unreadable ones read as zero.
+    pub(crate) fn read_words<const N: usize>(&mut self, address: u32) -> [u32; N] {
+        std::array::from_fn(|n| self.memory.read(address + 4 * n as u32, 4).unwrap_or(0))
+    }
+
+    /// Writes consecutive 32-bit words; false if any of them is unmapped.
+    pub(crate) fn write_words(&mut self, address: u32, words: &[u32]) -> bool {
+        words
+            .iter()
+            .enumerate()
+            .all(|(n, &word)| self.memory.write(address + 4 * n as u32, 4, word).is_some())
     }
 
     /// Writes a string and its terminator, truncating to `capacity` bytes.

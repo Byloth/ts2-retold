@@ -52,3 +52,6 @@
 # --- Python tooling ---
 .venv/
 __pycache__/
+
+# --- Reference material read as specification, never copied ---
+/ref/

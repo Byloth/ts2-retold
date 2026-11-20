@@ -7,6 +7,8 @@ use andy_cpu::memory::Memory;
 use andy_recomp::pe::Resource;
 
 use crate::files::{Files, INSTALL_DIR};
+use crate::win32::com::Com;
+use crate::win32::ddraw;
 use crate::win32::user32::User;
 
 const HEAP_START: u32 = 0x1000_0000;
@@ -35,6 +37,8 @@ pub struct Os {
     /// The executable's resources (their data is in guest memory).
     pub resources: Vec<Resource>,
     pub user: User,
+    pub(crate) com: Com,
+    pub(crate) ddraw: ddraw::State,
     /// Open registry keys: handle to lower-case path.
     pub(crate) keys: HashMap<u32, String>,
 }

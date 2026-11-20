@@ -169,7 +169,7 @@ fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64) {
         }
     }
     let mut counts = machine.call_counts();
-    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    counts.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
     let total: u64 = counts.iter().map(|(_, count)| count).sum();
     println!("\ninstructions executed  {}", machine.cpu.instructions);
     println!(

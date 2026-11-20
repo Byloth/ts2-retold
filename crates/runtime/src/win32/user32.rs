@@ -253,17 +253,6 @@ fn find_resource(m: &mut Machine, kind: u16, name: u32) -> Option<usize> {
 }
 
 impl Machine {
-    fn read_words<const N: usize>(&mut self, address: u32) -> [u32; N] {
-        std::array::from_fn(|n| self.memory.read(address + 4 * n as u32, 4).unwrap_or(0))
-    }
-
-    fn write_words(&mut self, address: u32, words: &[u32]) -> bool {
-        words
-            .iter()
-            .enumerate()
-            .all(|(n, &word)| self.memory.write(address + 4 * n as u32, 4, word).is_some())
-    }
-
     /// Calls a window's procedure, as `SendMessage` does.
     pub fn send_message(&mut self, window: u32, message: u32, wparam: u32, lparam: u32) -> HostResult {
         match self.os.user.window(window).map(|w| w.procedure) {
