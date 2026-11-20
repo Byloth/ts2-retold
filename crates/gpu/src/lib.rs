@@ -135,6 +135,7 @@ struct DrawUniforms {
     alpha: [u32; 4],
     test: [u32; 4],
     key: [f32; 4],
+    fog: [f32; 4],
 }
 
 /// The uniforms of a fill or copy; `RectUniforms` in the shader.
@@ -1007,7 +1008,8 @@ impl Video for Gpu {
         // program is not expected to do that; if it does, it reads what was
         // there before this pass.
         self.pending.target = Some(attachments);
-        let DrawState { depth, blend, alpha_test, cull, flat, specular, color, alpha, texture } = draw.state;
+        let DrawState { depth, blend, alpha_test, cull, flat, specular, fog, color, alpha, texture } =
+            draw.state;
         let target = self.surface(draw.target);
         let viewport = target.clamp(draw.viewport);
         if viewport.width == 0 || viewport.height == 0 || viewport != draw.viewport {
@@ -1027,6 +1029,7 @@ impl Video for Gpu {
                 key.is_some() as u32,
             ],
             key: key.map_or([0.0; 4], |(surface, raw)| shader_color(self.surface(surface).format, raw)),
+            fog: fog.map_or([0.0; 4], |color| shader_color(PixelFormat::Xrgb8888, color)),
         };
         let command = Command {
             pipeline: PipelineKey { depth_attached: draw.depth.is_some(), depth, blend, cull, flat },
@@ -1083,6 +1086,7 @@ mod tests {
             cull: Cull::None,
             flat: false,
             specular: false,
+            fog: None,
             color: pass,
             alpha: pass,
             texture: None,
@@ -1347,5 +1351,19 @@ mod tests {
         let flat = DrawState { flat: true, specular: true, ..opaque() };
         draw_quad(&mut gpu, target, None, flat, (vertices, indices));
         assert!(pixels(&mut gpu, target).iter().all(|&pixel| pixel == 0xFF40_70FF));
+
+        // Fog: the specular alpha says how much of the colour is kept.
+        gpu.fill(target, Rect::whole(8, 8), 0);
+        let (mut vertices, indices) = quad(0.0, 0.0, 8.0, 8.0, 0.5, 0xFFFF_0000);
+        for vertex in &mut vertices {
+            vertex.specular = 0x4000_0000;
+        }
+        let foggy = DrawState { fog: Some(0x0000_00FF), ..opaque() };
+        draw_quad(&mut gpu, target, None, foggy, (vertices, indices));
+        let [blue, green, red, _] = pixels(&mut gpu, target)[27].to_le_bytes();
+        assert!(
+            red.abs_diff(0x40) <= 1 && green == 0 && blue.abs_diff(0xBF) <= 1,
+            "{red:#x} {green:#x} {blue:#x}"
+        );
     }
 }

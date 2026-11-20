@@ -59,6 +59,12 @@ pub(super) mod render_state {
     pub const FOGENABLE: usize = 28;
     pub const SPECULARENABLE: usize = 29;
     pub const STIPPLEDALPHA: usize = 33;
+    pub const FOGCOLOR: usize = 34;
+    pub const FOGTABLEMODE: usize = 35;
+    pub const FOGSTART: usize = 36;
+    pub const FOGEND: usize = 37;
+    pub const FOGDENSITY: usize = 38;
+    pub const RANGEFOGENABLE: usize = 48;
     pub const STIPPLEENABLE: usize = 39;
     pub const EDGEANTIALIAS: usize = 40;
     pub const COLORKEYENABLE: usize = 41;
@@ -226,7 +232,9 @@ fn draw_state(device: &Device) -> Result<DrawState, Stop> {
     for (state, name, allowed) in [
         (ANTIALIAS, "antialiasing", &[0u32, 1][..]), // none
         (FILLMODE, "fill mode", &[3]),               // solid
-        (FOGENABLE, "fog", &[0]),
+        // Fog by the fog factor in the vertices is drawn; fog computed per
+        // pixel from a table is not.
+        (FOGTABLEMODE, "table fog", &[0]),
         (STIPPLEDALPHA, "stippled alpha", &[0]),
         (STIPPLEENABLE, "stippling", &[0]),
         (EDGEANTIALIAS, "edge antialiasing", &[0]),
@@ -284,6 +292,7 @@ fn draw_state(device: &Device) -> Result<DrawState, Stop> {
         cull,
         flat: states[SHADEMODE] == 1,
         specular: states[SPECULARENABLE] != 0,
+        fog: (states[FOGENABLE] != 0).then_some(states[FOGCOLOR] & 0x00FF_FFFF),
         color: combine(stage, stage_state::COLOROP, stage_state::COLORARG1, stage_state::COLORARG2)?,
         alpha: combine(stage, stage_state::ALPHAOP, stage_state::ALPHAARG1, stage_state::ALPHAARG2)?,
         texture: None,

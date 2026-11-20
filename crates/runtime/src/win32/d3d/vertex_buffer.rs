@@ -238,6 +238,20 @@ fn process_vertices(m: &mut Machine, a: &[u32]) -> HostResult {
         Some(_) if operation & D3DVOP_LIGHT != 0 => lighting::prepare(m, device)?,
         _ => None,
     };
+    // Vertex fog: with a fog mode set in the light states, the alpha of the
+    // specular colour becomes the fog factor, from the depth in camera
+    // space (Wine's `update_fog_factor`).
+    let state = &m.os.ddraw.devices[device];
+    let fog = match state.light_states[4] {
+        0 => None,
+        // Linear, between a start and an end.
+        3 if state.render_states[draw::render_state::RANGEFOGENABLE] == 0 => Some((
+            device::multiply(&state.transforms[WORLD], &state.transforms[VIEW]),
+            f32::from_bits(state.render_states[draw::render_state::FOGSTART]),
+            f32::from_bits(state.render_states[draw::render_state::FOGEND]),
+        )),
+        mode => return unsupported(format!("with fog mode {mode} or range fog")),
+    };
     let Some(vertices) = m.memory.dump(from_address, count * input.size) else {
         return Ok(DDERR_INVALIDPARAMS);
     };
@@ -286,6 +300,20 @@ fn process_vertices(m: &mut Machine, a: &[u32]) -> HostResult {
         if let Some(at) = out.diffuse {
             written[at..at + 4].copy_from_slice(&diffuse.to_le_bytes());
         }
+        let specular = match &fog {
+            Some((to_camera, start, end)) => {
+                let along = |column: usize| {
+                    p[0] * to_camera[column]
+                        + p[1] * to_camera[4 + column]
+                        + p[2] * to_camera[8 + column]
+                        + to_camera[12 + column]
+                };
+                let depth = (along(2) / along(3)).abs();
+                let factor = ((end - depth) / (end - start)).clamp(0.0, 1.0);
+                specular & 0x00FF_FFFF | ((factor * 255.0 + 0.5) as u32) << 24
+            }
+            None => specular,
+        };
         if let Some(at) = out.specular {
             written[at..at + 4].copy_from_slice(&specular.to_le_bytes());
         }

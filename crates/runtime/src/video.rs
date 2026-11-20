@@ -323,6 +323,10 @@ pub struct DrawState {
     pub flat: bool,
     /// The specular colour is added after the combiner.
     pub specular: bool,
+    /// Fog of this colour (`0x00RRGGBB`): each pixel is mixed with it by the
+    /// alpha of the vertices' specular colour, which is the share of the
+    /// pixel's own colour that is kept (1 no fog, 0 all fog).
+    pub fog: Option<u32>,
     pub color: Combine,
     pub alpha: Combine,
     /// `None`: no texture; the combiner's texture input is opaque white.

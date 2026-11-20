@@ -470,9 +470,18 @@ fn get_transform(m: &mut Machine, a: &[u32]) -> u32 {
 fn set_light_state(m: &mut Machine, a: &[u32]) -> u32 {
     let Some(index) = m.device_index(a[0]) else { return DDERR_INVALIDOBJECT };
     // Light states are numbered from 1.
-    match m.os.ddraw.devices[index].light_states.get_mut(a[1] as usize).filter(|_| a[1] != 0) {
+    let device = &mut m.os.ddraw.devices[index];
+    match device.light_states.get_mut(a[1] as usize).filter(|_| a[1] != 0) {
         Some(state) => {
             *state = a[2];
+            // The fog range of the light states is the fog range of the
+            // render states (as in Wine's DirectDraw).
+            match a[1] {
+                5 => device.render_states[render_state::FOGSTART] = a[2],
+                6 => device.render_states[render_state::FOGEND] = a[2],
+                7 => device.render_states[render_state::FOGDENSITY] = a[2],
+                _ => {}
+            }
             DD_OK
         }
         None => DDERR_INVALIDPARAMS,

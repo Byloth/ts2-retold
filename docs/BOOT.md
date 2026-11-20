@@ -21,7 +21,9 @@ shown 4313 frames, the last 141 of the demo at about 4,500 triangles each
 With recorded input (ADR 0017) it goes further: `--input` with a file
 saying `3700 press SPACE` and `3706 release SPACE` presses "jump" at the
 title screen and brings up the main menu (START GAME, OPTIONS, LOAD GAME,
-MOVIE VIEWER, EXIT), which the game then draws for as long as it is left.
+MOVIE VIEWER, EXIT), which the game then draws for as long as it is left. A
+second press chooses START GAME: the level map appears, drawn as an Etch
+A Sketch, and the view flies to "ANDY'S HOUSE" through grey fog.
 
 The pictures look right as far as can be told without the original beside
 them: the room, Buzz, an enemy robot, the lives, coins and battery

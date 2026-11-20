@@ -59,7 +59,8 @@ out of here into the roadmap or an ADR when work on them starts.
   `ProcessVertices` writes for a vertex outside the view when asked to
   clip, and how far one unit of `ZBIAS` moves a triangle. Spot lights and
   parallel-point lights stop the machine.
-- **Draw states not implemented** stop the machine by name: fog, a second
+- **Draw states not implemented** stop the machine by name: fog from a
+  table (per pixel) and exponential or range vertex fog, a second
   texture stage, wireframe and point fill, points and lines, depth bias,
   stencil, the texture factor, border addressing, and untransformed
   vertices passed straight to a draw call.

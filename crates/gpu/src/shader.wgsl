@@ -14,6 +14,8 @@ struct DrawUniforms {
     test: vec4<u32>,
     // The colour of the texels that are not drawn.
     key: vec4<f32>,
+    // The fog colour; the fourth component is not zero when there is fog.
+    fog: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> draw: DrawUniforms;
@@ -117,6 +119,10 @@ fn shade(diffuse: vec4<f32>, specular: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
     var result = color;
     if draw.test.z != 0u {
         result = min(color + specular.xyz, vec3<f32>(1.0));
+    }
+    // The specular alpha is the share of the colour that the fog leaves.
+    if draw.fog.w != 0.0 {
+        result = mix(draw.fog.xyz, result, specular.w);
     }
     return vec4<f32>(result, alpha);
 }
