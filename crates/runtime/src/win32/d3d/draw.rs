@@ -330,8 +330,13 @@ pub(super) fn layout(format: u32) -> Option<Layout> {
 /// maps the clip-space square onto pixel edges, hence the half pixel. `rhw`
 /// is one over the clip-space w, which corrects textures and colours for
 /// perspective. The adapter always corrects, as the cards of the time did:
-/// `TEXTUREPERSPECTIVE` is not looked at (ADR 0014). An `rhw` that is not
-/// a positive number is taken as one (UNVERIFIED on hardware).
+/// `TEXTUREPERSPECTIVE` is not looked at (ADR 0014).
+///
+/// A negative `rhw` is a vertex behind the viewer: Direct3D writes it so
+/// when it transforms vertices, and multiplying back by the negative w
+/// gives the position the vertex had before the division, which the
+/// backend clips like any other. An `rhw` of zero, or not a number, is
+/// taken as one (UNVERIFIED on hardware).
 fn transformed_vertices(bytes: &[u8], layout: &Layout, viewport: Rect) -> Vec<Vertex> {
     let float =
         |vertex: &[u8], at: usize| f32::from_le_bytes(vertex[at..at + 4].try_into().expect("four bytes"));
@@ -341,7 +346,7 @@ fn transformed_vertices(bytes: &[u8], layout: &Layout, viewport: Rect) -> Vec<Ve
         .chunks_exact(layout.size as usize)
         .map(|vertex| {
             let (x, y, z, rhw) = (float(vertex, 0), float(vertex, 4), float(vertex, 8), float(vertex, 12));
-            let w = if rhw.is_finite() && rhw > 0.0 { 1.0 / rhw } else { 1.0 };
+            let w = if rhw.is_finite() && rhw != 0.0 { 1.0 / rhw } else { 1.0 };
             let across = (x + 0.5 - viewport.x as f32) / viewport.width as f32 * 2.0 - 1.0;
             let up = 1.0 - (y + 0.5 - viewport.y as f32) / viewport.height as f32 * 2.0;
             Vertex {
@@ -606,6 +611,17 @@ mod tests {
         bytes[12..16].fill(0);
         let [vertex] = transformed_vertices(&bytes, &layout, viewport)[..] else { panic!("one vertex") };
         assert_eq!(vertex.position, [-1.0 + 1.0 / 640.0, 1.0 - 1.0 / 480.0, 0.25, 1.0]);
+
+        // A vertex behind the viewer has a negative rhw: its position comes
+        // back as it was before the division, with a negative w.
+        let mut behind = bytes.clone();
+        for (at, value) in [(0, 480.0f32), (4, 360.0), (8, 2.0), (12, -0.25)] {
+            behind[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let [vertex] = transformed_vertices(&behind, &layout, viewport)[..] else { panic!("one vertex") };
+        let [x, y, z, w] = vertex.position;
+        assert_eq!((z, w), (-8.0, -4.0));
+        assert!((x / w - 0.5015625).abs() < 1e-6 && (y / w + 0.50208336).abs() < 1e-6, "{x} {y}");
 
         // A format with only a position gets white, no specular, no texture.
         let layout = super::layout(0x004).unwrap();

@@ -83,8 +83,10 @@ program has changed since is drawn from the buffer's visible contents.
   is in the backlog.
 - **A texture stage without a texture** reads as opaque white
   (`UNVERIFIED`; what cards of the time returned is not documented).
-- **`rhw` that is zero, negative or not a number** is taken as 1
-  (`UNVERIFIED`).
+- **`rhw` that is zero or not a number** is taken as 1 (`UNVERIFIED`). A
+  negative one is honoured: it is how Direct3D marks a vertex behind the
+  viewer, and the game draws such vertices after reading them back from
+  `ProcessVertices`.
 
 ## Consequences
 
