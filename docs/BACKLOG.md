@@ -26,10 +26,22 @@ out of here into the roadmap or an ADR when work on them starts.
 
 ## Gaps in the runtime
 
-- **GDI text is not drawn** (`crates/runtime/src/win32/gdi32.rs`). Needed to
-  show the "Screen Mode Select" window and DirectDraw debug text. It needs a
-  text engine and fonts that can be shipped; the window asks for Comic Sans
-  MS, so a free look-alike would have to stand in.
+- **GDI text has one typeface** (`crates/runtime/src/win32/text.rs`):
+  Liberation Sans, regular, whatever face is asked for. Bold, italic,
+  underline, rotation and the stock fonts stop the machine. The "Screen Mode
+  Select" window asks for Comic Sans MS and uses stock fonts, so it cannot
+  be shown with `skip-mode-select` off until those exist.
+- **Text widths are not Arial's pixel-exact widths.** Windows used Arial's
+  hand-tuned width at each size; the substitute rounds its scaled outline
+  width. The game's font texture is laid out from these measurements, so
+  its glyph cells can differ by a pixel from the original's.
+- **GDI cannot draw on a DirectDraw surface.** `GetDC` gives a context that
+  serves as the model for a compatible one (all the game does with it);
+  drawing through it stops the machine.
+- **The guest heap never reuses memory.** `Os::allocate` only moves forward;
+  blocks the game frees, and the runtime's own blocks (surface memory,
+  DIB sections, vertex buffers), are never returned. A long session will
+  need a real allocator.
 - **Sound is not heard.** DirectSound buffers hold their samples and their
   play cursors advance, but nothing mixes them to an output yet.
 - **No input yet.** Nothing delivers keyboard, mouse or joystick events.
@@ -47,3 +59,11 @@ out of here into the roadmap or an ADR when work on them starts.
 
 - The executable's hash against an original disc (ADR 0003).
 - Reference screenshots of the original game, once the port draws.
+- Which font Windows picks for the face name "ariel" (the game's spelling;
+  no such font exists). The runtime answers with its Arial substitute.
+- Direct3D 6 default render states written from recollection:
+  `TEXTUREPERSPECTIVE` off and `SPECULARENABLE` on
+  (`crates/runtime/src/win32/d3d/device.rs`). To check against the DirectX 6
+  documentation.
+- `IDirectDrawSurface4::Unlock` on a surface whose lock is held by `GetDC`
+  returns `DDERR_NOTLOCKED` here; the real code is not known.

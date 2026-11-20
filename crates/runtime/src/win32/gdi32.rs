@@ -1,10 +1,9 @@
-//! GDI32: bitmaps, device contexts and copies between them.
+//! GDI32: bitmaps, device contexts, copies between them, and text.
 //!
-//! The game uses GDI for its start-up "Screen Mode Select" window and for
-//! debug text. Bitmaps and copies are implemented; **text is not drawn**:
-//! it needs the fonts of Windows, which cannot be shipped, so text output
-//! stops the machine. The window that needs it is normally replaced by the
-//! `skip-mode-select` modification.
+//! The game uses GDI for its start-up "Screen Mode Select" window (normally
+//! replaced by the `skip-mode-select` modification) and to draw the
+//! characters of a font into a bitmap, from which it builds a texture.
+//! Text is drawn with a substitute typeface: see [`super::text`].
 //!
 //! Colours are held as `0x00RRGGBB` at full depth. A real device-dependent
 //! bitmap would hold the display's colours (16 bits in the game's modes), so
@@ -12,6 +11,7 @@
 
 use std::collections::HashMap;
 
+use super::text::Font;
 use super::user32::Window;
 use super::{HostResult, functions};
 use crate::files::Disposition;
@@ -29,6 +29,17 @@ const TRANSPARENT: u32 = 1;
 const OPAQUE: u32 = 2;
 const CLR_INVALID: u32 = u32::MAX;
 const CBM_INIT: u32 = 4;
+const WHITE: u32 = 0x00FF_FFFF;
+const FW_DONTCARE: u32 = 0;
+const FW_NORMAL: u32 = 400;
+/// `tmPitchAndFamily` of the typeface: variable pitch (which is what the
+/// `TMPF_FIXED_PITCH` bit means), outlines, TrueType, and the Swiss family.
+const PITCH_AND_FAMILY: u8 = 0x01 | 0x02 | 0x04 | 0x20;
+
+/// A `COLORREF` (`0x00BBGGRR`) as `0x00RRGGBB`, and back.
+fn swap_red_and_blue(color: u32) -> u32 {
+    (color & 0xFF) << 16 | (color & 0xFF00) | (color >> 16 & 0xFF)
+}
 
 /// Where a bitmap keeps its pixels.
 #[derive(Debug, Clone)]
@@ -60,6 +71,9 @@ enum Target {
     Window(u32),
     /// The bitmap selected into a memory device context.
     Bitmap(u32),
+    /// A DirectDraw surface, by index. Such a context exists and can be the
+    /// model for a compatible one; drawing through it is not implemented.
+    Surface(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -69,14 +83,38 @@ struct DeviceContext {
     brush: u32,
     pen: u32,
     text_color: u32,
+    background_color: u32,
     background_mode: u32,
+}
+
+impl DeviceContext {
+    /// A context as Windows hands it out: system font, white brush, black
+    /// pen, black text on an opaque white background.
+    fn new(target: Target) -> DeviceContext {
+        DeviceContext {
+            target,
+            font: SYSTEM_FONT,
+            brush: STOCK_TAG,
+            pen: STOCK_TAG | 7,
+            text_color: 0,
+            background_color: WHITE,
+            background_mode: OPAQUE,
+        }
+    }
+}
+
+/// A font object: the substitute font at the size asked for, and whatever
+/// was asked that the substitute cannot give.
+#[derive(Debug, Clone, Copy)]
+struct FontObject {
+    font: Font,
+    unsupported: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
 enum Object {
     Bitmap(Bitmap),
-    /// A font. Nothing about it is kept, since text is not drawn.
-    Font,
+    Font(FontObject),
     DeviceContext(DeviceContext),
 }
 
@@ -137,14 +175,34 @@ fn not_implemented(what: &str) -> HostResult {
 impl Machine {
     /// Creates a device context for a window's client area.
     pub(crate) fn window_context(&mut self, window: u32) -> u32 {
-        self.os.gdi.create(Object::DeviceContext(DeviceContext {
-            target: Target::Window(window),
-            font: SYSTEM_FONT,
-            brush: STOCK_TAG,
-            pen: STOCK_TAG | 7,
-            text_color: 0,
-            background_mode: OPAQUE,
-        }))
+        self.os.gdi.create(Object::DeviceContext(DeviceContext::new(Target::Window(window))))
+    }
+
+    /// Creates a device context for a DirectDraw surface.
+    pub(crate) fn surface_context(&mut self, surface: usize) -> u32 {
+        self.os.gdi.create(Object::DeviceContext(DeviceContext::new(Target::Surface(surface))))
+    }
+
+    /// Stops if a device context draws on a DirectDraw surface.
+    fn check_drawable(&mut self, context: u32) -> Result<(), Stop> {
+        match self.os.gdi.context(context).map(|context| context.target) {
+            Some(Target::Surface(_)) => not_implemented("drawing on a DirectDraw surface").map(|_| ()),
+            _ => Ok(()),
+        }
+    }
+
+    /// The font selected into a device context; `None` if there is no such
+    /// context.
+    fn selected_font(&mut self, context: u32) -> Result<Option<Font>, Stop> {
+        let Some(handle) = self.os.gdi.context(context).map(|context| context.font) else { return Ok(None) };
+        match self.os.gdi.object(handle) {
+            Some(Object::Font(FontObject { font, unsupported: None })) => Ok(Some(*font)),
+            Some(Object::Font(FontObject { unsupported: Some(what), .. })) => {
+                let what = format!("text in a font with {what}");
+                not_implemented(&what).map(|_| None)
+            }
+            _ => not_implemented("text in a stock font").map(|_| None),
+        }
     }
 
     pub(crate) fn delete_context(&mut self, handle: u32) -> bool {
@@ -161,7 +219,7 @@ impl Machine {
     /// at the size of its client area the first time it is needed.
     fn target_bitmap(&mut self, context: u32) -> Option<&mut Bitmap> {
         match self.os.gdi.context(context)?.target {
-            Target::Bitmap(DEFAULT_BITMAP) => None,
+            Target::Bitmap(DEFAULT_BITMAP) | Target::Surface(_) => None,
             Target::Bitmap(handle) => self.os.gdi.bitmap(handle),
             Target::Window(window) => {
                 let (width, height) = self.os.user.window(window).map(Window::client_size)?;
@@ -302,6 +360,8 @@ fn copy(m: &mut Machine, a: &[u32], source_size: Option<(i32, i32)>) -> HostResu
     if operation != SRCCOPY {
         return not_implemented("a raster operation other than SRCCOPY");
     }
+    m.check_drawable(target)?;
+    m.check_drawable(source)?;
     let (source_width, source_height) = source_size.unwrap_or((width, height));
     if width <= 0 || height <= 0 || source_width <= 0 || source_height <= 0 {
         return not_implemented("a mirrored or empty copy");
@@ -350,7 +410,7 @@ fn select_object(m: &mut Machine, a: &[u32]) -> u32 {
     let is_stock = object & !0xFFF == STOCK_TAG;
     let kind = match m.os.gdi.object(object) {
         Some(Object::Bitmap(_)) => 0,
-        Some(Object::Font) => 1,
+        Some(Object::Font(_)) => 1,
         None if object == DEFAULT_BITMAP => 0,
         // Stock objects 10 to 17 are fonts; 0 to 5 brushes; 6 to 8 pens.
         None if is_stock && (10..=17).contains(&(object & 0xFF)) => 1,
@@ -368,7 +428,7 @@ fn select_object(m: &mut Machine, a: &[u32]) -> u32 {
                 context.target = Target::Bitmap(object);
                 previous
             }
-            Target::Window(_) => 0,
+            Target::Window(_) | Target::Surface(_) => 0,
         },
         1 => std::mem::replace(&mut context.font, object),
         2 => std::mem::replace(&mut context.brush, object),
@@ -407,24 +467,98 @@ fn get_object(m: &mut Machine, a: &[u32]) -> u32 {
     if capacity >= 24 && m.write_words(out, &basic) { 24 } else { 0 }
 }
 
-fn text_out(m: &mut Machine, context: u32) -> HostResult {
-    if m.os.gdi.context(context).is_none() {
+/// Draws one line of text with its top-left corner at `(x, y)`.
+fn text_out(m: &mut Machine, context: u32, x: i32, y: i32, text: u32, count: u32) -> HostResult {
+    let Some(font) = m.selected_font(context)? else { return Ok(0) };
+    m.check_drawable(context)?;
+    let Some(text) = m.memory.dump(text, count) else { return Ok(0) };
+    let Some((color, background)) = m.os.gdi.context(context).map(|context| {
+        (context.text_color, (context.background_mode == OPAQUE).then_some(context.background_color))
+    }) else {
+        return Ok(0);
+    };
+    // The text's box, with room around it for glyphs that reach outside.
+    let (cell_width, cell_height, margin) = (font.width(&text), font.height(), font.em);
+    let (width, height) = (cell_width + 2 * margin, cell_height + 2 * margin);
+    let Some(mut pixels) = m.read_pixels(context, x - margin, y - margin, width, height) else {
+        return Ok(0);
+    };
+    if let Some(background) = background {
+        for row in margin..margin + cell_height {
+            let start = (row * width + margin) as usize;
+            pixels[start..start + cell_width as usize].fill(background);
+        }
+    }
+    font.draw(&text, |glyph_x, glyph_y| {
+        let (column, row) = (glyph_x + margin, glyph_y + margin);
+        if (0..width).contains(&column) && (0..height).contains(&row) {
+            pixels[(row * width + column) as usize] = color;
+        }
+    });
+    Ok(m.write_pixels(context, x - margin, y - margin, width, &pixels).is_some() as u32)
+}
+
+/// `CreateDIBSection`: a bitmap whose pixels the program can reach.
+fn create_dib_section(m: &mut Machine, a: &[u32]) -> HostResult {
+    // Device context, BITMAPINFO, colour usage, where to put the address of
+    // the bits, a file mapping and an offset into it.
+    let (info, bits_out, mapping) = (a[1], a[3], a[4]);
+    let [size, width, height, planes_and_depth, compression]: [u32; 5] = m.read_words(info);
+    let (width, height) = (width as i32, height as i32);
+    if size != 40 || width <= 0 || height == 0 || planes_and_depth & 0xFFFF != 1 {
         return Ok(0);
     }
-    not_implemented("drawing text")
+    if planes_and_depth >> 16 != 24 || compression != 0 {
+        return not_implemented("CreateDIBSection of a bitmap that is not 24-bit uncompressed");
+    }
+    if mapping != 0 {
+        return not_implemented("CreateDIBSection over a file mapping");
+    }
+    let rows = height.unsigned_abs();
+    let stride = (width as u32 * 3 + 3) & !3;
+    let Some(bytes) = stride.checked_mul(rows).filter(|&bytes| bytes <= 1 << 28) else { return Ok(0) };
+    let bits = m.os.allocate(&mut m.memory, bytes);
+    m.memory.load(bits, &vec![0; bytes as usize]).expect("block was just allocated");
+    if bits_out != 0 && m.memory.write(bits_out, 4, bits).is_none() {
+        return Ok(0);
+    }
+    m.note(|| format!("{width} x {rows}, bits at {bits:#x}"));
+    let pixels = Pixels::Section { bits, stride, bottom_up: height > 0 };
+    Ok(m.os.gdi.create(Object::Bitmap(Bitmap { width, height: rows as i32, pixels })))
+}
+
+/// `GetTextMetricsA`: the measurements of the selected font.
+fn get_text_metrics(m: &mut Machine, a: &[u32]) -> HostResult {
+    let Some(font) = m.selected_font(a[0])? else { return Ok(0) };
+    // TEXTMETRICA: eleven numbers, then nine bytes, padded to 56 bytes.
+    let numbers = [
+        font.height(),
+        font.ascent,
+        font.descent,
+        font.height() - font.em, // internal leading
+        0,                       // external leading
+        font.average_width,
+        font.max_width,
+        FW_NORMAL as i32,
+        0,  // overhang
+        96, // the display's dots per inch, across and down
+        96,
+    ];
+    // First, last, default and break characters, as Windows reports them
+    // for a TrueType font in this code page (UNVERIFIED on Windows 98);
+    // not italic, underlined or struck out; pitch and family; ANSI.
+    let bytes = [0x20, 0xFF, 0x1F, 0x20, 0, 0, 0, PITCH_AND_FAMILY, 0];
+    let mut block = Vec::with_capacity(56);
+    numbers.iter().for_each(|number| block.extend_from_slice(&number.to_le_bytes()));
+    block.extend_from_slice(&bytes);
+    block.resize(56, 0);
+    Ok(m.memory.load(a[1], &block).is_some() as u32)
 }
 
 functions! { "GDI32.dll";
     GetStockObject(1) => |_, a| if a[0] <= 19 { STOCK_TAG | a[0] } else { 0 },
     CreateCompatibleDC(1) => |m, _| {
-        m.os.gdi.create(Object::DeviceContext(DeviceContext {
-            target: Target::Bitmap(DEFAULT_BITMAP),
-            font: SYSTEM_FONT,
-            brush: STOCK_TAG,
-            pen: STOCK_TAG | 7,
-            text_color: 0,
-            background_mode: OPAQUE,
-        }))
+        m.os.gdi.create(Object::DeviceContext(DeviceContext::new(Target::Bitmap(DEFAULT_BITMAP))))
     },
     DeleteDC(1) => |m, a| m.delete_context(a[0]) as u32,
     CreateCompatibleBitmap(3) => |m, a| {
@@ -446,10 +580,26 @@ functions! { "GDI32.dll";
         Ok(m.os.gdi.create(Object::Bitmap(Bitmap::device(width as i32, (height as i32).abs()))))
     },
     CreateFontA(14) => |m, a| {
+        // Height, width, escapement, orientation, weight, italic, underline,
+        // strike-out, character set, three quality settings, pitch and
+        // family, face name. The face is always the substitute one.
         let face = m.text(a[13]);
-        m.note(|| format!("{face:?}, height {}", a[0] as i32));
-        m.os.gdi.create(Object::Font)
+        let font = Font::with_height(a[0] as i32);
+        m.note(|| format!("{face:?}, height {}: {} pixels per em", a[0] as i32, font.em));
+        let unsupported = if a[1] != 0 {
+            Some("a set width")
+        } else if a[2] != 0 || a[3] != 0 {
+            Some("rotation")
+        } else if a[4] != FW_DONTCARE && a[4] != FW_NORMAL {
+            Some("a weight other than normal")
+        } else if a[5] & 0xFF != 0 || a[6] & 0xFF != 0 || a[7] & 0xFF != 0 {
+            Some("italics, underline or strike-out")
+        } else {
+            None
+        };
+        m.os.gdi.create(Object::Font(FontObject { font, unsupported }))
     },
+    CreateDIBSection(6) => create_dib_section,
     SelectObject(2) => select_object,
     DeleteObject(1) => |m, a| {
         // An object still selected into a device context cannot be deleted.
@@ -458,7 +608,7 @@ functions! { "GDI32.dll";
             _ => false,
         });
         match m.os.gdi.slot(a[0]) {
-            Some(slot @ Some(Object::Bitmap(_) | Object::Font)) if !selected => {
+            Some(slot @ Some(Object::Bitmap(_) | Object::Font(_))) if !selected => {
                 *slot = None;
                 1
             }
@@ -475,15 +625,31 @@ functions! { "GDI32.dll";
         m.os.gdi.context(a[0]).map_or(0, |context| std::mem::replace(&mut context.background_mode, a[1]))
     },
     SetTextColor(2) => |m, a| {
-        // COLORREF is 0x00BBGGRR.
-        let color = (a[1] & 0xFF) << 16 | (a[1] & 0xFF00) | (a[1] >> 16 & 0xFF);
+        let color = swap_red_and_blue(a[1]);
         m.os.gdi.context(a[0]).map_or(CLR_INVALID, |context| {
-            let previous = std::mem::replace(&mut context.text_color, color);
-            (previous & 0xFF) << 16 | (previous & 0xFF00) | (previous >> 16 & 0xFF)
+            swap_red_and_blue(std::mem::replace(&mut context.text_color, color))
         })
     },
-    TextOutA(5) => |m, a| text_out(m, a[0]),
-    ExtTextOutA(8) => |m, a| text_out(m, a[0]),
+    SetBkColor(2) => |m, a| {
+        let color = swap_red_and_blue(a[1]);
+        m.os.gdi.context(a[0]).map_or(CLR_INVALID, |context| {
+            swap_red_and_blue(std::mem::replace(&mut context.background_color, color))
+        })
+    },
+    GetTextMetricsA(2) => get_text_metrics,
+    GetTextExtentPoint32A(4) => |m, a| -> HostResult {
+        let Some(font) = m.selected_font(a[0])? else { return Ok(0) };
+        let Some(text) = m.memory.dump(a[1], a[2]) else { return Ok(0) };
+        Ok(m.write_words(a[3], &[font.width(&text) as u32, font.height() as u32]) as u32)
+    },
+    TextOutA(5) => |m, a| text_out(m, a[0], a[1] as i32, a[2] as i32, a[3], a[4]),
+    ExtTextOutA(8) => |m, a| -> HostResult {
+        // Context, position, options, clipping rectangle, text, count, spacing.
+        if a[3] != 0 || a[7] != 0 {
+            return not_implemented("ExtTextOutA with options or its own spacing");
+        }
+        text_out(m, a[0], a[1] as i32, a[2] as i32, a[5], a[6])
+    },
 }
 
 #[cfg(test)]
@@ -567,5 +733,98 @@ mod tests {
         assert_eq!(m.host("GDI32.dll", "DeleteObject", &[target]), 1);
         assert_eq!(m.host("GDI32.dll", "DeleteDC", &[to]), 1);
         assert_eq!(m.host("GDI32.dll", "DeleteDC", &[to]), 0);
+    }
+
+    /// A memory device context drawing on a new 24-bit section of the given
+    /// size, with a font of the given height selected; and the section's bits.
+    fn text_context(m: &mut Machine, width: u32, height: u32, font_height: u32) -> (u32, u32) {
+        let info = m.scratch(40);
+        assert!(m.write_words(info, &[40, width, height, 1 | 24 << 16, 0]));
+        let bits_out = m.scratch(4);
+        let section = m.host("GDI32.dll", "CreateDIBSection", &[0, info, 0, bits_out, 0, 0]);
+        assert_ne!(section, 0);
+        let context = m.host("GDI32.dll", "CreateCompatibleDC", &[0]);
+        assert_eq!(m.host("GDI32.dll", "SelectObject", &[context, section]), DEFAULT_BITMAP);
+        let face = m.scratch(8);
+        let font =
+            m.host("GDI32.dll", "CreateFontA", &[font_height, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, face]);
+        assert_eq!(m.host("GDI32.dll", "SelectObject", &[context, font]), SYSTEM_FONT);
+        (context, m.memory.read(bits_out, 4).unwrap())
+    }
+
+    #[test]
+    fn text_is_measured_and_drawn_into_a_section() {
+        let mut m = testing::machine();
+        let (width, height) = (64u32, 32u32);
+        let (context, bits) = text_context(&mut m, width, height, 20);
+        // A positive height makes a bottom-up section: its first stored row is the last one.
+        let pixel = |m: &mut Machine, x: u32, y: u32| {
+            m.memory.read(bits + (height - 1 - y) * width * 3 + 3 * x, 3).unwrap()
+        };
+
+        let metrics = m.scratch(56);
+        assert_eq!(m.host("GDI32.dll", "GetTextMetricsA", &[context, metrics]), 1);
+        let words: [u32; 11] = m.read_words(metrics);
+        assert_eq!(words[..5], [20, 16, 4, 2, 0]);
+        assert_eq!(words[7..], [400, 0, 96, 96]);
+        assert_eq!(
+            m.memory.dump(metrics + 44, 12).unwrap(),
+            [0x20, 0xFF, 0x1F, 0x20, 0, 0, 0, 0x27, 0, 0, 0, 0]
+        );
+
+        let text = m.scratch(4);
+        m.memory.load(text, b"Hi").unwrap();
+        let size = m.scratch(8);
+        assert_eq!(m.host("GDI32.dll", "GetTextExtentPoint32A", &[context, text, 2, size]), 1);
+        let [text_width, text_height]: [u32; 2] = m.read_words(size);
+        assert_eq!(text_height, 20);
+        assert!((10..30).contains(&text_width), "{text_width}");
+
+        // Red text on an opaque blue background (colours are 0x00BBGGRR).
+        assert_eq!(m.host("GDI32.dll", "SetTextColor", &[context, 0x0000_00FF]), 0);
+        assert_eq!(m.host("GDI32.dll", "SetBkColor", &[context, 0x00FF_0000]), 0x00FF_FFFF);
+        assert_eq!(m.host("GDI32.dll", "TextOutA", &[context, 5, 3, text, 2]), 1);
+        let (mut red, mut blue, mut other) = (0, 0, 0);
+        for y in 0..height {
+            for x in 0..width {
+                let inside = (5..5 + text_width).contains(&x) && (3..3 + text_height).contains(&y);
+                match pixel(&mut m, x, y) {
+                    0x00FF_0000 if inside => red += 1,
+                    0x0000_00FF if inside => blue += 1,
+                    0 if !inside => {}
+                    _ => other += 1,
+                }
+            }
+        }
+        assert_eq!(other, 0);
+        assert_eq!(red + blue, text_width * text_height);
+        assert!(red > 30, "{red} pixels of text");
+
+        // A transparent background leaves what was there.
+        assert_eq!(m.host("GDI32.dll", "SetBkMode", &[context, TRANSPARENT]), OPAQUE);
+        assert_eq!(m.host("GDI32.dll", "SetTextColor", &[context, 0x0000_FF00]), 0x0000_00FF);
+        assert_eq!(m.host("GDI32.dll", "TextOutA", &[context, 5, 3, text, 2]), 1);
+        let mut green = 0;
+        for y in 0..height {
+            for x in 0..width {
+                match pixel(&mut m, x, y) {
+                    0x0000_FF00 => green += 1,
+                    color => assert!(color == 0 || color == 0x0000_00FF, "{color:#x} at {x},{y}"),
+                }
+            }
+        }
+        assert_eq!(green, red);
+    }
+
+    #[test]
+    fn text_in_a_font_the_substitute_cannot_give_stops_the_machine() {
+        let mut m = testing::machine();
+        let context = m.host("GDI32.dll", "CreateCompatibleDC", &[0]);
+        let face = m.scratch(8);
+        let bold = m.host("GDI32.dll", "CreateFontA", &[20, 0, 0, 0, 700, 0, 0, 0, 0, 0, 0, 0, 0, face]);
+        assert_eq!(m.host("GDI32.dll", "SelectObject", &[context, bold]), SYSTEM_FONT);
+        let metrics = m.scratch(56);
+        let function = crate::win32::lookup("GDI32.dll", "GetTextMetricsA").unwrap();
+        assert!(matches!((function.handler)(&mut m, &[context, metrics]), Err(Stop::Unimplemented { .. })));
     }
 }

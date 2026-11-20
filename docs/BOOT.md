@@ -11,10 +11,10 @@ cargo run --release --bin andy -- boot --trace
 
 ## How far it gets
 
-**About 131.6 million instructions**, then it stops at
-`IDirectDraw4::CreateSurface` for the primary surface (primary, 3D device,
-flip chain with one back buffer): the display is in 640×480 at 16 bits and
-everything before the first surface is done.
+**About 139.4 million instructions**, then it stops at
+`IDirect3DDevice3::EnumTextureFormats`: DirectDraw, the 3D device and
+DirectInput are set up, the game has drawn its debug font into a bitmap and
+is about to make a texture of it.
 
 | Phase | What happens |
 |---|---|
@@ -30,7 +30,11 @@ everything before the first surface is done.
 | Sound | Creates DirectSound, loads 61 sound effects from `sfx\*.wav` into buffers and duplicates them, starts the streaming thread |
 | Second enumeration | `DirectDrawEnumerateExA`, `IDirectDraw4`, `IDirect3D3`: drivers, devices and modes again, DirectX 6 style |
 | "Screen Mode Select" | The start-up window; skipped by a modification (`docs/MODIFICATIONS.md`) |
-| Renderer start | Main window maximised, `DirectDrawCreate`, cooperative level `FULLSCREEN | EXCLUSIVE | ALLOWREBOOT | FPUSETUP`, `FindDevice`, `EnumZBufferFormats`, `SetDisplayMode(640, 480, 16)`, then `CreateSurface` — not implemented yet |
+| Renderer start | Main window maximised, `DirectDrawCreate`, cooperative level `FULLSCREEN | EXCLUSIVE | ALLOWREBOOT | FPUSETUP`, `FindDevice`, `EnumZBufferFormats`, `SetDisplayMode(640, 480, 16)` |
+| Surfaces and device | Primary surface with one back buffer, 16-bit z-buffer attached to it, `CreateDevice` (the x87 unit goes to single precision), a viewport covering the screen |
+| Input | `DirectInputCreateA` (version 5), the keyboard with its data format, acquired; joysticks enumerated (none) |
+| Render set-up | A material, three vertex buffers of 1000 vertices (two of transformed-and-lit vertices, one untransformed), render, light and texture-stage states |
+| Debug font | `CreateFontA("ariel", 20)`, a 256×256 DIB section, each character measured and drawn with `TextOutA`; then `EnumTextureFormats` — not implemented yet |
 
 ## The game's own log
 
@@ -106,6 +110,7 @@ CONFIG : Base CD track is 2.
 
 ## Next
 
-The primary surface with its back buffer and z-buffer, then the 3D device:
-the first work for the GPU renderer (ADR 0012). DirectInput is created in the
-same stretch.
+Texture formats and texture surfaces, then the first draw calls
+(`DrawIndexedPrimitive` with transformed-and-lit vertices) and `Flip`: the
+`Video` interface gains drawing, and the GPU backend (ADR 0012) is built
+against it.

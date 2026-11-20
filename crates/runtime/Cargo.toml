@@ -11,3 +11,5 @@ publish.workspace = true
 andy-cpu = { path = "../cpu" }
 andy-recomp = { path = "../recomp" }
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info"] }
+fontdue = "0.9"
+ttf-parser = "0.25"

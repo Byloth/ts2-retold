@@ -22,6 +22,8 @@ use crate::{Machine, Stop};
 const DDERR_INVALIDRECT: u32 = dd_error(150);
 const DDERR_SURFACEBUSY: u32 = dd_error(430);
 const DDERR_NOTLOCKED: u32 = dd_error(584);
+const DDERR_NODC: u32 = dd_error(586);
+const DDERR_DCALREADYCREATED: u32 = dd_error(620);
 const DDERR_INVALIDPIXELFORMAT: u32 = dd_error(145);
 const DDERR_NOCOLORKEY: u32 = dd_error(215);
 const DDERR_CANNOTATTACHSURFACE: u32 = dd_error(10);
@@ -82,6 +84,9 @@ pub struct Surface {
     pointer: u32,
     /// Its `IDirect3DTexture2` interface pointer, once asked for.
     texture_pointer: u32,
+    /// The GDI device context handed out by `GetDC`, or zero. The surface
+    /// stays locked while it is out.
+    context: u32,
     pub width: u32,
     pub height: u32,
     pub format: PixelFormat,
@@ -127,6 +132,7 @@ impl Machine {
             references: 1,
             pointer,
             texture_pointer: 0,
+            context: 0,
             width,
             height,
             format,
@@ -517,10 +523,38 @@ fn lock(m: &mut Machine, a: &[u32]) -> u32 {
 fn unlock(m: &mut Machine, a: &[u32]) -> u32 {
     let Some(index) = m.surface_index(a[0]) else { return DDERR_INVALIDOBJECT };
     let surface = &mut m.os.ddraw.surfaces[index];
-    if !surface.locked {
+    // A lock held for a device context ends with `ReleaseDC`, not here
+    // (the code returned in that case is UNVERIFIED).
+    if !surface.locked || surface.context != 0 {
         return DDERR_NOTLOCKED;
     }
     surface.locked = false;
+    DD_OK
+}
+
+fn get_dc(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(index) = m.surface_index(a[0]) else { return DDERR_INVALIDOBJECT };
+    let surface = &m.os.ddraw.surfaces[index];
+    if surface.context != 0 {
+        return DDERR_DCALREADYCREATED;
+    }
+    if surface.locked {
+        return DDERR_SURFACEBUSY;
+    }
+    let context = m.surface_context(index);
+    let surface = &mut m.os.ddraw.surfaces[index];
+    (surface.context, surface.locked) = (context, true);
+    if m.memory.write(a[1], 4, context).is_some() { DD_OK } else { DDERR_INVALIDPARAMS }
+}
+
+fn release_dc(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(index) = m.surface_index(a[0]) else { return DDERR_INVALIDOBJECT };
+    let surface = &mut m.os.ddraw.surfaces[index];
+    if surface.context == 0 || surface.context != a[1] {
+        return DDERR_NODC;
+    }
+    (surface.context, surface.locked) = (0, false);
+    m.delete_context(a[1]);
     DD_OK
 }
 
@@ -664,7 +698,7 @@ interface! { static SURFACE_4 = "IDirectDrawSurface4";
     GetCaps(2) => get_caps,
     GetClipper(2),
     GetColorKey(3),
-    GetDC(2),
+    GetDC(2) => get_dc,
     GetFlipStatus(2),
     GetOverlayPosition(3),
     GetPalette(2),
@@ -673,7 +707,7 @@ interface! { static SURFACE_4 = "IDirectDrawSurface4";
     Initialize(3),
     IsLost(1) => is_lost,
     Lock(5) => lock,
-    ReleaseDC(2),
+    ReleaseDC(2) => release_dc,
     Restore(1) => is_lost,
     SetClipper(2),
     SetColorKey(3) => set_color_key,

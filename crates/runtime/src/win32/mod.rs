@@ -17,6 +17,7 @@ pub mod dsound;
 pub mod gdi32;
 pub(crate) mod kernel32;
 mod ole32;
+pub mod text;
 pub mod user32;
 pub mod winmm;
 
