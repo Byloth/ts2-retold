@@ -14,6 +14,7 @@
 use super::com::{E_INVALIDARG, E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
 use super::{HostResult, functions};
 use crate::Machine;
+use crate::threads::Object;
 
 pub const DS_OK: u32 = S_OK;
 const DSERR_INVALIDPARAM: u32 = E_INVALIDARG;
@@ -30,6 +31,8 @@ const fn ds_error(code: u32) -> u32 {
 
 const IID_IDIRECTSOUND: Guid =
     guid(0x279AFA83, 0x4981, 0x11CE, [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60]);
+const IID_IDIRECTSOUNDNOTIFY: Guid =
+    guid(0xB0210783, 0x89CD, 0x11D0, [0xAF, 0x08, 0x00, 0xA0, 0xC9, 0x25, 0xCD, 0x16]);
 const IID_IDIRECTSOUNDBUFFER: Guid =
     guid(0x279AFA85, 0x4981, 0x11CE, [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60]);
 
@@ -42,6 +45,9 @@ const DSBCAPS_LOCSOFTWARE: u32 = 0x0008;
 const DSBCAPS_CTRLFREQUENCY: u32 = 0x0020;
 const DSBCAPS_CTRLPAN: u32 = 0x0040;
 const DSBCAPS_CTRLVOLUME: u32 = 0x0080;
+const DSBCAPS_CTRLPOSITIONNOTIFY: u32 = 0x0100;
+/// In place of an offset: the event is signalled when the buffer stops.
+const DSBPN_OFFSETSTOP: u32 = u32::MAX;
 
 const DSBPLAY_LOOPING: u32 = 1;
 const DSBSTATUS_PLAYING: u32 = 1;
@@ -148,6 +154,13 @@ pub struct Buffer {
     pub pan: i32,
     /// Playback rate in hertz; differs from the format's rate to shift pitch.
     pub frequency: u32,
+    /// Its `IDirectSoundNotify` interface pointer, once asked for.
+    notify_pointer: u32,
+    /// Offsets at which the play cursor signals an event, with the event.
+    notifications: Vec<(u32, u32)>,
+    /// While it plays: the play cursor up to which notifications have been
+    /// signalled.
+    notified_to: Option<u32>,
 }
 
 impl Buffer {
@@ -193,6 +206,40 @@ impl Buffer {
     }
 }
 
+impl Buffer {
+    /// The events of the notification positions the play cursor has passed
+    /// since the last call, and how long, in milliseconds, until it passes
+    /// the next one. Between calls the cursor must not go round a looping
+    /// buffer more than once; the scheduler calls every millisecond and
+    /// never lets the clock jump past the time returned.
+    fn pass_notifications(&mut self, now_ms: u32, events: &mut Vec<u32>) -> Option<u64> {
+        let from = self.notified_to?;
+        let (cursor, playing) = self.cursor(now_ms);
+        let size = self.size as u64;
+        if !playing {
+            // Played to its end: the positions that were left, and the stop.
+            events.extend(self.notifications.iter().filter(|&&(at, _)| at > from).map(|&(_, event)| event));
+            self.settle(now_ms);
+            self.notified_to = None;
+            return None;
+        }
+        // How far along the buffer a position is from the last one signalled.
+        let ahead = |position: u32| (position as u64 + size - from as u64 - 1) % size + 1;
+        let advanced = if cursor == from { 0 } else { ahead(cursor) };
+        let positions = self.notifications.iter().filter(|&&(at, _)| at != DSBPN_OFFSETSTOP);
+        events.extend(positions.clone().filter(|&&(at, _)| ahead(at) <= advanced).map(|&(_, event)| event));
+        self.notified_to = Some(cursor);
+        let looping = self.playback.is_some_and(|playback| playback.looping);
+        // The next position, or the end of a buffer that plays once.
+        let next = positions
+            .map(|&(at, _)| (at as u64 + size - cursor as u64 - 1) % size + 1)
+            .filter(|&distance| looping || distance <= size - cursor as u64)
+            .chain((!looping).then_some(size - cursor as u64))
+            .min()?;
+        Some((next * 1000).div_ceil(self.bytes_per_second()).max(1))
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct State {
     /// Guest strings describing the driver, created on first enumeration.
@@ -218,6 +265,38 @@ impl Machine {
         let buffer = self.sound_buffer(this)?;
         buffer.settle(now);
         Some(buffer)
+    }
+
+    /// The buffer whose `IDirectSoundNotify` interface `this` is.
+    fn notifying_buffer(&mut self, this: u32) -> Option<&mut Buffer> {
+        let index = self.object_index(this)?;
+        self.os.dsound.buffers.get_mut(index).filter(|b| b.references > 0 && b.notify_pointer == this)
+    }
+
+    /// Signals the events of the notification positions that playing
+    /// buffers have passed, and returns the time in milliseconds until the
+    /// next one. The scheduler calls this as the clock advances.
+    pub(crate) fn sound_notifications(&mut self) -> Option<u64> {
+        let now = self.clock_ms() as u32;
+        let mut events = Vec::new();
+        let next = self
+            .os
+            .dsound
+            .buffers
+            .iter_mut()
+            .filter(|buffer| buffer.notified_to.is_some())
+            .filter_map(|buffer| buffer.pass_notifications(now, &mut events))
+            .min();
+        self.signal(&events);
+        next
+    }
+
+    fn signal(&mut self, events: &[u32]) {
+        for &event in events {
+            if let Some(Object::Event { signaled, .. }) = self.threads.object(event) {
+                *signaled = true;
+            }
+        }
     }
 
     fn new_buffer(&mut self, buffer: Buffer) -> u32 {
@@ -370,6 +449,9 @@ fn create_sound_buffer(m: &mut Machine, a: &[u32]) -> u32 {
         volume: 0,
         pan: 0,
         frequency: format.samples_per_second,
+        notify_pointer: 0,
+        notifications: Vec::new(),
+        notified_to: None,
     });
     if m.memory.write(out, 4, pointer).is_some() { DS_OK } else { DSERR_INVALIDPARAM }
 }
@@ -413,6 +495,9 @@ fn duplicate_sound_buffer(m: &mut Machine, a: &[u32]) -> u32 {
         volume: original.volume,
         pan: original.pan,
         frequency: original.frequency,
+        notify_pointer: 0,
+        notifications: Vec::new(),
+        notified_to: None,
     };
     let pointer = m.new_buffer(copy);
     if m.memory.write(a[2], 4, pointer).is_some() { DS_OK } else { DSERR_INVALIDPARAM }
@@ -454,19 +539,36 @@ interface! { static SOUND_DEVICE = "IDirectSound";
 
 // --- IDirectSoundBuffer ---------------------------------------------------
 
+/// `QueryInterface` of a buffer, reached through either of its interfaces.
+/// The notification interface exists only on a buffer created for it.
+fn query_buffer(m: &mut Machine, index: usize, wanted_at: u32, out: u32) -> u32 {
+    let Some(wanted) = m.read_guid(wanted_at) else {
+        return DSERR_INVALIDPARAM;
+    };
+    let buffer = &m.os.dsound.buffers[index];
+    let pointer = match wanted {
+        IID_IUNKNOWN | IID_IDIRECTSOUNDBUFFER => buffer.pointer,
+        IID_IDIRECTSOUNDNOTIFY if buffer.flags & DSBCAPS_CTRLPOSITIONNOTIFY != 0 => {
+            if buffer.notify_pointer == 0 {
+                let pointer = m.interface_pointer(&SOUND_NOTIFY, index as u32);
+                m.os.dsound.buffers[index].notify_pointer = pointer;
+            }
+            m.os.dsound.buffers[index].notify_pointer
+        }
+        _ => {
+            let _ = m.memory.write(out, 4, 0);
+            return E_NOINTERFACE;
+        }
+    };
+    m.os.dsound.buffers[index].references += 1;
+    if m.memory.write(out, 4, pointer).is_some() { S_OK } else { DSERR_INVALIDPARAM }
+}
+
 fn buffer_query_interface(m: &mut Machine, a: &[u32]) -> u32 {
-    let Some(wanted) = m.read_guid(a[1]) else {
-        return DSERR_INVALIDPARAM;
-    };
-    let Some(buffer) = m.sound_buffer(a[0]) else {
-        return DSERR_INVALIDPARAM;
-    };
-    if wanted != IID_IUNKNOWN && wanted != IID_IDIRECTSOUNDBUFFER {
-        let _ = m.memory.write(a[2], 4, 0);
-        return E_NOINTERFACE;
+    match m.object_index(a[0]).filter(|_| m.sound_buffer(a[0]).is_some()) {
+        Some(index) => query_buffer(m, index, a[1], a[2]),
+        None => DSERR_INVALIDPARAM,
     }
-    buffer.references += 1;
-    if m.memory.write(a[2], 4, a[0]).is_some() { S_OK } else { DSERR_INVALIDPARAM }
 }
 
 fn buffer_add_ref(m: &mut Machine, a: &[u32]) -> u32 {
@@ -481,6 +583,8 @@ fn buffer_release(m: &mut Machine, a: &[u32]) -> u32 {
         buffer.references -= 1;
         if buffer.references == 0 {
             buffer.playback = None;
+            buffer.notified_to = None;
+            buffer.notifications.clear();
         }
         buffer.references
     })
@@ -609,14 +713,29 @@ fn play(m: &mut Machine, a: &[u32]) -> u32 {
         return DSERR_INVALIDPARAM;
     }
     buffer.playback = Some(Playback { started_ms: now, from: buffer.position, looping });
+    // Notifications count from where playback starts, unless it was
+    // already playing.
+    if !buffer.notifications.is_empty() && buffer.notified_to.is_none() {
+        buffer.notified_to = Some(buffer.position);
+    }
     DS_OK
 }
 
 fn stop(m: &mut Machine, a: &[u32]) -> u32 {
-    let Some(buffer) = m.settled_buffer(a[0]) else {
+    let now = m.os.now_ms;
+    let mut events = Vec::new();
+    let Some(buffer) = m.sound_buffer(a[0]) else {
         return DSERR_INVALIDPARAM;
     };
+    // What the cursor passed up to now, then the stop itself.
+    if buffer.pass_notifications(now, &mut events).is_some() || buffer.notified_to.take().is_some() {
+        events
+            .extend(buffer.notifications.iter().filter(|&&(at, _)| at == DSBPN_OFFSETSTOP).map(|&(_, e)| e));
+    }
+    buffer.settle(now);
     buffer.playback = None;
+    buffer.notified_to = None;
+    m.signal(&events);
     DS_OK
 }
 
@@ -750,6 +869,53 @@ interface! { static SOUND_BUFFER = "IDirectSoundBuffer";
     Restore(1) => |_, _| DS_OK,
 }
 
+// --- IDirectSoundNotify -----------------------------------------------------
+
+/// `SetNotificationPositions`: a count and that many pairs of an offset and
+/// an event. Only while the buffer is stopped.
+fn set_notification_positions(m: &mut Machine, a: &[u32]) -> u32 {
+    let (count, positions) = (a[1], a[2]);
+    let now = m.os.now_ms;
+    let Some((size, playing)) = m.notifying_buffer(a[0]).map(|buffer| (buffer.size, buffer.cursor(now).1))
+    else {
+        return DSERR_INVALIDPARAM;
+    };
+    if playing {
+        return DSERR_INVALIDCALL;
+    }
+    if count > 0x1_0000 {
+        return DSERR_INVALIDPARAM;
+    }
+    let mut notifications = Vec::with_capacity(count as usize);
+    for n in 0..count {
+        let [offset, event]: [u32; 2] = m.read_words(positions + 8 * n);
+        let is_event = matches!(m.threads.object(event), Some(Object::Event { .. }));
+        if !is_event || (offset >= size && offset != DSBPN_OFFSETSTOP) {
+            return DSERR_INVALIDPARAM;
+        }
+        notifications.push((offset, event));
+    }
+    m.notifying_buffer(a[0]).expect("checked above").notifications = notifications;
+    DS_OK
+}
+
+interface! { static SOUND_NOTIFY = "IDirectSoundNotify";
+    QueryInterface(3) => |m, a| match m.object_index(a[0]).filter(|_| m.notifying_buffer(a[0]).is_some()) {
+        Some(index) => query_buffer(m, index, a[1], a[2]),
+        None => DSERR_INVALIDPARAM,
+    },
+    // The interface shares the buffer's reference count.
+    AddRef(1) => |m, a| m.notifying_buffer(a[0]).map_or(0, |buffer| {
+        buffer.references += 1;
+        buffer.references
+    }),
+    Release(1) => |m, a| m.notifying_buffer(a[0]).map_or(0, |buffer| {
+        buffer.references -= 1;
+        buffer.references
+    }),
+    SetNotificationPositions(3) => set_notification_positions,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,6 +936,9 @@ mod tests {
             volume: 0,
             pan: 0,
             frequency: format.samples_per_second,
+            notify_pointer: 0,
+            notifications: Vec::new(),
+            notified_to: None,
         }
     }
 
@@ -813,5 +982,41 @@ mod tests {
         playing.settle(5000);
         assert!(playing.playback.is_none());
         assert_eq!(playing.cursor(6000), (0, false));
+    }
+
+    #[test]
+    fn notification_positions_are_signalled_as_the_cursor_passes_them() {
+        // 88200 bytes per second; a looping buffer of one second.
+        let mut b = buffer(88_200, None);
+        b.position = 0;
+        b.notifications = vec![(22_048, 1), (44_100, 2), (88_196, 3), (DSBPN_OFFSETSTOP, 4)];
+        let mut events = Vec::new();
+        // Not playing: nothing to pass.
+        assert_eq!(b.pass_notifications(0, &mut events), None);
+        b.playback = Some(Playback { started_ms: 1000, from: 0, looping: true });
+        b.notified_to = Some(0);
+        // A quarter of a second to the first position.
+        assert_eq!(b.pass_notifications(1000, &mut events), Some(250));
+        assert_eq!(b.pass_notifications(1249, &mut events), Some(1));
+        assert!(events.is_empty());
+        assert_eq!(b.pass_notifications(1250, &mut events), Some(251));
+        assert_eq!(std::mem::take(&mut events), [1]);
+        // Two positions in one step, then round the end of the buffer.
+        assert_eq!(b.pass_notifications(1999, &mut events), Some(1));
+        assert_eq!(std::mem::take(&mut events), [2]);
+        assert_eq!(b.pass_notifications(2100, &mut events), Some(150));
+        assert_eq!(std::mem::take(&mut events), [3]);
+
+        // A buffer that plays once ends with the positions that were left;
+        // the stop event is the caller's to add.
+        let mut b = buffer(88_200, Some(Playback { started_ms: 0, from: 0, looping: false }));
+        b.notifications = vec![(44_100, 2), (88_196, 3)];
+        b.notified_to = Some(0);
+        assert_eq!(b.pass_notifications(100, &mut events), Some(400));
+        assert_eq!(b.pass_notifications(600, &mut events), Some(400));
+        assert_eq!(std::mem::take(&mut events), [2]);
+        assert_eq!(b.pass_notifications(1000, &mut events), None);
+        assert_eq!(std::mem::take(&mut events), [3]);
+        assert_eq!((b.notified_to, b.playback.is_some()), (None, false));
     }
 }

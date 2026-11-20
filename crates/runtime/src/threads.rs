@@ -282,9 +282,11 @@ impl Machine {
     }
 
     /// Picks the thread that runs next and makes it current. If every thread
-    /// is waiting, the clock jumps to the first timeout.
+    /// is waiting, the clock jumps to the first timeout or sound notification.
     fn schedule(&mut self) -> Result<(), Stop> {
         loop {
+            // Sound buffers signal events as their play cursors advance.
+            let next_sound = self.sound_notifications();
             self.wake_threads();
             let count = self.threads.threads.len();
             let innermost = self.threads.nested_waiters.last().copied();
@@ -303,6 +305,7 @@ impl Machine {
                 .iter()
                 .filter(|thread| thread.state == State::Waiting)
                 .filter_map(|thread| thread.wait.as_ref()?.deadline_ms)
+                .chain(next_sound.map(|delay| self.clock_ms() + delay))
                 .min();
             match earliest {
                 Some(deadline) => {
