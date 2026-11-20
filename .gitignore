@@ -1,0 +1,50 @@
+# --- Game files: NEVER commit any of these (see CLAUDE.md, rule 1) ---
+/game/
+/gamefiles/
+*.exe
+*.dll
+*.asi
+*.pdb
+*.iso
+*.bin
+*.cue
+*.img
+*.mdf
+*.mds
+*.ngn
+*.all
+*.anm
+*.raw
+*.raws
+*.vis
+*.kep
+*.kp2
+*.pk
+*.btm
+*.sav
+*.tta
+*.wav
+*.mpg
+*.str
+*.bmp
+*.ico
+*.hlp
+
+# --- Recompiler output: derived from the user's executable, never committed ---
+/generated/
+/out/
+**/generated/
+
+# --- Build ---
+/target/
+**/target/
+/dist/
+/pkg/
+*.wasm
+
+# --- Local ---
+.env
+.vscode/
+.idea/
+*.log
+/scratch/
