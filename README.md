@@ -11,8 +11,9 @@ enhancements and, eventually, co-op.
 This is an unofficial fan project. It is not affiliated with, endorsed by or
 sponsored by Disney, Pixar, Activision or Traveller's Tales.
 
-**Status: early. The recompiler can load and analyse the executable; nothing is
-playable yet.**
+**Status: early. The tools can analyse the executable, and an interpreter
+implements every instruction the game uses, verified against an independent
+emulator on 1.8 million cases. Nothing is playable yet.**
 
 ```sh
 export TS2_GAME_DIR="/path/to/your/installed/game"
@@ -41,6 +42,7 @@ game and recompile it locally on your machine.
 - [`docs/BRIEF.md`](docs/BRIEF.md) — project brief and roadmap
 - [`docs/RECON.md`](docs/RECON.md) — Phase 0 findings on the executable and data
 - [`docs/CODE-DISCOVERY.md`](docs/CODE-DISCOVERY.md) — what the recompiler's analysis finds in the executable
+- [`docs/SEMANTICS.md`](docs/SEMANTICS.md) — instruction semantics and how they are verified
 - [`docs/adr/`](docs/adr/) — architecture decision records
 
 ## Support

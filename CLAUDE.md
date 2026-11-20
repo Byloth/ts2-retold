@@ -4,7 +4,15 @@ Fan project: static recompilation (x86 → Rust) of the PC version of Toy Story 
 (the 1999 action game by Traveller's Tales), targeting the browser (WASM +
 WebGPU) and native Windows, followed by catalogued enhancements and
 multiplayer. Full brief: `docs/BRIEF.md` (amended by the ADRs).
-Recon findings: `docs/RECON.md`. Decisions: `docs/adr/`.
+Recon findings: `docs/RECON.md`. Decisions: `docs/adr/`. Analysis results:
+`docs/CODE-DISCOVERY.md`. Instruction semantics and their verification:
+`docs/SEMANTICS.md`.
+
+**Crates.** `crates/recomp` (`andy-recomp`): PE loader, code discovery, CLI.
+`crates/cpu` (`andy-cpu`): instruction semantics written once over a backend
+trait, plus the interpreter backend (ADR 0009) and the x87 model (ADR 0010).
+Every new instruction or change in `crates/cpu` must pass the differential
+test below with zero differences.
 
 **Names.** Display title: "Toy Story 2: Retold" (README heading). Repository,
 directory and identifiers: `ts2-retold`. Recompiler codename: `andy` (ADR 0007):
@@ -70,6 +78,12 @@ export TS2_GAME_DIR="/mnt/e/Giochi/Toy Story 2"
 cargo test                                   # unit tests, no game files needed
 cargo run --release --bin andy -- info       # layout of the executable
 cargo run --release --bin andy -- analyze --json out/analysis.json
+
+# Instruction semantics against Unicorn; rerun after every change to crates/cpu
+cargo run --release --bin andy -- difftest --out out/difftest.jsonl --rounds 40
+.venv/bin/python tools/difftest.py out/difftest.jsonl --jobs 24
 ```
+
+`.venv` is created with `python3 -m venv .venv && .venv/bin/pip install unicorn==2.1.4`.
 
 `out/` is git-ignored: everything in it is derived from the game.

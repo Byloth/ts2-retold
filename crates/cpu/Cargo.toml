@@ -1,0 +1,11 @@
+[package]
+name = "andy-cpu"
+version = "0.0.0"
+description = "x86 instruction semantics, written once and shared by the interpreter and the recompiler"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info"] }

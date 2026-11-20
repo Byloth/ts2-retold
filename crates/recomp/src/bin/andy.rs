@@ -5,8 +5,8 @@ use std::process::ExitCode;
 use std::{env, fs};
 
 use andy_recomp::analysis::{self, Analysis, EntryKind};
-use andy_recomp::builds;
 use andy_recomp::pe::Image;
+use andy_recomp::{builds, difftest};
 
 const USAGE: &str = "\
 andy - recompiler tools
@@ -14,9 +14,12 @@ andy - recompiler tools
 USAGE:
     andy info    [EXE]              Print the layout of the executable
     andy analyze [EXE] [--json OUT] Discover code and functions
+    andy difftest [EXE] --out FILE [--rounds N]
+                                    Write differential test cases for every
+                                    distinct instruction in the executable
 
 EXE defaults to $TS2_GAME_DIR/toy2.exe. The executable is only ever read.
-Output written with --json is derived from the game: keep it out of git.";
+Output written with --json or --out is derived from the game: keep it out of git.";
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -31,6 +34,8 @@ fn main() -> ExitCode {
 fn run(args: Vec<String>) -> Result<(), String> {
     let mut positional = Vec::new();
     let mut json = None;
+    let mut out = None;
+    let mut rounds = 3u32;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -39,6 +44,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 return Ok(());
             }
             "--json" => json = Some(PathBuf::from(args.next().ok_or("--json needs a path")?)),
+            "--out" => out = Some(PathBuf::from(args.next().ok_or("--out needs a path")?)),
+            "--rounds" => {
+                rounds = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--rounds needs a number")?;
+            }
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other}\n\n{USAGE}"));
             }
@@ -85,6 +97,24 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 }
                 fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
                 println!("\nfull analysis written to {}", path.display());
+            }
+        }
+        "difftest" => {
+            let path = out.ok_or("difftest needs --out FILE")?;
+            let analysis = analysis::analyze(&image).ok_or("no executable section at the entry point")?;
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+            }
+            let file =
+                fs::File::create(&path).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            let mut writer = std::io::BufWriter::new(file);
+            let summary = difftest::generate(&image, &analysis, rounds, &mut writer)
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            println!("\ndistinct encodings  {}", summary.distinct_encodings);
+            println!("cases written       {} to {}", summary.cases, path.display());
+            println!("skipped             {} (cpuid, rdtsc)", summary.skipped);
+            for (mnemonic, (count, first)) in &summary.unsupported {
+                println!("UNSUPPORTED         {mnemonic} ({count} encodings, first at {first:#x})");
             }
         }
         other => return Err(format!("unknown command {other}\n\n{USAGE}")),

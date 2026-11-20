@@ -15,6 +15,12 @@ Transitive dependencies: all `MIT`, `MIT OR Apache-2.0` or `Unlicense OR MIT`,
 plus `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`, build-time only).
 No copyleft and no noncommercial-only license is in the tree.
 
+## Development tools (not linked, not distributed)
+
+| Tool | License | Used for |
+|---|---|---|
+| Unicorn 2.1.4 (Python package, QEMU CPU core) | GPL-2.0 | Test oracle for `tools/difftest.py`. Runs as a separate process in a local virtualenv; no code of it is copied or linked into the project. |
+
 ## External projects consulted, not used
 
 Nothing has been copied from these; their licenses are not yet verified and

@@ -123,6 +123,9 @@ pub struct Analysis {
     pub unknown_gaps: Vec<Gap>,
     pub imports: Vec<ImportUse>,
     pub mnemonics: BTreeMap<String, u32>,
+    /// Address of every instruction found, ascending.
+    #[serde(skip)]
+    pub instruction_starts: Vec<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -800,6 +803,10 @@ pub fn analyze(image: &Image) -> Option<Analysis> {
         conflicts: d.conflicts,
         imports,
         mnemonics,
+        instruction_starts: (0..d.kind.len())
+            .filter(|&at| d.kind[at] == INSN_START)
+            .map(|at| text.va + at as u32)
+            .collect(),
     })
 }
 

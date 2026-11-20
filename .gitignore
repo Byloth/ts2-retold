@@ -48,3 +48,7 @@
 .idea/
 *.log
 /scratch/
+
+# --- Python tooling ---
+.venv/
+__pycache__/

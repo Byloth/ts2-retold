@@ -3,9 +3,17 @@
 version = 4
 
 [[package]]
+name = "andy-cpu"
+version = "0.0.0"
+dependencies = [
+ "iced-x86",
+]
+
+[[package]]
 name = "andy-recomp"
 version = "0.0.0"
 dependencies = [
+ "andy-cpu",
  "iced-x86",
  "serde",
  "serde_json",

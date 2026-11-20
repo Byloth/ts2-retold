@@ -6,4 +6,5 @@
 
 pub mod analysis;
 pub mod builds;
+pub mod difftest;
 pub mod pe;
