@@ -3,6 +3,7 @@
 use super::{ERROR_CALL_NOT_IMPLEMENTED, ERROR_FILE_NOT_FOUND, HostResult, functions};
 use crate::files::Disposition;
 use crate::os::{HEAP_HEADER, Os};
+use crate::threads::{INFINITE, Object, WAIT_FAILED, Waiting};
 use crate::{Machine, Stop};
 
 /// `GetVersion` on Windows 98 SE: version 4.10, high bit set for the 9x family.
@@ -11,6 +12,25 @@ pub(crate) const IMAGE_BASE: u32 = 0x0040_0000;
 const MEM_COMMIT: u32 = 0x1000;
 /// The executable as the program sees it, inside `files::INSTALL_DIR`.
 const MODULE_PATH: &str = "C:\\TOY2\\TOY2.EXE";
+
+/// Handles of movable global blocks live here, outside any mapped memory.
+const MOVABLE_HANDLE_BASE: u32 = 0x0600_0002;
+
+#[derive(Debug)]
+pub struct MovableBlock {
+    pointer: u32,
+    locks: u32,
+}
+
+fn movable_block(m: &mut Machine, handle: u32) -> Option<&mut MovableBlock> {
+    let offset = handle.checked_sub(MOVABLE_HANDLE_BASE)?;
+    if offset % 8 != 0 {
+        return None;
+    }
+    m.os.movable_blocks
+        .get_mut((offset / 8) as usize)
+        .filter(|block| block.pointer != 0)
+}
 
 functions! { "KERNEL32.dll";
     GetVersion(0) => |_, _| WINDOWS_VERSION,
@@ -106,10 +126,7 @@ functions! { "KERNEL32.dll";
         deleted as u32
     },
     FlushFileBuffers(1) => |_, _| 1,
-    CloseHandle(1) => |m, a| {
-        m.os.files.close(a[0]);
-        1
-    },
+    CloseHandle(1) => |m, a| (m.threads.close(a[0]) || m.os.files.close(a[0])) as u32,
     SetHandleCount(1) => |_, a| a[0],
     GetACP(0) => |_, _| 1252,
     GetOEMCP(0) => |_, _| 437,
@@ -126,9 +143,83 @@ functions! { "KERNEL32.dll";
     ExitProcess(1) => |_, a| -> HostResult { Err(Stop::Exit(a[0])) },
     TerminateProcess(2) => |_, a| -> HostResult { Err(Stop::Exit(a[1])) },
     // One thread so far: locks are free.
+    // A critical section is identified by its address; the structure the
+    // program reserves for it is left alone.
     InitializeCriticalSection(1) => |_, _| 0,
-    EnterCriticalSection(1) => |_, _| 0,
-    LeaveCriticalSection(1) => |_, _| 0,
+    EnterCriticalSection(1) => |m, a| -> HostResult { m.wait(Waiting::CriticalSection(a[0]), INFINITE) },
+    LeaveCriticalSection(1) => |m, a| {
+        m.threads.leave_critical_section(a[0]);
+        0
+    },
+    CreateEventA(4) => |m, a| {
+        // Security attributes, manual reset, initial state, name (unnamed only).
+        m.threads.create_object(Object::Event { manual_reset: a[1] != 0, signaled: a[2] != 0 })
+    },
+    SetEvent(1) => |m, a| match m.threads.object(a[0]) {
+        Some(Object::Event { signaled, .. }) => {
+            *signaled = true;
+            1
+        }
+        _ => 0,
+    },
+    ResetEvent(1) => |m, a| match m.threads.object(a[0]) {
+        Some(Object::Event { signaled, .. }) => {
+            *signaled = false;
+            1
+        }
+        _ => 0,
+    },
+    CreateSemaphoreA(4) => |m, a| {
+        // Security attributes, initial count, maximum count, name.
+        if a[2] == 0 || a[1] > a[2] {
+            return 0;
+        }
+        m.threads.create_object(Object::Semaphore { count: a[1], maximum: a[2] })
+    },
+    ReleaseSemaphore(3) => |m, a| {
+        let Some(Object::Semaphore { count, maximum }) = m.threads.object(a[0]) else { return 0 };
+        let previous = *count;
+        match previous.checked_add(a[1]).filter(|total| a[1] > 0 && total <= maximum) {
+            Some(total) => *count = total,
+            None => return 0,
+        }
+        if a[2] != 0 {
+            let _ = m.memory.write(a[2], 4, previous);
+        }
+        1
+    },
+    WaitForSingleObject(2) => |m, a| -> HostResult {
+        if m.threads.object(a[0]).is_none() {
+            return Ok(WAIT_FAILED);
+        }
+        m.wait(Waiting::Objects { handles: vec![a[0]], all: false }, a[1])
+    },
+    WaitForMultipleObjects(4) => |m, a| -> HostResult {
+        let (count, array, all, timeout) = (a[0], a[1], a[2] != 0, a[3]);
+        if count == 0 || count > 64 {
+            return Ok(WAIT_FAILED);
+        }
+        let handles: Vec<u32> = (0..count).map(|n| m.memory.read(array + 4 * n, 4).unwrap_or(0)).collect();
+        if handles.iter().any(|&handle| m.threads.object(handle).is_none()) {
+            return Ok(WAIT_FAILED);
+        }
+        m.wait(Waiting::Objects { handles, all }, timeout)
+    },
+    CreateThread(6) => |m, a| -> HostResult {
+        // Security attributes, stack size, start address, parameter, flags,
+        // address for the thread identifier.
+        const CREATE_SUSPENDED: u32 = 4;
+        if a[4] & CREATE_SUSPENDED != 0 {
+            return Err(Stop::Unimplemented { dll: "KERNEL32.dll".into(), name: "CreateThread suspended".into() });
+        }
+        let handle = m.create_thread(a[2], a[3]);
+        if a[5] != 0 {
+            let _ = m.memory.write(a[5], 4, m.threads.count() as u32);
+        }
+        let index = m.threads.count() - 1;
+        m.note(|| format!("thread {index} at {:#x}", a[2]));
+        Ok(handle)
+    },
     IsBadWritePtr(2) => |m, a| {
         let last = a[0].wrapping_add(a[1].saturating_sub(1));
         !(m.memory.is_mapped(a[0]) && m.memory.is_mapped(last)) as u32
@@ -172,6 +263,46 @@ functions! { "KERNEL32.dll";
         }
         m.os.reserve(&mut m.memory, size)
     },
+    // Global memory: a fixed block's handle is its address; a movable
+    // block has a separate handle that `GlobalLock` turns into the address.
+    GlobalAlloc(2) => |m, a| {
+        const GMEM_MOVEABLE: u32 = 0x0002;
+        let pointer = m.os.allocate(&mut m.memory, a[1]);
+        if pointer == 0 || a[0] & GMEM_MOVEABLE == 0 {
+            return pointer;
+        }
+        let handle = MOVABLE_HANDLE_BASE + 8 * m.os.movable_blocks.len() as u32;
+        m.os.movable_blocks.push(MovableBlock { pointer, locks: 0 });
+        handle
+    },
+    GlobalLock(1) => |m, a| match movable_block(m, a[0]) {
+        Some(block) => {
+            block.locks += 1;
+            block.pointer
+        }
+        // Locking a fixed block returns the block.
+        None => a[0],
+    },
+    GlobalUnlock(1) => |m, a| match movable_block(m, a[0]) {
+        Some(block) => {
+            block.locks = block.locks.saturating_sub(1);
+            (block.locks > 0) as u32
+        }
+        None => 1,
+    },
+    GlobalHandle(1) => |m, a| {
+        let index = m.os.movable_blocks.iter().position(|block| block.pointer == a[0] && block.pointer != 0);
+        index.map_or(a[0], |index| MOVABLE_HANDLE_BASE + 8 * index as u32)
+    },
+    // Blocks are never reused, so freeing only retires the handle. Both
+    // return null on success.
+    GlobalFree(1) => |m, a| {
+        if let Some(block) = movable_block(m, a[0]) {
+            block.pointer = 0;
+        }
+        0
+    },
+    LocalFree(1) => |_, _| 0,
     VirtualFree(3) => |_, _| 1,
 
     // Windows 98 implements the ANSI variants only; the C runtime probes
@@ -246,7 +377,14 @@ functions! { "KERNEL32.dll";
         0
     },
     UnhandledExceptionFilter(1) => |_, _| 0,
-    Sleep(1) => |_, _| 0,
+    Sleep(1) => |m, a| -> HostResult {
+        if a[0] == 0 {
+            m.yield_slice();
+            return Ok(0);
+        }
+        m.wait(Waiting::Time, a[0])?;
+        Ok(0)
+    },
     MulDiv(3) => |_, a| {
         let (a, b, d) = (a[0] as i32 as i64, a[1] as i32 as i64, a[2] as i32 as i64);
         if d == 0 {

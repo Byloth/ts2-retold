@@ -14,6 +14,7 @@
 
 pub mod files;
 pub mod os;
+pub mod threads;
 pub mod win32;
 
 use andy_cpu::interp::{self, Cpu, Fault};
@@ -22,6 +23,7 @@ use andy_recomp::pe::Image;
 use iced_x86::Instruction;
 
 use crate::os::Os;
+use crate::threads::{Pause, Threads};
 use crate::win32::Function;
 
 /// Host functions are reached through addresses in this unmapped range: the
@@ -31,6 +33,8 @@ const HOST_BASE: u32 = 0xFFF0_0000;
 const CALLBACK_RETURN: u32 = 0xFFFF_FFF0;
 /// Returning here ends the program.
 const EXIT_ADDRESS: u32 = 0xFFFF_FFE0;
+/// Returning here ends a thread other than the first.
+const THREAD_EXIT: u32 = 0xFFFF_FFD0;
 const STACK_TOP: u32 = 0x0020_0000;
 const STACK_SIZE: u32 = 0x0010_0000;
 const TEB_ADDRESS: u32 = 0x7FFD_E000;
@@ -58,12 +62,21 @@ pub enum Stop {
     },
     /// The instruction budget given to [`Machine::run`] ran out.
     Budget,
+    /// Execution reached [`Machine::breakpoint`].
+    Breakpoint,
+    /// Every thread is waiting for something only another thread could do.
+    Deadlock,
+    /// Internal: the running thread has to wait; the host call that asked is
+    /// repeated when the thread runs again. Never returned by [`Machine::run`].
+    WouldBlock,
 }
 
 /// One call from the program into a host function.
 #[derive(Debug, Clone)]
 pub struct HostCall {
     pub name: &'static str,
+    /// Index of the calling thread; 0 is the program's first thread.
+    pub thread: usize,
     pub caller: u32,
     /// Nesting level: 0 for calls made by the program's main flow, more for
     /// calls made from inside a callback.
@@ -83,9 +96,11 @@ enum HostEntry {
 }
 
 pub struct Machine {
+    /// Registers of the thread that is running.
     pub cpu: Cpu,
     pub memory: Memory,
     pub os: Os,
+    pub threads: Threads,
     host: Vec<HostEntry>,
     /// Calls made to each host function, parallel to `host`.
     call_counts: Vec<u64>,
@@ -101,6 +116,9 @@ pub struct Machine {
     note: Option<String>,
     /// Address of the first instruction the x87 model could not run exactly.
     pub first_inexact: Option<u32>,
+    /// Stop before executing the instruction at this address. A debugging
+    /// aid; the address is never a host function.
+    pub breakpoint: Option<u32>,
 }
 
 impl Machine {
@@ -144,6 +162,7 @@ impl Machine {
             cpu,
             memory,
             os,
+            threads: Threads::new(),
             host: Vec::new(),
             call_counts: Vec::new(),
             code_start: code.va,
@@ -154,6 +173,7 @@ impl Machine {
             trace: None,
             note: None,
             first_inexact: None,
+            breakpoint: None,
         };
         machine.os.resources = image.resources.clone();
         for import in &image.imports {
@@ -248,13 +268,14 @@ impl Machine {
         }
         let args = &args[..count];
 
-        self.os.now_ms = (self.cpu.instructions / INSTRUCTIONS_PER_MS) as u32;
+        self.os.now_ms = self.clock_ms() as u32;
         self.call_counts[index] += 1;
         // The trace entry is reserved before the call so that calls made from
         // inside a callback appear after their parent, in execution order.
         let traced = self.trace.as_mut().map(|trace| {
             trace.push(HostCall {
                 name: function.name,
+                thread: self.threads.current(),
                 caller: return_address,
                 depth: self.callback_depth,
                 args: args.to_vec(),
@@ -264,7 +285,20 @@ impl Machine {
             trace.len() - 1
         });
         self.note = None;
-        let result = (function.handler)(self, args)?;
+        let result = match (function.handler)(self, args) {
+            Ok(result) => result,
+            Err(stop) => {
+                if stop == Stop::WouldBlock {
+                    // The call has not happened yet: it is made again, from
+                    // the start, when the thread's wait is over.
+                    self.call_counts[index] -= 1;
+                    if let (Some(index), Some(trace)) = (traced, self.trace.as_mut()) {
+                        trace.truncate(index);
+                    }
+                }
+                return Err(stop);
+            }
+        };
         if let (Some(index), Some(trace)) = (traced, self.trace.as_mut()) {
             trace[index].result = result;
             trace[index].note = self.note.take();
@@ -277,21 +311,40 @@ impl Machine {
         Ok(())
     }
 
-    /// Executes until the program returns to `CALLBACK_RETURN` (when
-    /// `in_callback`) or stops.
-    fn execute(&mut self, in_callback: bool) -> Result<(), Stop> {
+    /// Runs the current thread until it returns from a callback (when
+    /// `in_callback`), has to let another thread run, or the machine stops.
+    pub(crate) fn execute(&mut self, in_callback: bool) -> Result<Pause, Stop> {
         loop {
             let eip = self.cpu.eip;
             if eip >= HOST_BASE {
                 match eip {
-                    CALLBACK_RETURN if in_callback => return Ok(()),
+                    CALLBACK_RETURN if in_callback => return Ok(Pause::CallbackReturned),
                     EXIT_ADDRESS => return Err(Stop::Exit(self.cpu.regs[0])),
-                    _ => self.call_host(((eip - HOST_BASE) / 4) as usize)?,
+                    THREAD_EXIT if !in_callback => {
+                        self.finish_current_thread();
+                        return Ok(Pause::Yield);
+                    }
+                    _ => match self.call_host(((eip - HOST_BASE) / 4) as usize) {
+                        Ok(()) => {}
+                        Err(Stop::WouldBlock) if !in_callback => return Ok(Pause::Yield),
+                        Err(stop) => return Err(stop),
+                    },
                 }
                 continue;
             }
-            if self.cpu.instructions >= self.deadline {
-                return Err(Stop::Budget);
+            if self.cpu.instructions >= self.threads.slice_end {
+                if self.cpu.instructions >= self.deadline {
+                    return Err(Stop::Budget);
+                }
+                // A thread inside a callback keeps running: its state cannot
+                // be set aside.
+                if !in_callback && self.threads.count() > 1 {
+                    return Ok(Pause::Yield);
+                }
+                self.threads.slice_end = self.cpu.instructions + threads::TIME_SLICE;
+            }
+            if self.breakpoint == Some(eip) {
+                return Err(Stop::Breakpoint);
             }
             let instruction = self.instruction_at(eip).map_err(Stop::Fault)?;
             self.cpu
@@ -306,10 +359,7 @@ impl Machine {
     /// Runs until the program stops or `budget` more instructions have executed.
     pub fn run(&mut self, budget: u64) -> Stop {
         self.deadline = self.cpu.instructions.saturating_add(budget);
-        match self.execute(false) {
-            Err(stop) => stop,
-            Ok(()) => unreachable!("only a callback returns normally"),
-        }
+        self.run_threads()
     }
 
     /// Calls a function of the program with the `stdcall` convention and
@@ -332,7 +382,10 @@ impl Machine {
         self.callback_depth += 1;
         let outcome = self.execute(true);
         self.callback_depth -= 1;
-        outcome?;
+        match outcome? {
+            Pause::CallbackReturned => {}
+            Pause::Yield => unreachable!("a thread inside a callback does not yield"),
+        }
         if self.cpu.regs[4] != base {
             return Err(Stop::CallbackStack {
                 address,
@@ -342,5 +395,44 @@ impl Machine {
         }
         self.cpu.eip = saved_eip;
         Ok(self.cpu.regs[0])
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use andy_recomp::pe::{Image, SCN_MEM_EXECUTE, Section};
+
+    use super::*;
+    use crate::files::Files;
+
+    /// A machine with an empty program, for exercising host functions.
+    pub fn machine() -> Machine {
+        let image = Image {
+            base: 0x40_0000,
+            entry: 0x40_1000,
+            sections: vec![Section {
+                name: ".text".into(),
+                va: 0x40_1000,
+                virtual_size: 0x1000,
+                flags: SCN_MEM_EXECUTE,
+                data: vec![0xC3],
+            }],
+            ..Image::default()
+        };
+        Machine::load(&image, Os::new(Files::new(None, None)))
+    }
+
+    impl Machine {
+        /// Calls a host function by name with the given arguments.
+        pub fn host(&mut self, dll: &str, name: &str, args: &[u32]) -> u32 {
+            let function = win32::lookup(dll, name).expect("host function exists");
+            assert_eq!(function.args as usize, args.len(), "{name} argument count");
+            (function.handler)(self, args).expect("host function does not stop the machine")
+        }
+
+        /// Scratch memory for a test's structures.
+        pub fn scratch(&mut self, size: u32) -> u32 {
+            self.os.allocate(&mut self.memory, size)
+        }
     }
 }

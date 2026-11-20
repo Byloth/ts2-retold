@@ -14,10 +14,10 @@ pub mod d3d;
 pub mod ddraw;
 pub mod dsound;
 mod gdi32;
-mod kernel32;
+pub(crate) mod kernel32;
 mod ole32;
 pub mod user32;
-mod winmm;
+pub mod winmm;
 
 use crate::{Machine, Stop};
 

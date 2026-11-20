@@ -91,7 +91,14 @@ pub struct State {
 
 /// The display modes the adapter offers, in the order Windows lists them.
 pub fn display_modes() -> impl Iterator<Item = Display> {
-    const SIZES: [(u32, u32); 6] = [
+    // The low resolutions were ordinary modes on accelerators of the time,
+    // and the game looks for 320x240 by default.
+    const SIZES: [(u32, u32); 11] = [
+        (320, 200),
+        (320, 240),
+        (400, 300),
+        (512, 384),
+        (640, 400),
         (640, 480),
         (800, 600),
         (1024, 768),
@@ -398,12 +405,12 @@ mod tests {
     #[test]
     fn mode_descriptions_are_well_formed() {
         let modes: Vec<Display> = display_modes().collect();
-        assert_eq!(modes.len(), 18);
+        assert_eq!(modes.len(), 33);
         assert_eq!(
             modes[0],
             Display {
-                width: 640,
-                height: 480,
+                width: 320,
+                height: 200,
                 bits_per_pixel: 8
             }
         );

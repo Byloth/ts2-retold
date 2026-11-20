@@ -9,7 +9,7 @@ use andy_recomp::pe::Resource;
 use crate::files::{Files, INSTALL_DIR};
 use crate::win32::com::Com;
 use crate::win32::user32::User;
-use crate::win32::{ddraw, dsound};
+use crate::win32::{ddraw, dsound, winmm};
 
 const HEAP_START: u32 = 0x1000_0000;
 const HEAP_LIMIT: u32 = 0x4000_0000;
@@ -42,6 +42,8 @@ pub struct Os {
     pub(crate) com: Com,
     pub(crate) ddraw: ddraw::State,
     pub(crate) dsound: dsound::State,
+    pub(crate) mmio: winmm::State,
+    pub(crate) movable_blocks: Vec<crate::win32::kernel32::MovableBlock>,
     /// Open registry keys: handle to lower-case path.
     pub(crate) keys: HashMap<u32, String>,
 }
@@ -61,11 +63,14 @@ impl Os {
         HEAP_START
     }
 
-    /// The registry as the installer leaves it: one key with the install
-    /// directory and the directory of the disc (here the same place).
+    /// The registry as the installer leaves it: one key with the directory
+    /// of the game's data and the directory of the disc. The game looks for
+    /// `sfx\`, `cd.txt` and its levels under the first and for `validate.tta`
+    /// under the second; in the copies in circulation both are the `data`
+    /// directory next to the executable, which holds what was on the disc.
     pub(crate) fn registry_value(key: &str, value: &str) -> Option<String> {
         match (key, value.to_ascii_lowercase().as_str()) {
-            (GAME_KEY, "path" | "cdpath") => Some(format!("{INSTALL_DIR}\\")),
+            (GAME_KEY, "path" | "cdpath") => Some(format!("{INSTALL_DIR}\\data\\")),
             _ => None,
         }
     }

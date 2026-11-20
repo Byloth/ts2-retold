@@ -18,10 +18,13 @@ USAGE:
     andy info    [EXE]              Print the layout of the executable
     andy analyze [EXE] [--json OUT] Discover code and functions
     andy boot    [EXE] [--trace] [--limit N] [--args TEXT]
+                 [--stop-at ADDR] [--dump ADDR:LEN]...
                                     Run the game in the interpreter until it
                                     stops, and report how far it got. --args
                                     is the game's own command line: -log
-                                    makes it write its log, shown at the end
+                                    makes it write its log, shown at the end.
+                                    --stop-at halts before an instruction;
+                                    --dump prints guest memory at the end
     andy difftest [EXE] --out FILE [--rounds N]
                                     Write differential test cases for every
                                     distinct instruction in the executable
@@ -45,6 +48,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut out = None;
     let mut rounds = 3u32;
     let mut trace = false;
+    let mut stop_at = None;
+    let mut dumps = Vec::new();
     let mut game_args = String::new();
     let mut limit = 2_000_000_000u64;
     let mut args = args.into_iter();
@@ -57,6 +62,17 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--json" => json = Some(PathBuf::from(args.next().ok_or("--json needs a path")?)),
             "--out" => out = Some(PathBuf::from(args.next().ok_or("--out needs a path")?)),
             "--trace" => trace = true,
+            "--stop-at" => {
+                let text = args.next().ok_or("--stop-at needs an address")?;
+                stop_at = Some(parse_hex(&text).ok_or("--stop-at needs a hexadecimal address")?);
+            }
+            "--dump" => {
+                let text = args.next().ok_or("--dump needs ADDR:LEN")?;
+                let range = text
+                    .split_once(':')
+                    .and_then(|(a, l)| Some((parse_hex(a)?, parse_hex(l)?)));
+                dumps.push(range.ok_or("--dump needs ADDR:LEN in hexadecimal")?);
+            }
             "--args" => game_args = args.next().ok_or("--args needs the command line text")?,
             "--limit" => {
                 limit = args
@@ -120,10 +136,14 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
         "boot" => boot(
             &image,
-            exe.parent().map(Path::to_path_buf),
-            trace,
-            limit,
-            &game_args,
+            BootOptions {
+                game_dir: exe.parent().map(Path::to_path_buf),
+                trace,
+                limit,
+                game_args,
+                stop_at,
+                dumps,
+            },
         ),
         "difftest" => {
             let path = out.ok_or("difftest needs --out FILE")?;
@@ -148,15 +168,37 @@ fn run(args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64, game_args: &str) {
+struct BootOptions {
+    game_dir: Option<PathBuf>,
+    trace: bool,
+    limit: u64,
+    game_args: String,
+    stop_at: Option<u32>,
+    dumps: Vec<(u32, u32)>,
+}
+
+fn parse_hex(text: &str) -> Option<u32> {
+    u32::from_str_radix(text.trim_start_matches("0x"), 16).ok()
+}
+
+fn boot(image: &Image, options: BootOptions) {
+    let BootOptions {
+        game_dir,
+        trace,
+        limit,
+        game_args,
+        stop_at,
+        dumps,
+    } = options;
     // The program reads the game directory and writes only to `out/run`.
     let write_dir = PathBuf::from("out/run");
     let log_path = write_dir.join("toy2.log");
     let _ = fs::remove_file(&log_path);
     let files = Files::new(game_dir, Some(write_dir));
     let mut os = Os::new(files);
-    os.command_line_arguments = game_args.to_string();
+    os.command_line_arguments = game_args;
     let mut machine = Machine::load(image, os);
+    machine.breakpoint = stop_at;
     if trace {
         machine.trace = Some(Vec::new());
     }
@@ -174,8 +216,13 @@ fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64, game_
                 .map(|n| format!("   ; {n}"))
                 .unwrap_or_default();
             let indent = "  ".repeat(call.depth as usize);
+            let thread = if call.thread == 0 {
+                String::new()
+            } else {
+                format!("[thread {}] ", call.thread)
+            };
             println!(
-                "  {:#010x}  {indent}{}({}) = {:#x}{note}",
+                "  {:#010x}  {indent}{thread}{}({}) = {:#x}{note}",
                 call.caller,
                 call.name,
                 args.join(", "),
@@ -215,7 +262,19 @@ fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64, game_
         }
     }
     println!("\nstopped at eip {:#010x}: {}", machine.cpu.eip, describe(&stop));
-    if let Stop::Fault(_) = stop {
+    for (address, len) in dumps {
+        println!("\nmemory at {address:#010x}");
+        match machine.memory.dump(address, len) {
+            Some(bytes) => {
+                for (row, chunk) in bytes.chunks(16).enumerate() {
+                    let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
+                    println!("  {:08x}  {}", address + 16 * row as u32, hex.join(" "));
+                }
+            }
+            None => println!("  not mapped"),
+        }
+    }
+    if matches!(stop, Stop::Fault(_) | Stop::Breakpoint) {
         let r = &machine.cpu.regs;
         println!(
             "  eax {:08x} ecx {:08x} edx {:08x} ebx {:08x} esp {:08x} ebp {:08x} esi {:08x} edi {:08x}",
@@ -235,6 +294,9 @@ fn describe(stop: &Stop) -> String {
             actual,
         } => format!("callback {address:#x} returned with esp {actual:#x}, expected {expected:#x}"),
         Stop::Budget => "instruction limit reached".into(),
+        Stop::Breakpoint => "breakpoint".into(),
+        Stop::Deadlock => "every thread is waiting and nothing can wake one".into(),
+        Stop::WouldBlock => "internal error: a wait escaped the scheduler".into(),
     }
 }
 

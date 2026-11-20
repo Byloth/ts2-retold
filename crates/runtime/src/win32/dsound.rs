@@ -1,16 +1,254 @@
 //! DSOUND: DirectSound.
 //!
 //! One output device, the default one, which Windows lists first under the
-//! name "Primary Sound Driver" with a null identifier.
+//! name "Primary Sound Driver" with a null identifier. Mixing is done in
+//! software, as it was on most sound cards of the time, so no hardware
+//! buffers are advertised.
+//!
+//! Sound buffers keep their samples in the program's memory, where `Lock`
+//! exposes them. This module holds the state the program can observe
+//! (formats, play cursors, volumes); turning playing buffers into sound is
+//! the job of an audio output that reads the same state. Play cursors
+//! advance with the machine's clock.
 
+use super::com::{E_INVALIDARG, E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
 use super::{HostResult, functions};
+use crate::Machine;
 
-pub const DS_OK: u32 = 0;
+pub const DS_OK: u32 = S_OK;
+const DSERR_INVALIDPARAM: u32 = E_INVALIDARG;
+const DSERR_CONTROLUNAVAIL: u32 = ds_error(30);
+const DSERR_INVALIDCALL: u32 = ds_error(50);
+const DSERR_PRIOLEVELNEEDED: u32 = ds_error(70);
+const DSERR_BADFORMAT: u32 = ds_error(100);
+const DSERR_ALREADYINITIALIZED: u32 = ds_error(130);
+const CLASS_E_NOAGGREGATION: u32 = 0x8004_0110;
+
+const fn ds_error(code: u32) -> u32 {
+    0x8878_0000 | code
+}
+
+const IID_IDIRECTSOUND: Guid = guid(
+    0x279AFA83,
+    0x4981,
+    0x11CE,
+    [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60],
+);
+const IID_IDIRECTSOUNDBUFFER: Guid = guid(
+    0x279AFA85,
+    0x4981,
+    0x11CE,
+    [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60],
+);
+
+const DSSCL_NORMAL: u32 = 1;
+const DSSCL_PRIORITY: u32 = 2;
+const DSSCL_WRITEPRIMARY: u32 = 4;
+
+const DSBCAPS_PRIMARYBUFFER: u32 = 0x0001;
+const DSBCAPS_LOCSOFTWARE: u32 = 0x0008;
+const DSBCAPS_CTRLFREQUENCY: u32 = 0x0020;
+const DSBCAPS_CTRLPAN: u32 = 0x0040;
+const DSBCAPS_CTRLVOLUME: u32 = 0x0080;
+
+const DSBPLAY_LOOPING: u32 = 1;
+const DSBSTATUS_PLAYING: u32 = 1;
+const DSBSTATUS_LOOPING: u32 = 4;
+const DSBLOCK_FROMWRITECURSOR: u32 = 1;
+const DSBLOCK_ENTIREBUFFER: u32 = 2;
+
+const DSBSIZE_MIN: u32 = 4;
+const DSBSIZE_MAX: u32 = 0x0FFF_FFFF;
+const DSBFREQUENCY_MIN: u32 = 100;
+const DSBFREQUENCY_MAX: u32 = 100_000;
+const DSSPEAKER_STEREO: u32 = 4;
+const WAVE_FORMAT_PCM: u16 = 1;
+/// How far ahead of the play cursor it is safe to write: 15 ms, the usual
+/// figure for a software mixer.
+const WRITE_LEAD_MS: u64 = 15;
+
+/// `DSCAPS`: 24 words.
+const CAPS_WORDS: usize = 24;
+// Primary and secondary buffers in mono or stereo, 8 or 16 bits, at any rate.
+const DEVICE_CAPS: u32 = 0x0001 | 0x0002 | 0x0004 | 0x0008 | 0x0010 | 0x0100 | 0x0200 | 0x0400 | 0x0800;
+
+/// Uncompressed sample format (`PCMWAVEFORMAT`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaveFormat {
+    pub channels: u16,
+    pub samples_per_second: u32,
+    pub bits_per_sample: u16,
+}
+
+impl WaveFormat {
+    /// What a primary buffer plays until the program changes it.
+    const DEFAULT_PRIMARY: WaveFormat = WaveFormat {
+        channels: 2,
+        samples_per_second: 22_050,
+        bits_per_sample: 8,
+    };
+
+    pub fn block_align(&self) -> u32 {
+        self.channels as u32 * self.bits_per_sample as u32 / 8
+    }
+
+    /// The 18 bytes of `WAVEFORMATEX`.
+    fn to_bytes(self) -> [u8; 18] {
+        let mut bytes = [0; 18];
+        let block = self.block_align();
+        bytes[0..2].copy_from_slice(&WAVE_FORMAT_PCM.to_le_bytes());
+        bytes[2..4].copy_from_slice(&self.channels.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.samples_per_second.to_le_bytes());
+        bytes[8..12].copy_from_slice(&(self.samples_per_second * block).to_le_bytes());
+        bytes[12..14].copy_from_slice(&(block as u16).to_le_bytes());
+        bytes[14..16].copy_from_slice(&self.bits_per_sample.to_le_bytes());
+        bytes
+    }
+
+    /// Parses the first 16 bytes of a wave format; `None` unless it is PCM
+    /// with a consistent layout.
+    fn from_bytes(bytes: &[u8]) -> Option<WaveFormat> {
+        let word = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        let format = WaveFormat {
+            channels: word(2),
+            samples_per_second: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            bits_per_sample: word(14),
+        };
+        let valid = word(0) == WAVE_FORMAT_PCM
+            && matches!(format.channels, 1 | 2)
+            && matches!(format.bits_per_sample, 8 | 16)
+            && (DSBFREQUENCY_MIN..=DSBFREQUENCY_MAX).contains(&format.samples_per_second)
+            && word(12) as u32 == format.block_align();
+        valid.then_some(format)
+    }
+}
+
+#[derive(Debug)]
+struct Device {
+    references: u32,
+    pointer: u32,
+    cooperative_level: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Playback {
+    started_ms: u32,
+    /// Play cursor when playback started, in bytes.
+    from: u32,
+    looping: bool,
+}
+
+#[derive(Debug)]
+pub struct Buffer {
+    references: u32,
+    pointer: u32,
+    device: usize,
+    /// `DSBCAPS` flags given at creation.
+    flags: u32,
+    pub format: WaveFormat,
+    /// Guest address and size of the samples; a primary buffer has none
+    /// until the program takes over mixing.
+    pub memory: u32,
+    pub size: u32,
+    playback: Option<Playback>,
+    /// Play cursor while stopped.
+    position: u32,
+    /// Attenuation in hundredths of a decibel, 0 (full) to -10000 (silent).
+    pub volume: i32,
+    /// -10000 (left) to 10000 (right).
+    pub pan: i32,
+    /// Playback rate in hertz; differs from the format's rate to shift pitch.
+    pub frequency: u32,
+}
+
+impl Buffer {
+    fn is_primary(&self) -> bool {
+        self.flags & DSBCAPS_PRIMARYBUFFER != 0
+    }
+
+    fn bytes_per_second(&self) -> u64 {
+        self.frequency as u64 * self.format.block_align() as u64
+    }
+
+    /// The play cursor at time `now_ms`, and whether the buffer still plays.
+    pub fn cursor(&self, now_ms: u32) -> (u32, bool) {
+        let Some(playback) = self.playback else {
+            return (self.position, false);
+        };
+        if self.size == 0 {
+            return (0, true);
+        }
+        let block = self.format.block_align() as u64;
+        let elapsed = now_ms.wrapping_sub(playback.started_ms) as u64;
+        let advanced = elapsed * self.bytes_per_second() / 1000 / block * block;
+        let cursor = playback.from as u64 + advanced;
+        if playback.looping {
+            ((cursor % self.size as u64) as u32, true)
+        } else if cursor >= self.size as u64 {
+            // Played to the end: stopped, cursor back at the start.
+            (0, false)
+        } else {
+            (cursor as u32, true)
+        }
+    }
+
+    /// Folds elapsed playback into the stored state, so that it can be
+    /// changed (rate, position) from a known point.
+    fn settle(&mut self, now_ms: u32) {
+        let (cursor, playing) = self.cursor(now_ms);
+        self.position = cursor;
+        self.playback = match (playing, self.playback) {
+            (true, Some(playback)) => Some(Playback {
+                started_ms: now_ms,
+                from: cursor,
+                ..playback
+            }),
+            _ => None,
+        };
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct State {
     /// Guest strings describing the driver, created on first enumeration.
     driver_strings: Option<(u32, u32)>,
+    devices: Vec<Device>,
+    pub buffers: Vec<Buffer>,
+}
+
+impl Machine {
+    fn sound_device(&mut self, this: u32) -> Option<&mut Device> {
+        let index = self.object_index(this)?;
+        self.os
+            .dsound
+            .devices
+            .get_mut(index)
+            .filter(|d| d.references > 0 && d.pointer == this)
+    }
+
+    fn sound_buffer(&mut self, this: u32) -> Option<&mut Buffer> {
+        let index = self.object_index(this)?;
+        self.os
+            .dsound
+            .buffers
+            .get_mut(index)
+            .filter(|b| b.references > 0 && b.pointer == this)
+    }
+
+    /// The buffer behind `this`, brought up to date with the clock.
+    fn settled_buffer(&mut self, this: u32) -> Option<&mut Buffer> {
+        let now = self.os.now_ms;
+        let buffer = self.sound_buffer(this)?;
+        buffer.settle(now);
+        Some(buffer)
+    }
+
+    fn new_buffer(&mut self, buffer: Buffer) -> u32 {
+        let index = self.os.dsound.buffers.len() as u32;
+        let pointer = self.interface_pointer(&SOUND_BUFFER, index);
+        self.os.dsound.buffers.push(Buffer { pointer, ..buffer });
+        pointer
+    }
 }
 
 functions! { "DSOUND.dll";
@@ -27,4 +265,656 @@ functions! { "DSOUND.dll";
         m.call_guest(a[0], &[0, description, module, a[1]])?;
         Ok(DS_OK)
     },
+    DirectSoundCreate(3) => |m, a| {
+        // A null identifier asks for the default device, the only one there is.
+        let (identifier, out, outer) = (a[0], a[1], a[2]);
+        if outer != 0 {
+            return CLASS_E_NOAGGREGATION;
+        }
+        if identifier != 0 {
+            return DSERR_INVALIDPARAM;
+        }
+        let index = m.os.dsound.devices.len() as u32;
+        let pointer = m.interface_pointer(&SOUND_DEVICE, index);
+        m.os.dsound.devices.push(Device { references: 1, pointer, cooperative_level: 0 });
+        match m.memory.write(out, 4, pointer) {
+            Some(()) => DS_OK,
+            None => DSERR_INVALIDPARAM,
+        }
+    },
+}
+
+// --- IDirectSound ---------------------------------------------------------
+
+fn device_query_interface(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(wanted) = m.read_guid(a[1]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    let Some(device) = m.sound_device(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if wanted != IID_IUNKNOWN && wanted != IID_IDIRECTSOUND {
+        let _ = m.memory.write(a[2], 4, 0);
+        return E_NOINTERFACE;
+    }
+    device.references += 1;
+    if m.memory.write(a[2], 4, a[0]).is_some() {
+        S_OK
+    } else {
+        DSERR_INVALIDPARAM
+    }
+}
+
+fn device_add_ref(m: &mut Machine, a: &[u32]) -> u32 {
+    m.sound_device(a[0]).map_or(0, |device| {
+        device.references += 1;
+        device.references
+    })
+}
+
+fn device_release(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(index) = m.object_index(a[0]) else {
+        return 0;
+    };
+    let Some(device) = m.sound_device(a[0]) else {
+        return 0;
+    };
+    device.references -= 1;
+    let remaining = device.references;
+    if remaining == 0 {
+        // The device takes its buffers with it.
+        for buffer in m.os.dsound.buffers.iter_mut().filter(|b| b.device == index) {
+            buffer.references = 0;
+            buffer.playback = None;
+        }
+    }
+    remaining
+}
+
+fn create_sound_buffer(m: &mut Machine, a: &[u32]) -> u32 {
+    let (description, out, outer) = (a[1], a[2], a[3]);
+    if outer != 0 {
+        return CLASS_E_NOAGGREGATION;
+    }
+    let Some(device) = m.object_index(a[0]).filter(|_| m.sound_device(a[0]).is_some()) else {
+        return DSERR_INVALIDPARAM;
+    };
+    // DSBUFFERDESC: size, flags, buffer bytes, reserved, format pointer.
+    let [size, flags, bytes, _, format_address]: [u32; 5] = m.read_words(description);
+    if size != 20 && size != 36 {
+        return DSERR_INVALIDPARAM;
+    }
+    let primary = flags & DSBCAPS_PRIMARYBUFFER != 0;
+    let (format, memory, bytes) = if primary {
+        // The primary buffer belongs to the device: no size, no format here.
+        if bytes != 0 || format_address != 0 {
+            return DSERR_INVALIDPARAM;
+        }
+        if let Some(existing) =
+            m.os.dsound
+                .buffers
+                .iter_mut()
+                .find(|b| b.device == device && b.is_primary() && b.references > 0)
+        {
+            // There is one primary buffer; asking again returns it.
+            existing.references += 1;
+            let pointer = existing.pointer;
+            return if m.memory.write(out, 4, pointer).is_some() {
+                DS_OK
+            } else {
+                DSERR_INVALIDPARAM
+            };
+        }
+        (WaveFormat::DEFAULT_PRIMARY, 0, 0)
+    } else {
+        if !(DSBSIZE_MIN..=DSBSIZE_MAX).contains(&bytes) {
+            return DSERR_INVALIDPARAM;
+        }
+        let Some(raw) = m.memory.dump(format_address, 16) else {
+            return DSERR_INVALIDPARAM;
+        };
+        let Some(format) = WaveFormat::from_bytes(&raw) else {
+            return DSERR_BADFORMAT;
+        };
+        let memory = m.os.allocate(&mut m.memory, bytes);
+        if memory == 0 {
+            return 0x8007_000E; // E_OUTOFMEMORY
+        }
+        (format, memory, bytes)
+    };
+    m.note(|| {
+        format!(
+            "{} buffer, {bytes} bytes, {} Hz, {} bit, {} channel(s), flags {flags:#x}",
+            if primary { "primary" } else { "secondary" },
+            format.samples_per_second,
+            format.bits_per_sample,
+            format.channels
+        )
+    });
+    let pointer = m.new_buffer(Buffer {
+        references: 1,
+        pointer: 0,
+        device,
+        flags: flags | DSBCAPS_LOCSOFTWARE,
+        format,
+        memory,
+        size: bytes,
+        playback: None,
+        position: 0,
+        volume: 0,
+        pan: 0,
+        frequency: format.samples_per_second,
+    });
+    if m.memory.write(out, 4, pointer).is_some() {
+        DS_OK
+    } else {
+        DSERR_INVALIDPARAM
+    }
+}
+
+fn device_get_caps(m: &mut Machine, a: &[u32]) -> u32 {
+    if m.sound_device(a[0]).is_none() || m.memory.read(a[1], 4) != Some(4 * CAPS_WORDS as u32) {
+        return DSERR_INVALIDPARAM;
+    }
+    let mut words = [0; CAPS_WORDS];
+    words[0] = 4 * CAPS_WORDS as u32;
+    words[1] = DEVICE_CAPS;
+    words[2] = DSBFREQUENCY_MIN;
+    words[3] = DSBFREQUENCY_MAX;
+    words[4] = 1; // primary buffers
+    m.write_words(a[1], &words);
+    DS_OK
+}
+
+fn duplicate_sound_buffer(m: &mut Machine, a: &[u32]) -> u32 {
+    if m.sound_device(a[0]).is_none() {
+        return DSERR_INVALIDPARAM;
+    }
+    let Some(original) = m.sound_buffer(a[1]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if original.is_primary() {
+        return DSERR_INVALIDCALL;
+    }
+    // The copy shares the samples and starts with the original's settings,
+    // stopped at the beginning.
+    let copy = Buffer {
+        references: 1,
+        pointer: 0,
+        device: original.device,
+        flags: original.flags,
+        format: original.format,
+        memory: original.memory,
+        size: original.size,
+        playback: None,
+        position: 0,
+        volume: original.volume,
+        pan: original.pan,
+        frequency: original.frequency,
+    };
+    let pointer = m.new_buffer(copy);
+    if m.memory.write(a[2], 4, pointer).is_some() {
+        DS_OK
+    } else {
+        DSERR_INVALIDPARAM
+    }
+}
+
+fn device_set_cooperative_level(m: &mut Machine, a: &[u32]) -> u32 {
+    let level = a[2];
+    if !(DSSCL_NORMAL..=DSSCL_WRITEPRIMARY).contains(&level) {
+        return DSERR_INVALIDPARAM;
+    }
+    let Some(device) = m.sound_device(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    device.cooperative_level = level;
+    DS_OK
+}
+
+fn get_speaker_config(m: &mut Machine, a: &[u32]) -> u32 {
+    if m.sound_device(a[0]).is_some() && m.memory.write(a[1], 4, DSSPEAKER_STEREO).is_some() {
+        DS_OK
+    } else {
+        DSERR_INVALIDPARAM
+    }
+}
+
+interface! { static SOUND_DEVICE = "IDirectSound";
+    QueryInterface(3) => device_query_interface,
+    AddRef(1) => device_add_ref,
+    Release(1) => device_release,
+    CreateSoundBuffer(4) => create_sound_buffer,
+    GetCaps(2) => device_get_caps,
+    DuplicateSoundBuffer(3) => duplicate_sound_buffer,
+    SetCooperativeLevel(3) => device_set_cooperative_level,
+    Compact(1) => |_, _| DS_OK,
+    GetSpeakerConfig(2) => get_speaker_config,
+    SetSpeakerConfig(2) => |_, _| DS_OK,
+    Initialize(2) => |_, _| DSERR_ALREADYINITIALIZED,
+}
+
+// --- IDirectSoundBuffer ---------------------------------------------------
+
+fn buffer_query_interface(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(wanted) = m.read_guid(a[1]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    let Some(buffer) = m.sound_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if wanted != IID_IUNKNOWN && wanted != IID_IDIRECTSOUNDBUFFER {
+        let _ = m.memory.write(a[2], 4, 0);
+        return E_NOINTERFACE;
+    }
+    buffer.references += 1;
+    if m.memory.write(a[2], 4, a[0]).is_some() {
+        S_OK
+    } else {
+        DSERR_INVALIDPARAM
+    }
+}
+
+fn buffer_add_ref(m: &mut Machine, a: &[u32]) -> u32 {
+    m.sound_buffer(a[0]).map_or(0, |buffer| {
+        buffer.references += 1;
+        buffer.references
+    })
+}
+
+fn buffer_release(m: &mut Machine, a: &[u32]) -> u32 {
+    m.sound_buffer(a[0]).map_or(0, |buffer| {
+        buffer.references -= 1;
+        if buffer.references == 0 {
+            buffer.playback = None;
+        }
+        buffer.references
+    })
+}
+
+fn buffer_get_caps(m: &mut Machine, a: &[u32]) -> u32 {
+    // DSBCAPS: size, flags, buffer bytes, unlock transfer rate, play CPU overhead.
+    let Some((flags, size)) = m.sound_buffer(a[0]).map(|b| (b.flags, b.size)) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if m.memory.read(a[1], 4) != Some(20) {
+        return DSERR_INVALIDPARAM;
+    }
+    m.write_words(a[1], &[20, flags, size, 0, 0]);
+    DS_OK
+}
+
+fn get_current_position(m: &mut Machine, a: &[u32]) -> u32 {
+    let now = m.os.now_ms;
+    let Some(buffer) = m.sound_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    let (play, _) = buffer.cursor(now);
+    let block = buffer.format.block_align().max(1) as u64;
+    let lead = (buffer.bytes_per_second() * WRITE_LEAD_MS / 1000 / block * block) as u32;
+    let write = if buffer.size == 0 {
+        0
+    } else {
+        (play + lead) % buffer.size
+    };
+    for (out, value) in [(a[1], play), (a[2], write)] {
+        if out != 0 && m.memory.write(out, 4, value).is_none() {
+            return DSERR_INVALIDPARAM;
+        }
+    }
+    DS_OK
+}
+
+fn get_format(m: &mut Machine, a: &[u32]) -> u32 {
+    let (out, capacity, written_out) = (a[1], a[2] as usize, a[3]);
+    let Some(format) = m.sound_buffer(a[0]).map(|b| b.format) else {
+        return DSERR_INVALIDPARAM;
+    };
+    let bytes = format.to_bytes();
+    if out != 0 {
+        // As much of the structure as the caller has room for.
+        let len = capacity.min(bytes.len());
+        if m.memory.load(out, &bytes[..len]).is_none() {
+            return DSERR_INVALIDPARAM;
+        }
+        if written_out != 0 {
+            let _ = m.memory.write(written_out, 4, len as u32);
+        }
+    } else if written_out != 0 {
+        let _ = m.memory.write(written_out, 4, bytes.len() as u32);
+    } else {
+        return DSERR_INVALIDPARAM;
+    }
+    DS_OK
+}
+
+fn get_value(m: &mut Machine, a: &[u32], control: u32, value: fn(&Buffer) -> u32) -> u32 {
+    let Some(buffer) = m.sound_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if control != 0 && buffer.flags & control == 0 {
+        return DSERR_CONTROLUNAVAIL;
+    }
+    let value = value(buffer);
+    if m.memory.write(a[1], 4, value).is_some() {
+        DS_OK
+    } else {
+        DSERR_INVALIDPARAM
+    }
+}
+
+fn get_status(m: &mut Machine, a: &[u32]) -> u32 {
+    let now = m.os.now_ms;
+    let Some(buffer) = m.sound_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    let (_, playing) = buffer.cursor(now);
+    let looping = playing && buffer.playback.is_some_and(|p| p.looping);
+    let status = if playing { DSBSTATUS_PLAYING } else { 0 } | if looping { DSBSTATUS_LOOPING } else { 0 };
+    if m.memory.write(a[1], 4, status).is_some() {
+        DS_OK
+    } else {
+        DSERR_INVALIDPARAM
+    }
+}
+
+fn lock(m: &mut Machine, a: &[u32]) -> u32 {
+    let (mut offset, mut bytes, flags) = (a[1], a[2], a[7]);
+    let (first_out, first_len_out, second_out, second_len_out) = (a[3], a[4], a[5], a[6]);
+    let now = m.os.now_ms;
+    let Some(buffer) = m.sound_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if buffer.memory == 0 {
+        // Writing to the primary buffer needs the write-primary level.
+        return DSERR_PRIOLEVELNEEDED;
+    }
+    let (memory, size) = (buffer.memory, buffer.size);
+    if flags & DSBLOCK_FROMWRITECURSOR != 0 {
+        let (play, _) = buffer.cursor(now);
+        let block = buffer.format.block_align().max(1) as u64;
+        let lead = (buffer.bytes_per_second() * WRITE_LEAD_MS / 1000 / block * block) as u32;
+        offset = (play + lead) % size;
+    }
+    if flags & DSBLOCK_ENTIREBUFFER != 0 {
+        bytes = size;
+    }
+    if offset >= size || bytes == 0 || bytes > size || first_out == 0 || first_len_out == 0 {
+        return DSERR_INVALIDPARAM;
+    }
+    // A range that runs past the end continues at the start of the buffer.
+    let first_len = bytes.min(size - offset);
+    let second_len = bytes - first_len;
+    let mut ok = m.memory.write(first_out, 4, memory + offset).is_some()
+        && m.memory.write(first_len_out, 4, first_len).is_some();
+    if second_out != 0 {
+        ok &= m
+            .memory
+            .write(second_out, 4, if second_len > 0 { memory } else { 0 })
+            .is_some();
+    }
+    if second_len_out != 0 {
+        ok &= m.memory.write(second_len_out, 4, second_len).is_some();
+    }
+    if ok { DS_OK } else { DSERR_INVALIDPARAM }
+}
+
+fn play(m: &mut Machine, a: &[u32]) -> u32 {
+    let now = m.os.now_ms;
+    let looping = a[3] & DSBPLAY_LOOPING != 0;
+    let Some(buffer) = m.settled_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if buffer.is_primary() && !looping {
+        // The primary buffer only ever plays looping.
+        return DSERR_INVALIDPARAM;
+    }
+    buffer.playback = Some(Playback {
+        started_ms: now,
+        from: buffer.position,
+        looping,
+    });
+    DS_OK
+}
+
+fn stop(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(buffer) = m.settled_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    buffer.playback = None;
+    DS_OK
+}
+
+fn set_current_position(m: &mut Machine, a: &[u32]) -> u32 {
+    let now = m.os.now_ms;
+    let Some(buffer) = m.settled_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if buffer.is_primary() {
+        return DSERR_INVALIDCALL;
+    }
+    if a[1] >= buffer.size {
+        return DSERR_INVALIDPARAM;
+    }
+    let block = buffer.format.block_align().max(1);
+    buffer.position = a[1] / block * block;
+    if let Some(playback) = &mut buffer.playback {
+        *playback = Playback {
+            started_ms: now,
+            from: buffer.position,
+            ..*playback
+        };
+    }
+    DS_OK
+}
+
+fn set_format(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(raw) = m.memory.dump(a[1], 16) else {
+        return DSERR_INVALIDPARAM;
+    };
+    let Some(index) = m.object_index(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    let Some(device) = m.sound_buffer(a[0]).map(|b| b.device) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if !m.os.dsound.buffers[index].is_primary() {
+        // Only the primary buffer's format can be changed.
+        return DSERR_INVALIDCALL;
+    }
+    if m.os.dsound.devices[device].cooperative_level < DSSCL_PRIORITY {
+        return DSERR_PRIOLEVELNEEDED;
+    }
+    let Some(format) = WaveFormat::from_bytes(&raw) else {
+        return DSERR_BADFORMAT;
+    };
+    m.note(|| {
+        format!(
+            "{} Hz, {} bit, {} channel(s)",
+            format.samples_per_second, format.bits_per_sample, format.channels
+        )
+    });
+    let buffer = &mut m.os.dsound.buffers[index];
+    buffer.format = format;
+    buffer.frequency = format.samples_per_second;
+    DS_OK
+}
+
+fn set_volume(m: &mut Machine, a: &[u32]) -> u32 {
+    let volume = a[1] as i32;
+    let Some(buffer) = m.sound_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if buffer.flags & DSBCAPS_CTRLVOLUME == 0 {
+        return DSERR_CONTROLUNAVAIL;
+    }
+    if !(-10_000..=0).contains(&volume) {
+        return DSERR_INVALIDPARAM;
+    }
+    buffer.volume = volume;
+    DS_OK
+}
+
+fn set_pan(m: &mut Machine, a: &[u32]) -> u32 {
+    let pan = a[1] as i32;
+    let Some(buffer) = m.sound_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if buffer.flags & DSBCAPS_CTRLPAN == 0 {
+        return DSERR_CONTROLUNAVAIL;
+    }
+    if !(-10_000..=10_000).contains(&pan) {
+        return DSERR_INVALIDPARAM;
+    }
+    buffer.pan = pan;
+    DS_OK
+}
+
+fn set_frequency(m: &mut Machine, a: &[u32]) -> u32 {
+    let Some(buffer) = m.settled_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    if buffer.flags & DSBCAPS_CTRLFREQUENCY == 0 {
+        return DSERR_CONTROLUNAVAIL;
+    }
+    // Zero restores the rate of the buffer's format.
+    let frequency = if a[1] == 0 {
+        buffer.format.samples_per_second
+    } else {
+        a[1]
+    };
+    if !(DSBFREQUENCY_MIN..=DSBFREQUENCY_MAX).contains(&frequency) {
+        return DSERR_INVALIDPARAM;
+    }
+    buffer.frequency = frequency;
+    DS_OK
+}
+
+fn unlock(m: &mut Machine, a: &[u32]) -> u32 {
+    // The locked ranges are the buffer's own memory: nothing to copy back.
+    let Some(buffer) = m.sound_buffer(a[0]) else {
+        return DSERR_INVALIDPARAM;
+    };
+    let inside = a[1] >= buffer.memory && a[1] - buffer.memory + a[2] <= buffer.size;
+    if buffer.memory != 0 && inside {
+        DS_OK
+    } else {
+        DSERR_INVALIDPARAM
+    }
+}
+
+interface! { static SOUND_BUFFER = "IDirectSoundBuffer";
+    QueryInterface(3) => buffer_query_interface,
+    AddRef(1) => buffer_add_ref,
+    Release(1) => buffer_release,
+    GetCaps(2) => buffer_get_caps,
+    GetCurrentPosition(3) => get_current_position,
+    GetFormat(4) => get_format,
+    GetVolume(2) => |m, a| get_value(m, a, DSBCAPS_CTRLVOLUME, |b| b.volume as u32),
+    GetPan(2) => |m, a| get_value(m, a, DSBCAPS_CTRLPAN, |b| b.pan as u32),
+    GetFrequency(2) => |m, a| get_value(m, a, DSBCAPS_CTRLFREQUENCY, |b| b.frequency),
+    GetStatus(2) => get_status,
+    Initialize(3) => |_, _| DSERR_ALREADYINITIALIZED,
+    Lock(8) => lock,
+    Play(4) => play,
+    SetCurrentPosition(2) => set_current_position,
+    SetFormat(2) => set_format,
+    SetVolume(2) => set_volume,
+    SetPan(2) => set_pan,
+    SetFrequency(2) => set_frequency,
+    Stop(1) => stop,
+    Unlock(5) => unlock,
+    Restore(1) => |_, _| DS_OK,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer(size: u32, playback: Option<Playback>) -> Buffer {
+        // 22050 Hz, 16 bit, stereo: 88200 bytes per second, 4 bytes per frame.
+        let format = WaveFormat {
+            channels: 2,
+            samples_per_second: 22_050,
+            bits_per_sample: 16,
+        };
+        Buffer {
+            references: 1,
+            pointer: 0,
+            device: 0,
+            flags: 0,
+            format,
+            memory: 0x1000,
+            size,
+            playback,
+            position: 40,
+            volume: 0,
+            pan: 0,
+            frequency: format.samples_per_second,
+        }
+    }
+
+    #[test]
+    fn wave_formats_round_trip_and_reject_nonsense() {
+        let format = WaveFormat {
+            channels: 2,
+            samples_per_second: 44_100,
+            bits_per_sample: 16,
+        };
+        let bytes = format.to_bytes();
+        assert_eq!(
+            &bytes[..16],
+            [1, 0, 2, 0, 0x44, 0xAC, 0, 0, 0x10, 0xB1, 2, 0, 4, 0, 16, 0]
+        );
+        assert_eq!(WaveFormat::from_bytes(&bytes), Some(format));
+        let mut wrong_align = bytes;
+        wrong_align[12] = 2;
+        assert_eq!(WaveFormat::from_bytes(&wrong_align), None);
+        let mut compressed = bytes;
+        compressed[0] = 2;
+        assert_eq!(WaveFormat::from_bytes(&compressed), None);
+    }
+
+    #[test]
+    fn play_cursor_follows_the_clock() {
+        assert_eq!(buffer(1000, None).cursor(5000), (40, false));
+        let once = Some(Playback {
+            started_ms: 1000,
+            from: 0,
+            looping: false,
+        });
+        // 10 ms at 88200 bytes per second is 882 bytes, rounded down to a frame.
+        assert_eq!(buffer(100_000, once).cursor(1010), (880, true));
+        assert_eq!(buffer(100_000, once).cursor(1000), (0, true));
+        // A buffer that is not looping stops at its end.
+        assert_eq!(buffer(100_000, once).cursor(3000), (0, false));
+        let looping = Some(Playback {
+            started_ms: 1000,
+            from: 400,
+            looping: true,
+        });
+        assert_eq!(buffer(1000, looping).cursor(1010), ((400 + 880) % 1000, true));
+        // Changing the rate changes how fast the cursor moves.
+        let mut fast = buffer(100_000, once);
+        fast.frequency = 44_100;
+        assert_eq!(fast.cursor(1010), (1764, true));
+    }
+
+    #[test]
+    fn settling_keeps_the_cursor_continuous() {
+        let mut playing = buffer(
+            100_000,
+            Some(Playback {
+                started_ms: 0,
+                from: 0,
+                looping: false,
+            }),
+        );
+        playing.settle(10);
+        assert_eq!(playing.position, 880);
+        assert_eq!(playing.cursor(20), (1760, true));
+        playing.settle(5000);
+        assert!(playing.playback.is_none());
+        assert_eq!(playing.cursor(6000), (0, false));
+    }
 }
