@@ -17,9 +17,11 @@ andy - recompiler tools
 USAGE:
     andy info    [EXE]              Print the layout of the executable
     andy analyze [EXE] [--json OUT] Discover code and functions
-    andy boot    [EXE] [--trace] [--limit N]
+    andy boot    [EXE] [--trace] [--limit N] [--args TEXT]
                                     Run the game in the interpreter until it
-                                    stops, and report how far it got
+                                    stops, and report how far it got. --args
+                                    is the game's own command line: -log
+                                    makes it write its log, shown at the end
     andy difftest [EXE] --out FILE [--rounds N]
                                     Write differential test cases for every
                                     distinct instruction in the executable
@@ -43,6 +45,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut out = None;
     let mut rounds = 3u32;
     let mut trace = false;
+    let mut game_args = String::new();
     let mut limit = 2_000_000_000u64;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -54,6 +57,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--json" => json = Some(PathBuf::from(args.next().ok_or("--json needs a path")?)),
             "--out" => out = Some(PathBuf::from(args.next().ok_or("--out needs a path")?)),
             "--trace" => trace = true,
+            "--args" => game_args = args.next().ok_or("--args needs the command line text")?,
             "--limit" => {
                 limit = args
                     .next()
@@ -114,7 +118,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 println!("\nfull analysis written to {}", path.display());
             }
         }
-        "boot" => boot(&image, exe.parent().map(Path::to_path_buf), trace, limit),
+        "boot" => boot(
+            &image,
+            exe.parent().map(Path::to_path_buf),
+            trace,
+            limit,
+            &game_args,
+        ),
         "difftest" => {
             let path = out.ok_or("difftest needs --out FILE")?;
             let analysis = analysis::analyze(&image).ok_or("no executable section at the entry point")?;
@@ -138,10 +148,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64) {
+fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64, game_args: &str) {
     // The program reads the game directory and writes only to `out/run`.
-    let files = Files::new(game_dir, Some(PathBuf::from("out/run")));
-    let mut machine = Machine::load(image, Os::new(files));
+    let write_dir = PathBuf::from("out/run");
+    let log_path = write_dir.join("toy2.log");
+    let _ = fs::remove_file(&log_path);
+    let files = Files::new(game_dir, Some(write_dir));
+    let mut os = Os::new(files);
+    os.command_line_arguments = game_args.to_string();
+    let mut machine = Machine::load(image, os);
     if trace {
         machine.trace = Some(Vec::new());
     }
@@ -193,6 +208,12 @@ fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64) {
         "files opened           {} ({missing} not found)",
         machine.os.files.log.len()
     );
+    if let Ok(log) = fs::read_to_string(&log_path) {
+        println!("\nthe game's own log (toy2.log)");
+        for line in log.lines() {
+            println!("  | {line}");
+        }
+    }
     println!("\nstopped at eip {:#010x}: {}", machine.cpu.eip, describe(&stop));
     if let Stop::Fault(_) = stop {
         let r = &machine.cpu.regs;

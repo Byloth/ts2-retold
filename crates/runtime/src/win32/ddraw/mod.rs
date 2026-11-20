@@ -6,6 +6,7 @@
 mod caps;
 
 use super::com::{E_INVALIDARG, E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
+use super::d3d::{self, DIRECT_3D_2, IID_IDIRECT3D2};
 use super::{HostResult, functions};
 use crate::win32::user32::Display;
 use crate::{Machine, Stop};
@@ -72,8 +73,9 @@ const DDPF_RGB: u32 = 0x40;
 #[derive(Debug)]
 struct DirectDraw {
     references: u32,
-    /// Interface pointers already handed out: `IDirectDraw`, `IDirectDraw2`.
-    pointers: [u32; 2],
+    /// Interface pointers already handed out: `IDirectDraw`, `IDirectDraw2`,
+    /// `IDirect3D2`. Direct3D is an aspect of the DirectDraw object.
+    pointers: [u32; 3],
     /// Window and flags given to `SetCooperativeLevel`.
     window: u32,
     cooperative_level: u32,
@@ -84,6 +86,7 @@ pub struct State {
     objects: Vec<DirectDraw>,
     /// Guest strings describing the driver, created on first enumeration.
     driver_strings: Option<(u32, u32)>,
+    pub(crate) device_strings: Option<d3d::DeviceStrings>,
 }
 
 /// The display modes the adapter offers, in the order Windows lists them.
@@ -144,6 +147,11 @@ impl Machine {
     }
 }
 
+/// Whether an interface pointer names a DirectDraw object still in use.
+pub(crate) fn is_live_object(m: &mut Machine, this: u32) -> bool {
+    m.direct_draw(this).is_some()
+}
+
 functions! { "DDRAW.dll";
     DirectDrawEnumerateA(2) => |m, a| -> HostResult {
         // One adapter: the primary display, which Windows reports with a null GUID.
@@ -173,7 +181,7 @@ functions! { "DDRAW.dll";
         let pointer = m.interface_pointer(&DIRECT_DRAW, index);
         m.os.ddraw.objects.push(DirectDraw {
             references: 1,
-            pointers: [pointer, 0],
+            pointers: [pointer, 0, 0],
             window: 0,
             cooperative_level: 0,
         });
@@ -184,7 +192,7 @@ functions! { "DDRAW.dll";
     },
 }
 
-fn query_interface(m: &mut Machine, a: &[u32]) -> u32 {
+pub(crate) fn query_interface(m: &mut Machine, a: &[u32]) -> u32 {
     let (this, out) = (a[0], a[2]);
     let Some(wanted) = m.read_guid(a[1]) else {
         return DDERR_INVALIDPARAMS;
@@ -195,6 +203,7 @@ fn query_interface(m: &mut Machine, a: &[u32]) -> u32 {
     let slot = match wanted {
         IID_IUNKNOWN | IID_IDIRECTDRAW => 0,
         IID_IDIRECTDRAW2 => 1,
+        IID_IDIRECT3D2 => 2,
         _ => {
             m.note(|| format!("interface {} not offered", format_guid(&wanted)));
             let _ = m.memory.write(out, 4, 0);
@@ -203,7 +212,7 @@ fn query_interface(m: &mut Machine, a: &[u32]) -> u32 {
     };
     let mut pointer = m.os.ddraw.objects[index].pointers[slot];
     if pointer == 0 {
-        let interface = if slot == 0 { &DIRECT_DRAW } else { &DIRECT_DRAW_2 };
+        let interface = [&DIRECT_DRAW, &DIRECT_DRAW_2, &DIRECT_3D_2][slot];
         pointer = m.interface_pointer(interface, index as u32);
         m.os.ddraw.objects[index].pointers[slot] = pointer;
     }
@@ -214,14 +223,14 @@ fn query_interface(m: &mut Machine, a: &[u32]) -> u32 {
     }
 }
 
-fn add_ref(m: &mut Machine, a: &[u32]) -> u32 {
+pub(crate) fn add_ref(m: &mut Machine, a: &[u32]) -> u32 {
     m.direct_draw(a[0]).map_or(0, |object| {
         object.references += 1;
         object.references
     })
 }
 
-fn release(m: &mut Machine, a: &[u32]) -> u32 {
+pub(crate) fn release(m: &mut Machine, a: &[u32]) -> u32 {
     m.direct_draw(a[0]).map_or(0, |object| {
         object.references -= 1;
         object.references

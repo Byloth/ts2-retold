@@ -10,6 +10,7 @@
 
 mod advapi32;
 pub mod com;
+pub mod d3d;
 pub mod ddraw;
 mod gdi32;
 mod kernel32;

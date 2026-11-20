@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 /// Directory the program believes it runs from, without a trailing separator.
 pub const INSTALL_DIR: &str = "C:\\TOY2";
+const DELETED_SUFFIX: &str = ".andy-deleted";
 
 #[derive(Debug)]
 pub struct OpenFile {
@@ -33,6 +34,9 @@ pub struct Files {
     write_dir: Option<PathBuf>,
     open: HashMap<u32, OpenFile>,
     next_handle: u32,
+    /// Files that exist only for this run, by normalised lower-case name.
+    /// They take precedence over both directories.
+    injected: HashMap<String, Vec<u8>>,
     /// Every name the program tried to open, with the outcome.
     pub log: Vec<(String, bool)>,
 }
@@ -100,13 +104,65 @@ impl Files {
         Some(path)
     }
 
+    /// Makes a file appear in the install directory for this run only.
+    pub fn inject(&mut self, name: &str, data: Vec<u8>) {
+        self.injected.insert(name.to_ascii_lowercase(), data);
+    }
+
+    /// Where a file the program wrote lives in the write directory.
+    fn written_path(root: &Path, name: &str) -> PathBuf {
+        root.join(name.to_ascii_lowercase())
+    }
+
+    /// Marker left in the write directory when the program deletes a file
+    /// of the game directory, which itself is never touched.
+    fn deletion_marker(root: &Path, name: &str) -> PathBuf {
+        root.join(format!("{}{DELETED_SUFFIX}", name.to_ascii_lowercase()))
+    }
+
     fn read_existing(&self, parts: &[String]) -> Option<Vec<u8>> {
-        [&self.write_dir, &self.game_dir]
-            .into_iter()
-            .flatten()
-            .filter_map(|root| Self::resolve(root, parts))
-            .find(|path| path.is_file())
-            .and_then(|path| fs::read(path).ok())
+        let name = parts.join("/");
+        if let Some(data) = self.injected.get(&name.to_ascii_lowercase()) {
+            return Some(data.clone());
+        }
+        if let Some(root) = &self.write_dir {
+            if let Ok(data) = fs::read(Self::written_path(root, &name)) {
+                return Some(data);
+            }
+            if Self::deletion_marker(root, &name).exists() {
+                return None;
+            }
+        }
+        let path = Self::resolve(self.game_dir.as_ref()?, parts)?;
+        if path.is_file() { fs::read(path).ok() } else { None }
+    }
+
+    /// Deletes a file as the program sees it. Returns whether it existed.
+    pub fn delete(&mut self, guest_path: &str) -> bool {
+        let Some(parts) = Self::components(guest_path) else {
+            return false;
+        };
+        if self.read_existing(&parts).is_none() {
+            return false;
+        }
+        let name = parts.join("/");
+        self.injected.remove(&name.to_ascii_lowercase());
+        if let Some(root) = &self.write_dir {
+            let _ = fs::remove_file(Self::written_path(root, &name));
+            let in_game_dir = self
+                .game_dir
+                .as_ref()
+                .and_then(|game| Self::resolve(game, &parts))
+                .is_some();
+            if in_game_dir {
+                let marker = Self::deletion_marker(root, &name);
+                if let Some(parent) = marker.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let _ = fs::write(marker, b"");
+            }
+        }
+        true
     }
 
     pub fn open(&mut self, guest_path: &str, writable: bool, disposition: Disposition) -> Option<u32> {
@@ -170,7 +226,8 @@ impl Files {
         if file.dirty
             && let Some(root) = &self.write_dir
         {
-            let path = root.join(file.name.to_ascii_lowercase());
+            let path = Self::written_path(root, &file.name);
+            let _ = fs::remove_file(Self::deletion_marker(root, &file.name));
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
@@ -219,6 +276,11 @@ mod tests {
         assert!(files.write(handle, b"x").is_none());
         assert!(files.close(handle));
         assert_eq!(files.open("missing.dat", false, Disposition::OpenExisting), None);
+        files.inject("Extra.INI", b"LOG".to_vec());
+        let handle = files
+            .open("C:\\TOY2\\extra.ini", false, Disposition::OpenExisting)
+            .unwrap();
+        assert_eq!(files.read(handle, 10), Some(&b"LOG"[..]));
 
         let handle = files
             .open("data\\level.bin", true, Disposition::CreateAlways)
@@ -234,6 +296,29 @@ mod tests {
             .open("DATA\\LEVEL.BIN", false, Disposition::OpenExisting)
             .unwrap();
         assert_eq!(files.read(handle, 100), Some(&b"changed"[..]));
+        files.close(handle);
+
+        // Deleting hides the original without touching it, until the file is written again.
+        assert!(files.delete("data\\level.bin"));
+        assert!(!files.delete("data\\level.bin"));
+        assert_eq!(
+            files.open("data\\level.bin", false, Disposition::OpenExisting),
+            None
+        );
+        assert_eq!(
+            fs::read(game.join("Data").join("Level.BIN")).unwrap(),
+            b"original"
+        );
+        let handle = files
+            .open("data\\level.bin", true, Disposition::OpenAlways)
+            .unwrap();
+        assert_eq!(files.read(handle, 100), Some(&b""[..]));
+        files.write(handle, b"new").unwrap();
+        files.close(handle);
+        let handle = files
+            .open("data\\level.bin", false, Disposition::OpenExisting)
+            .unwrap();
+        assert_eq!(files.read(handle, 100), Some(&b"new"[..]));
         fs::remove_dir_all(root).unwrap();
     }
 }

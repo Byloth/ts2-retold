@@ -10,7 +10,9 @@ Recon findings: `docs/RECON.md`. Decisions: `docs/adr/`. Analysis results:
 
 **Crates.** `crates/cli` (`andy`): the command-line tool.
 `crates/runtime` (`andy-runtime`): the machine, the loader and the replacement
-for the Windows API (ADR 0011); how far the game boots is in `docs/BOOT.md`.
+for the Windows API and DirectX (ADR 0011, ADR 0012); how far the game boots is
+in `docs/BOOT.md`. DirectX layouts are checked against the headers in the
+git-ignored `ref/dx` (see `docs/LICENSES.md`), never copied from them.
 `crates/recomp` (`andy-recomp`): PE loader, code discovery, test generation.
 `crates/cpu` (`andy-cpu`): instruction semantics written once over a backend
 trait, plus the interpreter backend (ADR 0009) and the x87 model (ADR 0010).
@@ -90,8 +92,9 @@ cargo run --release --bin andy -- analyze --json out/analysis.json
 cargo run --release --bin andy -- difftest --out out/difftest.jsonl --rounds 40
 .venv/bin/python tools/difftest.py out/difftest.jsonl --jobs 24
 
-# Run the game in the interpreter; lists system calls and where it stops
-cargo run --release --bin andy -- boot --trace
+# Run the game in the interpreter; lists host calls and where it stops.
+# --args "-log" turns on the game's own log, printed at the end.
+cargo run --release --bin andy -- boot --trace --args "-log"
 ```
 
 `.venv` is created with `python3 -m venv .venv && .venv/bin/pip install unicorn==2.1.4`.

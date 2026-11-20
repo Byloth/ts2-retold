@@ -16,7 +16,8 @@ functions! { "KERNEL32.dll";
     GetVersion(0) => |_, _| WINDOWS_VERSION,
     GetCommandLineA(0) => |m, _| {
         if m.os.command_line == 0 {
-            m.os.command_line = m.os.string(&mut m.memory, MODULE_PATH.as_bytes());
+            let line = format!("{MODULE_PATH} {}", m.os.command_line_arguments);
+            m.os.command_line = m.os.string(&mut m.memory, line.trim_end().as_bytes());
         }
         m.os.command_line
     },
@@ -94,6 +95,15 @@ functions! { "KERNEL32.dll";
         let Ok(position) = u32::try_from(origin + distance) else { return u32::MAX };
         file.position = position as u64;
         position
+    },
+    DeleteFileA(1) => |m, a| {
+        let name = m.text(a[0]);
+        let deleted = m.os.files.delete(&name);
+        m.note(|| format!("{name:?}{}", if deleted { "" } else { " -> not found" }));
+        if !deleted {
+            m.os.last_error = ERROR_FILE_NOT_FOUND;
+        }
+        deleted as u32
     },
     FlushFileBuffers(1) => |_, _| 1,
     CloseHandle(1) => |m, a| {

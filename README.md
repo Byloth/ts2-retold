@@ -13,8 +13,9 @@ sponsored by Disney, Pixar, Activision or Traveller's Tales.
 
 **Status: early. An interpreter implements every instruction the game uses,
 verified against an independent emulator on 1.8 million cases, and the game's
-own code boots in it through its C runtime, installation check and settings,
-up to the creation of its window. Nothing is playable yet.**
+own code boots in it: C runtime, installation check, settings, window, and the
+examination of the display adapter and 3D device through DirectDraw and
+Direct3D. Nothing is drawn or playable yet.**
 
 ```sh
 export TS2_GAME_DIR="/path/to/your/installed/game"

@@ -26,6 +26,8 @@ pub struct Os {
     virtual_next: u32,
     /// Guest addresses of strings handed out once and kept alive.
     pub(crate) command_line: u32,
+    /// What follows the program name on its command line.
+    pub command_line_arguments: String,
     pub(crate) environment: u32,
     pub last_error: u32,
     /// Text the program sent to the debugger.
