@@ -21,7 +21,7 @@ use andy_runtime::video::{
     PixelFormat, Rect, Source, SurfaceId, Vertex, Video,
 };
 
-pub use window::Presenter;
+pub use window::{Bar, Presenter};
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const INDEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;

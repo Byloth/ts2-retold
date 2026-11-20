@@ -11,6 +11,28 @@ pub struct Presenter {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// A black pixel, drawn large behind the game's picture.
+    black: wgpu::BindGroup,
+    surround: Option<Surround>,
+}
+
+/// What the window shows around the game's picture when it draws its own
+/// frame: a bar across the top and a border along the other sides.
+pub struct Bar<'a> {
+    /// The bar's picture: rows of red, green, blue, alpha bytes.
+    pub rgba: &'a [u8],
+    pub width: u32,
+    pub height: u32,
+    /// The thickness of the border in pixels, and its colour.
+    pub border: u32,
+    pub border_color: [u8; 3],
+}
+
+struct Surround {
+    bar: wgpu::BindGroup,
+    height: u32,
+    border: u32,
+    border_color: wgpu::Color,
 }
 
 impl Gpu {
@@ -59,6 +81,52 @@ impl Gpu {
             Ok((gpu, presenter))
         })
     }
+}
+
+fn group(
+    gpu: &Gpu,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("shown picture"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+    })
+}
+
+/// A picture of the window's own (not a surface of the game), ready to be
+/// drawn.
+fn picture(
+    gpu: &Gpu,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> wgpu::BindGroup {
+    let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("window picture"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    gpu.queue.write_texture(
+        texture.as_image_copy(),
+        rgba,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * width), rows_per_image: None },
+        size,
+    );
+    group(gpu, layout, sampler, &texture.create_view(&wgpu::TextureViewDescriptor::default()))
 }
 
 impl Presenter {
@@ -126,7 +194,19 @@ impl Presenter {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        Presenter { surface, configuration, pipeline, layout, sampler }
+        let black = picture(gpu, &layout, &sampler, 1, 1, &[0, 0, 0, 0xFF]);
+        Presenter { surface, configuration, pipeline, layout, sampler, black, surround: None }
+    }
+
+    /// Sets what is shown around the game's picture from now on.
+    pub fn set_bar(&mut self, gpu: &Gpu, bar: Bar) {
+        let [red, green, blue] = bar.border_color.map(|channel| channel as f64 / 255.0);
+        self.surround = Some(Surround {
+            bar: picture(gpu, &self.layout, &self.sampler, bar.width, bar.height, bar.rgba),
+            height: bar.height,
+            border: bar.border,
+            border_color: wgpu::Color { r: red, g: green, b: blue, a: 1.0 },
+        });
     }
 
     /// The window has a new size.
@@ -135,34 +215,14 @@ impl Presenter {
         self.surface.configure(&gpu.device, &self.configuration);
     }
 
-    /// Fills the window with black. Called as soon as the window exists: a
-    /// window is given a picture at once, not when the game first has one
-    /// (which is seconds later, after it has loaded).
-    pub fn clear(&mut self, gpu: &Gpu) {
-        let wgpu::CurrentSurfaceTexture::Success(frame) = self.surface.get_current_texture() else { return };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        gpu.queue.submit([encoder.finish()]);
-        gpu.queue.present(frame);
-    }
-
-    /// Shows a surface in the window, as large as fits with its shape kept,
-    /// black around it. Returns false if the window had no picture to draw
-    /// on this time.
-    pub fn show(&mut self, gpu: &mut Gpu, surface: SurfaceId) -> bool {
+    /// Shows the window's picture: the bar and the border, if it has
+    /// them, and inside them a surface of the game as large as fits with
+    /// its shape kept, black around it. Without a surface the inside is
+    /// black: a window is given a picture as soon as it exists, not when
+    /// the game first has one (which is seconds later, after it has
+    /// loaded). Returns false if the window had no picture to draw on this
+    /// time.
+    pub fn show(&mut self, gpu: &mut Gpu, surface: Option<SurfaceId>) -> bool {
         gpu.flush();
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -173,21 +233,18 @@ impl Presenter {
                 return false;
             }
         };
-        let shown = gpu.surface(surface);
-        let (window_width, window_height) =
-            (self.configuration.width as f32, self.configuration.height as f32);
-        let scale = (window_width / shown.width as f32).min(window_height / shown.height as f32);
-        let (width, height) = (shown.width as f32 * scale, shown.height as f32 * scale);
-        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("shown surface"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&shown.view),
-                },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-            ],
+        let (window_width, window_height) = (self.configuration.width, self.configuration.height);
+        // The room inside the bar and the border.
+        let (top, border, around) = match &self.surround {
+            Some(surround) => (surround.height.min(window_height), surround.border, surround.border_color),
+            None => (0, 0, wgpu::Color::BLACK),
+        };
+        let left = border.min(window_width) as f32;
+        let room_width = window_width.saturating_sub(2 * border) as f32;
+        let room_height = window_height.saturating_sub(top + border) as f32;
+        let shown = surface.map(|surface| {
+            let shown = gpu.surface(surface);
+            (group(gpu, &self.layout, &self.sampler, &shown.view), shown.width as f32, shown.height as f32)
         });
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -198,24 +255,39 @@ impl Presenter {
                     view: &view,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(around), store: wgpu::StoreOp::Store },
                 })],
                 ..Default::default()
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &group, &[]);
-            pass.set_viewport(
-                (window_width - width) / 2.0,
-                (window_height - height) / 2.0,
-                width,
-                height,
-                0.0,
-                1.0,
-            );
-            pass.draw(0..3, 0..1);
+            if let (Some(surround), true) = (&self.surround, top > 0) {
+                // While the window changes size the bar may be a picture
+                // for the old one for a moment; it is stretched to fit.
+                pass.set_bind_group(0, &surround.bar, &[]);
+                pass.set_viewport(0.0, 0.0, window_width as f32, top as f32, 0.0, 1.0);
+                pass.draw(0..3, 0..1);
+            }
+            if room_width > 0.0 && room_height > 0.0 {
+                if self.surround.is_some() {
+                    pass.set_bind_group(0, &self.black, &[]);
+                    pass.set_viewport(left, top as f32, room_width, room_height, 0.0, 1.0);
+                    pass.draw(0..3, 0..1);
+                }
+                if let Some((group, shown_width, shown_height)) = &shown {
+                    let scale = (room_width / shown_width).min(room_height / shown_height);
+                    let (width, height) = (shown_width * scale, shown_height * scale);
+                    pass.set_bind_group(0, group, &[]);
+                    pass.set_viewport(
+                        left + (room_width - width) / 2.0,
+                        top as f32 + (room_height - height) / 2.0,
+                        width,
+                        height,
+                        0.0,
+                        1.0,
+                    );
+                    pass.draw(0..3, 0..1);
+                }
+            }
         }
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(frame);

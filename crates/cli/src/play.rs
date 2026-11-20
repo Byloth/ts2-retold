@@ -5,24 +5,45 @@
 //! the keyboard the game reads, and the machine's clock is kept in step with
 //! real time: it runs no faster, and while the game waits its clock goes no
 //! further than the present (`Machine::clock_limit`).
+//!
+//! The window draws its frame itself (`crate::frame`) and asks the window
+//! system for none: the pointer on the bar moves the window, on its edges
+//! resizes it, and the three buttons minimise, maximise and close it.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use andy_gpu::{Gpu, Presenter};
+use andy_gpu::{Bar, Gpu, Presenter};
 use andy_runtime::{Machine, Stop};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
-use winit::event::{ElementState, WindowEvent};
+use winit::dpi::{LogicalSize, PhysicalPosition};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
+
+use crate::frame::{Button, Edge, Frame, Hit};
 
 /// Instructions the machine runs before the window is looked at again: two
 /// milliseconds of its clock.
 const STRETCH: u64 = 2 * andy_runtime::INSTRUCTIONS_PER_MS;
 /// How long the machine may run before events are handled again.
 const TURN: Duration = Duration::from_millis(8);
+/// The game's picture at the size the window opens with, and the smallest
+/// it can be made, in logical pixels.
+const OPENING: (f64, f64) = (960.0, 720.0);
+const SMALLEST: (f64, f64) = (320.0, 240.0);
+/// Two presses on the bar this close in time, and in logical pixels, are a
+/// double click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+const DOUBLE_CLICK_REACH: f64 = 4.0;
+
+/// The size of the window whose frame leaves this much room for the picture.
+fn window_size((width, height): (f64, f64)) -> LogicalSize<f64> {
+    let frame = Frame::new("", 0, 0, 1.0);
+    let border = frame.border() as f64;
+    LogicalSize::new(width + 2.0 * border, height + frame.bar_height() as f64 + border)
+}
 
 /// The DirectInput name of a key of the window.
 fn key_name(key: KeyCode) -> Option<&'static str> {
@@ -133,6 +154,13 @@ struct Play {
     machine: Machine,
     window: Option<Arc<Window>>,
     presenter: Option<Presenter>,
+    /// The window's frame as it should look, and as the presenter has it.
+    frame: Option<Frame>,
+    drawn: Option<Frame>,
+    /// Where the pointer is in the window, in physical pixels.
+    pointer: Option<(f64, f64)>,
+    /// When and where the bar was last pressed.
+    bar_pressed: Option<(Instant, (f64, f64))>,
     /// Frames of the game shown so far.
     frames_shown: u64,
     /// When the machine's clock read `clock_start`.
@@ -148,14 +176,128 @@ impl Play {
         self.machine.video.as_any_mut().downcast_mut().expect("the window's backend is the GPU one")
     }
 
-    /// Shows the surface the game last presented.
+    /// Shows the frame and, inside it, the surface the game last presented.
     fn show(&mut self) {
         let Some(mut presenter) = self.presenter.take() else { return };
-        let gpu = self.gpu();
-        if let Some(surface) = gpu.presented {
-            presenter.show(gpu, surface);
+        if self.frame != self.drawn {
+            self.drawn = self.frame.clone();
+            if let Some(frame) = self.drawn.clone() {
+                let bar = frame.render();
+                presenter.set_bar(
+                    self.gpu(),
+                    Bar {
+                        rgba: &bar.rgba,
+                        width: bar.width,
+                        height: bar.height,
+                        border: frame.border(),
+                        border_color: frame.border_color(),
+                    },
+                );
+            }
         }
+        let gpu = self.gpu();
+        let presented = gpu.presented;
+        presenter.show(gpu, presented);
         self.presenter = Some(presenter);
+    }
+
+    /// Changes the frame, and has the window drawn again if it looks
+    /// different now.
+    fn change_frame(&mut self, change: impl FnOnce(&mut Frame, &Window)) {
+        let (Some(frame), Some(window)) = (&mut self.frame, &self.window) else { return };
+        change(frame, window);
+        if self.frame != self.drawn {
+            window.request_redraw();
+        }
+    }
+
+    /// What the pointer is over.
+    fn under_pointer(&self) -> Hit {
+        match (&self.frame, self.pointer) {
+            (Some(frame), Some((x, y))) => frame.hit(x, y),
+            _ => Hit::Content,
+        }
+    }
+
+    /// The pointer has moved, or what is under it has changed: the button
+    /// under it is lit, and over an edge it shows which way that edge pulls.
+    fn pointer_moved(&mut self) {
+        let hit = self.under_pointer();
+        if let Some(window) = &self.window {
+            window.set_cursor(match hit {
+                Hit::Edge(Edge::North) => CursorIcon::NResize,
+                Hit::Edge(Edge::South) => CursorIcon::SResize,
+                Hit::Edge(Edge::East) => CursorIcon::EResize,
+                Hit::Edge(Edge::West) => CursorIcon::WResize,
+                Hit::Edge(Edge::NorthEast) => CursorIcon::NeResize,
+                Hit::Edge(Edge::NorthWest) => CursorIcon::NwResize,
+                Hit::Edge(Edge::SouthEast) => CursorIcon::SeResize,
+                Hit::Edge(Edge::SouthWest) => CursorIcon::SwResize,
+                Hit::Content | Hit::Bar | Hit::Button(_) => CursorIcon::Default,
+            });
+        }
+        self.change_frame(|frame, _| {
+            frame.hovered = match hit {
+                Hit::Button(button) => Some(button),
+                _ => None,
+            }
+        });
+    }
+
+    /// The left button went down on the frame.
+    fn pressed(&mut self, hit: Hit) {
+        let (Some(window), Some(pointer), Some(frame)) = (self.window.clone(), self.pointer, &self.frame)
+        else {
+            return;
+        };
+        // The window system moves and resizes the window from here on; if
+        // it cannot, the window stays as it is.
+        match hit {
+            Hit::Content => {}
+            Hit::Edge(edge) => {
+                let _ = window.drag_resize_window(match edge {
+                    Edge::North => ResizeDirection::North,
+                    Edge::South => ResizeDirection::South,
+                    Edge::East => ResizeDirection::East,
+                    Edge::West => ResizeDirection::West,
+                    Edge::NorthEast => ResizeDirection::NorthEast,
+                    Edge::NorthWest => ResizeDirection::NorthWest,
+                    Edge::SouthEast => ResizeDirection::SouthEast,
+                    Edge::SouthWest => ResizeDirection::SouthWest,
+                });
+            }
+            Hit::Bar => {
+                let reach = DOUBLE_CLICK_REACH * frame.scale;
+                let again = self.bar_pressed.take().is_some_and(|(when, (x, y))| {
+                    when.elapsed() <= DOUBLE_CLICK
+                        && (pointer.0 - x).abs() <= reach
+                        && (pointer.1 - y).abs() <= reach
+                });
+                if again {
+                    window.set_maximized(!window.is_maximized());
+                } else {
+                    self.bar_pressed = Some((Instant::now(), pointer));
+                    let _ = window.drag_window();
+                }
+            }
+            Hit::Button(button) => self.change_frame(|frame, _| frame.pressed = Some(button)),
+        }
+    }
+
+    /// The left button came up: a button of the frame pressed and released
+    /// does what it is for.
+    fn released(&mut self, hit: Hit, event_loop: &ActiveEventLoop) {
+        let held = self.frame.as_ref().and_then(|frame| frame.pressed);
+        self.change_frame(|frame, _| frame.pressed = None);
+        let (Some(window), Some(button)) = (&self.window, held) else { return };
+        if hit != Hit::Button(button) {
+            return;
+        }
+        match button {
+            Button::Minimise => window.set_minimized(true),
+            Button::Maximise => window.set_maximized(!window.is_maximized()),
+            Button::Close => event_loop.exit(),
+        }
     }
 }
 
@@ -164,24 +306,32 @@ impl ApplicationHandler for Play {
         if self.window.is_some() {
             return;
         }
+        const TITLE: &str = "Toy Story 2: Retold";
         let attributes = Window::default_attributes()
-            .with_title("Toy Story 2: Retold")
-            .with_inner_size(LogicalSize::new(960.0, 720.0));
+            .with_title(TITLE)
+            .with_decorations(false)
+            .with_inner_size(window_size(OPENING))
+            .with_min_inner_size(window_size(SMALLEST));
         let opened =
             event_loop.create_window(attributes).map_err(|error| error.to_string()).and_then(|window| {
                 let window = Arc::new(window);
                 let size = window.inner_size();
                 let display = Box::new(event_loop.owned_display_handle());
-                let (gpu, mut presenter) = Gpu::for_window(window.clone(), display, size.width, size.height)
+                let (gpu, presenter) = Gpu::for_window(window.clone(), display, size.width, size.height)
                     .map_err(|error| error.to_string())?;
-                presenter.clear(&gpu);
                 Ok((window, gpu, presenter))
             });
         match opened {
             Ok((window, gpu, presenter)) => {
                 println!("graphics adapter       {}", gpu.adapter_name());
                 self.machine.video = Box::new(gpu);
+                let size = window.inner_size();
+                let mut frame = Frame::new(TITLE, size.width, size.height, window.scale_factor());
+                (frame.active, frame.maximized) = (window.has_focus(), window.is_maximized());
+                self.frame = Some(frame);
                 (self.window, self.presenter) = (Some(window), Some(presenter));
+                // The window has a picture from the start.
+                self.show();
                 (self.started, self.clock_start) = (Instant::now(), self.machine.clock());
             }
             Err(error) => {
@@ -199,8 +349,39 @@ impl ApplicationHandler for Play {
                     presenter.resize(self.gpu(), size.width, size.height);
                     self.presenter = Some(presenter);
                 }
+                self.change_frame(|frame, window| {
+                    (frame.width, frame.height) = (size.width, size.height);
+                    frame.maximized = window.is_maximized();
+                });
+                self.pointer_moved();
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.change_frame(|frame, _| frame.scale = scale_factor);
             }
             WindowEvent::RedrawRequested => self.show(),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.pointer = Some((position.x, position.y));
+                self.pointer_moved();
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.pointer = None;
+                self.pointer_moved();
+            }
+            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                let hit = self.under_pointer();
+                match state {
+                    ElementState::Pressed => self.pressed(hit),
+                    ElementState::Released => self.released(hit, event_loop),
+                }
+            }
+            // The window system's menu for the window, where it has one.
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
+                if let (Hit::Bar, Some(window), Some((x, y))) =
+                    (self.under_pointer(), &self.window, self.pointer)
+                {
+                    window.show_window_menu(PhysicalPosition::new(x, y));
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let PhysicalKey::Code(key) = event.physical_key else { return };
                 if let Some(code) = key_name(key).and_then(andy_runtime::keys::code) {
@@ -208,7 +389,12 @@ impl ApplicationHandler for Play {
                 }
             }
             // A window that loses the keyboard has no keys held.
-            WindowEvent::Focused(false) => self.machine.os.input.keys = [false; 256],
+            WindowEvent::Focused(focused) => {
+                if !focused {
+                    self.machine.os.input.keys = [false; 256];
+                }
+                self.change_frame(|frame, _| frame.active = focused);
+            }
             _ => {}
         }
     }
@@ -264,6 +450,10 @@ pub fn play(machine: Machine) -> Result<(Machine, Option<Stop>), String> {
         machine,
         window: None,
         presenter: None,
+        frame: None,
+        drawn: None,
+        pointer: None,
+        bar_pressed: None,
         frames_shown: 0,
         started: Instant::now(),
         clock_start: 0,

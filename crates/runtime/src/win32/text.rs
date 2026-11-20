@@ -30,8 +30,11 @@ struct Typeface {
     max_width: i32,
 }
 
+/// The bundled typeface: Liberation Sans, regular (`docs/LICENSES.md`).
+pub const TYPEFACE_FILE: &[u8] = include_bytes!("../../assets/fonts/LiberationSans-Regular.ttf");
+
 static TYPEFACE: LazyLock<Typeface> = LazyLock::new(|| {
-    let data = include_bytes!("../../assets/fonts/LiberationSans-Regular.ttf") as &[u8];
+    let data = TYPEFACE_FILE;
     let face = ttf_parser::Face::parse(data, 0).expect("the bundled font is valid");
     let field = |table: &[u8; 4], offset: usize| {
         let bytes = face.raw_face().table(Tag::from_bytes(table)).and_then(|t| t.get(offset..offset + 2));

@@ -69,6 +69,7 @@ dependencies = [
  "andy-mpeg",
  "andy-recomp",
  "andy-runtime",
+ "fontdue",
  "png",
  "serde_json",
  "winit",

@@ -11,7 +11,7 @@ Every dependency or tool is listed here **before** it is adopted
 | `sha2` 0.10 | MIT OR Apache-2.0 | identifying the executable build |
 | `serde`, `serde_json` | MIT OR Apache-2.0 | analysis reports |
 | `bytemuck` 1 | Zlib OR Apache-2.0 OR MIT | vertices as plain bytes for the video backend |
-| `fontdue` 0.9 | MIT OR Apache-2.0 OR Zlib | turning glyph outlines into pixels for GDI text |
+| `fontdue` 0.9 | MIT OR Apache-2.0 OR Zlib | turning glyph outlines into pixels for GDI text and for the title in the window's frame |
 | `ttf-parser` 0.25 | MIT OR Apache-2.0 | reading the bundled font's metric tables |
 | `wgpu` 30 | MIT OR Apache-2.0 | the GPU video backend (`crates/gpu`): Vulkan, Direct3D 12, Metal and WebGPU from one code base |
 | `winit` 0.30 | Apache-2.0 | the window of `andy play` (command-line tool only), without its own window frame for Wayland; its tree of platform bindings is MIT, Apache-2.0, Zlib, BSD or ISC |

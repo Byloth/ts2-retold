@@ -43,12 +43,18 @@ out of here into the roadmap or an ADR when work on them starts.
   machine there (JavaScript Promise Integration, or never needing the
   transfer). So far the game has caused no transfer back at all.
 - **The window** (`andy play`) shows the picture, enlarged with its shape
-  kept, and takes the keyboard. Still to do: a canvas for the browser; a
-  frame on Wayland where the compositor draws none. winit's own frame
+  kept, and takes the keyboard, inside a frame the program draws itself (ADR 0018).
+  Still to do: a canvas for the browser; full screen; the mouse and
+  joysticks; trying it on Windows with a real graphics card, where the
+  frame also has to be looked at again (snapping to the screen's edges
+  and the window's shadow belong to the system's frame there); a
+  comparison of the frame's bar with the pointer's real behaviour on a
+  display with a scale other than 1 (`UNVERIFIED`). Why the frame is the
+  program's own: winit's frame
   (`sctk-adwaita`, five subsurfaces around the window) makes WSLg's
   compositor (weston 9.0.0-215, WSLg 1.0.79) end with signal 11 about a
   second after it lists those subsurfaces as windows of the RDP shell, so
-  the feature is off and the window there has no title bar. What is established
+  the feature is off. What is established
   (2026-11-20), with the compositor's log at its most detailed
   (`WESTON_RDP_DEBUG_LEVEL=5` in `%USERPROFILE%\.wslgconfig`):
   - it is not the game: `tools/wslg-frame-crash`, a window with that frame
@@ -71,10 +77,7 @@ out of here into the roadmap or an ADR when work on them starts.
     around the window (black around the game, a flat colour around the
     test window).
   So it is a fault of WSLg's compositor with sub-surfaces, to be reported
-  to WSLg with the minimal program and the log. For the window: a frame of
-  the project's own, or X11 on WSLg (which gets the Windows frame but
-  needs the system library `libxkbcommon-x11`); full screen; the mouse and joysticks; trying it on
-  Windows with a real graphics card.
+  to WSLg with the minimal program and the log.
 - **One render pass per frame is not yet reached when the frame mixes
   copies and triangles**: a fill or copy between two batches ends the pass.
   Fills and copies could join the pass as commands.

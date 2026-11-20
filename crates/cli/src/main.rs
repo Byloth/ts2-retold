@@ -1,6 +1,7 @@
 //! Command-line front end of the recompiler.
 
 mod capture;
+mod frame;
 mod play;
 
 use std::path::{Path, PathBuf};

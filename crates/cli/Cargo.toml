@@ -12,8 +12,10 @@ andy-recomp = { path = "../recomp" }
 andy-gpu = { path = "../gpu" }
 andy-mpeg = { path = "../mpeg" }
 andy-runtime = { path = "../runtime" }
+fontdue = "0.9"
 serde_json = "1"
 png = "0.17"
 # Without the frame winit draws by itself on Wayland ("wayland-csd-adwaita"):
-# its sub-surfaces crash the compositor of WSLg (docs/BACKLOG.md).
+# its sub-surfaces crash the compositor of WSLg (docs/BACKLOG.md). The
+# window draws its own (ADR 0018).
 winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
