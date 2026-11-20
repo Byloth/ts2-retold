@@ -36,6 +36,9 @@ pub struct Os {
     /// Milliseconds since start, set by the machine before each host call.
     /// The clock is a function of the instructions executed, so runs repeat.
     pub now_ms: u32,
+    /// Names of the DLLs the executable imports from, which are therefore
+    /// loaded. A module's handle encodes its position in this list.
+    pub modules: Vec<String>,
     /// The executable's resources (their data is in guest memory).
     pub resources: Vec<Resource>,
     pub user: User,

@@ -102,6 +102,8 @@ pub struct Machine {
     pub os: Os,
     pub threads: Threads,
     host: Vec<HostEntry>,
+    /// Addresses already given to host functions, by the function's identity.
+    host_addresses: std::collections::HashMap<usize, u32>,
     /// Calls made to each host function, parallel to `host`.
     call_counts: Vec<u64>,
     /// Decoded instructions of the code section, filled on first execution.
@@ -164,6 +166,7 @@ impl Machine {
             os,
             threads: Threads::new(),
             host: Vec::new(),
+            host_addresses: std::collections::HashMap::new(),
             call_counts: Vec::new(),
             code_start: code.va,
             decoded_index: vec![u32::MAX; code.virtual_size as usize],
@@ -177,15 +180,22 @@ impl Machine {
         };
         machine.os.resources = image.resources.clone();
         for import in &image.imports {
+            if !machine
+                .os
+                .modules
+                .iter()
+                .any(|module| module.eq_ignore_ascii_case(&import.dll))
+            {
+                machine.os.modules.push(import.dll.clone());
+            }
             let name = import.name.to_string();
-            let entry = match win32::lookup(&import.dll, &name) {
-                Some(function) => HostEntry::Function(function),
-                None => HostEntry::Missing {
+            let stub = match win32::lookup(&import.dll, &name) {
+                Some(function) => machine.host_function_address(function),
+                None => machine.add_host_entry(HostEntry::Missing {
                     dll: import.dll.clone(),
                     name,
-                },
+                }),
             };
-            let stub = machine.add_host_entry(entry);
             machine
                 .memory
                 .write(import.iat_va, 4, stub)
@@ -201,10 +211,16 @@ impl Machine {
         stub
     }
 
-    /// Makes `function` callable by the program and returns its address, for
-    /// use in tables the runtime builds itself (COM method tables).
+    /// Makes `function` callable by the program and returns its address:
+    /// the value for an import slot, a method table or `GetProcAddress`.
     pub fn host_function_address(&mut self, function: &'static Function) -> u32 {
-        self.add_host_entry(HostEntry::Function(function))
+        let identity = function as *const Function as usize;
+        if let Some(&address) = self.host_addresses.get(&identity) {
+            return address;
+        }
+        let address = self.add_host_entry(HostEntry::Function(function));
+        self.host_addresses.insert(identity, address);
+        address
     }
 
     /// Host functions called so far, with their call counts.

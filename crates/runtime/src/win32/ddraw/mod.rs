@@ -6,7 +6,7 @@
 mod caps;
 
 use super::com::{E_INVALIDARG, E_NOINTERFACE, Guid, IID_IUNKNOWN, S_OK, guid, interface};
-use super::d3d::{self, DIRECT_3D_2, IID_IDIRECT3D2};
+use super::d3d::{self, DIRECT_3D_2, DIRECT_3D_3, IID_IDIRECT3D2, IID_IDIRECT3D3};
 use super::{HostResult, functions};
 use crate::win32::user32::Display;
 use crate::{Machine, Stop};
@@ -28,6 +28,12 @@ const IID_IDIRECTDRAW: Guid = guid(
     0x11CE,
     [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60],
 );
+const IID_IDIRECTDRAW4: Guid = guid(
+    0x9C59509A,
+    0x39BD,
+    0x11D1,
+    [0x8C, 0x4A, 0x00, 0xC0, 0x4F, 0xD9, 0x30, 0xC5],
+);
 const IID_IDIRECTDRAW2: Guid = guid(
     0xB3A6F3E0,
     0x2B43,
@@ -40,11 +46,16 @@ const DDSCL_NORMAL: u32 = 0x0008;
 const DDSCL_EXCLUSIVE: u32 = 0x0010;
 
 const DDENUMRET_OK: u32 = 1;
+/// Refresh rate of every mode, in hertz.
+const DISPLAY_REFRESH_RATE: u32 = 60;
 const DDEDM_REFRESHRATES: u32 = 0x1;
 
 /// `DDSURFACEDESC`, as an array of 27 words. All its fields are 32 bits wide.
 pub mod surface_desc {
     pub const WORDS: usize = 27;
+    /// `DDSURFACEDESC2` of DirectDraw 4 is the same with three more
+    /// capability words and a texture stage after `CAPS`.
+    pub const WORDS_V2: usize = 31;
     pub const SIZE: usize = 0;
     pub const FLAGS: usize = 1;
     pub const HEIGHT: usize = 2;
@@ -73,9 +84,8 @@ const DDPF_RGB: u32 = 0x40;
 #[derive(Debug)]
 struct DirectDraw {
     references: u32,
-    /// Interface pointers already handed out: `IDirectDraw`, `IDirectDraw2`,
-    /// `IDirect3D2`. Direct3D is an aspect of the DirectDraw object.
-    pointers: [u32; 3],
+    /// Interface pointers already handed out, in the order of [`INTERFACES`].
+    pointers: [u32; INTERFACES.len()],
     /// Window and flags given to `SetCooperativeLevel`.
     window: u32,
     cooperative_level: u32,
@@ -154,6 +164,20 @@ impl Machine {
     }
 }
 
+/// The one adapter: the primary display, which Windows reports with a null
+/// GUID. Returns its description and its driver name as guest strings.
+fn driver_strings(m: &mut Machine) -> (u32, u32) {
+    if let Some(strings) = m.os.ddraw.driver_strings {
+        return strings;
+    }
+    let strings = (
+        m.os.string(&mut m.memory, b"Primary Display Driver"),
+        m.os.string(&mut m.memory, b"display"),
+    );
+    m.os.ddraw.driver_strings = Some(strings);
+    strings
+}
+
 /// Whether an interface pointer names a DirectDraw object still in use.
 pub(crate) fn is_live_object(m: &mut Machine, this: u32) -> bool {
     m.direct_draw(this).is_some()
@@ -161,19 +185,15 @@ pub(crate) fn is_live_object(m: &mut Machine, this: u32) -> bool {
 
 functions! { "DDRAW.dll";
     DirectDrawEnumerateA(2) => |m, a| -> HostResult {
-        // One adapter: the primary display, which Windows reports with a null GUID.
-        let (description, name) = match m.os.ddraw.driver_strings {
-            Some(strings) => strings,
-            None => {
-                let strings = (
-                    m.os.string(&mut m.memory, b"Primary Display Driver"),
-                    m.os.string(&mut m.memory, b"display"),
-                );
-                m.os.ddraw.driver_strings = Some(strings);
-                strings
-            }
-        };
+        let (description, name) = driver_strings(m);
         m.call_guest(a[0], &[0, description, name, a[1]])?;
+        Ok(DD_OK)
+    },
+    DirectDrawEnumerateExA(3) => |m, a| -> HostResult {
+        // The flags ask for further adapters (secondary, detached,
+        // non-display); there is only the primary one, on no particular monitor.
+        let (description, name) = driver_strings(m);
+        m.call_guest(a[0], &[0, description, name, a[1], 0])?;
         Ok(DD_OK)
     },
     DirectDrawCreate(3) => |m, a| {
@@ -188,7 +208,7 @@ functions! { "DDRAW.dll";
         let pointer = m.interface_pointer(&DIRECT_DRAW, index);
         m.os.ddraw.objects.push(DirectDraw {
             references: 1,
-            pointers: [pointer, 0, 0],
+            pointers: [pointer, 0, 0, 0, 0],
             window: 0,
             cooperative_level: 0,
         });
@@ -210,7 +230,9 @@ pub(crate) fn query_interface(m: &mut Machine, a: &[u32]) -> u32 {
     let slot = match wanted {
         IID_IUNKNOWN | IID_IDIRECTDRAW => 0,
         IID_IDIRECTDRAW2 => 1,
-        IID_IDIRECT3D2 => 2,
+        IID_IDIRECTDRAW4 => 2,
+        IID_IDIRECT3D2 => 3,
+        IID_IDIRECT3D3 => 4,
         _ => {
             m.note(|| format!("interface {} not offered", format_guid(&wanted)));
             let _ = m.memory.write(out, 4, 0);
@@ -219,8 +241,7 @@ pub(crate) fn query_interface(m: &mut Machine, a: &[u32]) -> u32 {
     };
     let mut pointer = m.os.ddraw.objects[index].pointers[slot];
     if pointer == 0 {
-        let interface = [&DIRECT_DRAW, &DIRECT_DRAW_2, &DIRECT_3D_2][slot];
-        pointer = m.interface_pointer(interface, index as u32);
+        pointer = m.interface_pointer(INTERFACES[slot], index as u32);
         m.os.ddraw.objects[index].pointers[slot] = pointer;
     }
     m.os.ddraw.objects[index].references += 1;
@@ -298,26 +319,32 @@ fn get_available_video_memory(m: &mut Machine, a: &[u32]) -> u32 {
     DD_OK
 }
 
-fn enum_display_modes(m: &mut Machine, a: &[u32]) -> HostResult {
+fn enum_display_modes(m: &mut Machine, a: &[u32], description_words: usize) -> HostResult {
     let (flags, filter, context, callback) = (a[1], a[2], a[3], a[4]);
     if m.direct_draw(a[0]).is_none() {
         return Ok(DDERR_INVALIDOBJECT);
     }
     if filter != 0 {
         return Err(Stop::Unimplemented {
-            dll: "IDirectDraw2".into(),
+            dll: "IDirectDraw".into(),
             name: "EnumDisplayModes with a filter".into(),
         });
     }
     // Without the flag, modes that differ only in refresh rate are one mode
     // and the rate is reported as 0, "the adapter's default".
-    let refresh_rate = if flags & DDEDM_REFRESHRATES != 0 { 60 } else { 0 };
+    let refresh_rate = if flags & DDEDM_REFRESHRATES != 0 {
+        DISPLAY_REFRESH_RATE
+    } else {
+        0
+    };
     for mode in display_modes() {
-        let words = mode_description(mode, refresh_rate);
+        let mut words = [0; surface_desc::WORDS_V2];
+        words[..surface_desc::WORDS].copy_from_slice(&mode_description(mode, refresh_rate));
+        words[surface_desc::SIZE] = 4 * description_words as u32;
         // The description lives on the program's stack during the callback.
         let saved = m.cpu.regs[4];
-        let at = saved - 4 * surface_desc::WORDS as u32;
-        m.write_words(at, &words);
+        let at = saved - 4 * description_words as u32;
+        m.write_words(at, &words[..description_words]);
         m.cpu.regs[4] = at;
         let answer = m.call_guest(callback, &[at, context]);
         m.cpu.regs[4] = saved;
@@ -326,6 +353,24 @@ fn enum_display_modes(m: &mut Machine, a: &[u32]) -> HostResult {
         }
     }
     Ok(DD_OK)
+}
+
+/// `GetDisplayMode`: describes the mode the display is in.
+fn get_display_mode(m: &mut Machine, a: &[u32], description_words: usize) -> u32 {
+    if m.direct_draw(a[0]).is_none() {
+        return DDERR_INVALIDOBJECT;
+    }
+    if m.memory.read(a[1], 4) != Some(4 * description_words as u32) {
+        return DDERR_INVALIDPARAMS;
+    }
+    let mut words = [0; surface_desc::WORDS_V2];
+    words[..surface_desc::WORDS].copy_from_slice(&mode_description(m.os.user.display, DISPLAY_REFRESH_RATE));
+    words[surface_desc::SIZE] = 4 * description_words as u32;
+    if m.write_words(a[1], &words[..description_words]) {
+        DD_OK
+    } else {
+        DDERR_INVALIDPARAMS
+    }
 }
 
 fn format_guid(g: &Guid) -> String {
@@ -354,11 +399,11 @@ interface! { static DIRECT_DRAW = "IDirectDraw";
     CreatePalette(5),
     CreateSurface(4),
     DuplicateSurface(3),
-    EnumDisplayModes(5) => enum_display_modes,
+    EnumDisplayModes(5) => |m, a| enum_display_modes(m, a, surface_desc::WORDS),
     EnumSurfaces(5),
     FlipToGDISurface(1),
     GetCaps(3) => get_caps,
-    GetDisplayMode(2),
+    GetDisplayMode(2) => |m, a| get_display_mode(m, a, surface_desc::WORDS),
     GetFourCCCodes(3),
     GetGDISurface(2),
     GetMonitorFrequency(2),
@@ -380,11 +425,11 @@ interface! { static DIRECT_DRAW_2 = "IDirectDraw2";
     CreatePalette(5),
     CreateSurface(4),
     DuplicateSurface(3),
-    EnumDisplayModes(5) => enum_display_modes,
+    EnumDisplayModes(5) => |m, a| enum_display_modes(m, a, surface_desc::WORDS),
     EnumSurfaces(5),
     FlipToGDISurface(1),
     GetCaps(3) => get_caps,
-    GetDisplayMode(2),
+    GetDisplayMode(2) => |m, a| get_display_mode(m, a, surface_desc::WORDS),
     GetFourCCCodes(3),
     GetGDISurface(2),
     GetMonitorFrequency(2),
@@ -397,6 +442,46 @@ interface! { static DIRECT_DRAW_2 = "IDirectDraw2";
     WaitForVerticalBlank(3),
     GetAvailableVidMem(4) => get_available_video_memory,
 }
+
+interface! { static DIRECT_DRAW_4 = "IDirectDraw4";
+    QueryInterface(3) => query_interface,
+    AddRef(1) => add_ref,
+    Release(1) => release,
+    Compact(1),
+    CreateClipper(4),
+    CreatePalette(5),
+    CreateSurface(4),
+    DuplicateSurface(3),
+    EnumDisplayModes(5) => |m, a| enum_display_modes(m, a, surface_desc::WORDS_V2),
+    EnumSurfaces(5),
+    FlipToGDISurface(1),
+    GetCaps(3) => get_caps,
+    GetDisplayMode(2) => |m, a| get_display_mode(m, a, surface_desc::WORDS_V2),
+    GetFourCCCodes(3),
+    GetGDISurface(2),
+    GetMonitorFrequency(2),
+    GetScanLine(2),
+    GetVerticalBlankStatus(2),
+    Initialize(2),
+    RestoreDisplayMode(1),
+    SetCooperativeLevel(3) => set_cooperative_level,
+    SetDisplayMode(6),
+    WaitForVerticalBlank(3),
+    GetAvailableVidMem(4) => get_available_video_memory,
+    GetSurfaceFromDC(3),
+    RestoreAllSurfaces(1),
+    TestCooperativeLevel(1),
+    GetDeviceIdentifier(3),
+}
+
+/// The interfaces of a DirectDraw object. Direct3D is an aspect of it.
+static INTERFACES: [&super::com::Interface; 5] = [
+    &DIRECT_DRAW,
+    &DIRECT_DRAW_2,
+    &DIRECT_DRAW_4,
+    &DIRECT_3D_2,
+    &DIRECT_3D_3,
+];
 
 #[cfg(test)]
 mod tests {

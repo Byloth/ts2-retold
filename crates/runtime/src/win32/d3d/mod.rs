@@ -14,6 +14,12 @@ pub const IID_IDIRECT3D2: Guid = guid(
     0x11D0,
     [0x88, 0x9D, 0x00, 0xAA, 0x00, 0xBB, 0xB7, 0x6A],
 );
+pub const IID_IDIRECT3D3: Guid = guid(
+    0xBB223240,
+    0xE72B,
+    0x11D0,
+    [0xA9, 0xB4, 0x00, 0xAA, 0x00, 0xC0, 0x99, 0x3E],
+);
 /// Identifies the hardware device.
 const IID_IDIRECT3DHALDEVICE: Guid = guid(
     0x84E63DE0,
@@ -88,4 +94,19 @@ interface! { pub(crate) static DIRECT_3D_2 = "IDirect3D2";
     CreateViewport(3),
     FindDevice(3),
     CreateDevice(4),
+}
+
+interface! { pub(crate) static DIRECT_3D_3 = "IDirect3D3";
+    QueryInterface(3) => ddraw::query_interface,
+    AddRef(1) => ddraw::add_ref,
+    Release(1) => ddraw::release,
+    EnumDevices(3) => enum_devices,
+    CreateLight(3),
+    CreateMaterial(3),
+    CreateViewport(3),
+    FindDevice(3),
+    CreateDevice(5),
+    CreateVertexBuffer(5),
+    EnumZBufferFormats(4),
+    EvictManagedTextures(1),
 }

@@ -13,6 +13,21 @@ const MEM_COMMIT: u32 = 0x1000;
 /// The executable as the program sees it, inside `files::INSTALL_DIR`.
 const MODULE_PATH: &str = "C:\\TOY2\\TOY2.EXE";
 
+/// Module handles are spaced like image bases, outside any mapped memory.
+const MODULE_HANDLE_BASE: u32 = 0x7100_0000;
+const MODULE_HANDLE_STEP: u32 = 0x0001_0000;
+
+/// The handle of a loaded DLL named with or without its extension.
+fn module_handle(m: &Machine, name: &str) -> u32 {
+    let wanted = name.to_ascii_uppercase();
+    let wanted = wanted.strip_suffix(".DLL").unwrap_or(&wanted);
+    let index = m.os.modules.iter().position(|module| {
+        let module = module.to_ascii_uppercase();
+        module.strip_suffix(".DLL").unwrap_or(&module) == wanted
+    });
+    index.map_or(0, |index| MODULE_HANDLE_BASE + MODULE_HANDLE_STEP * index as u32)
+}
+
 /// Handles of movable global blocks live here, outside any mapped memory.
 const MOVABLE_HANDLE_BASE: u32 = 0x0600_0002;
 
@@ -50,12 +65,12 @@ functions! { "KERNEL32.dll";
     },
     GetModuleHandleA(1) => |m, a| {
         if a[0] == 0 {
-            IMAGE_BASE
-        } else {
-            let name = m.text(a[0]);
-            m.note(|| format!("{name:?} -> not loaded"));
-            0
+            return IMAGE_BASE;
         }
+        let name = m.text(a[0]);
+        let handle = module_handle(m, &name);
+        m.note(|| format!("{name:?}{}", if handle == 0 { " -> not loaded" } else { "" }));
+        handle
     },
     GetModuleFileNameA(3) => |m, a| m.put_string(a[1], a[2], MODULE_PATH.as_bytes()),
     GetEnvironmentStrings(0) => environment,
@@ -366,16 +381,34 @@ functions! { "KERNEL32.dll";
         }
         bytes.len() as u32
     },
-    GetProcAddress(2) => |m, a| {
+    GetProcAddress(2) => |m, a| -> HostResult {
         let name = if a[1] > 0xFFFF { m.text(a[1]) } else { format!("#{}", a[1]) };
-        m.note(|| format!("{name:?} -> not found"));
-        0
+        let Some(dll) = a[0]
+            .checked_sub(MODULE_HANDLE_BASE)
+            .and_then(|offset| m.os.modules.get((offset / MODULE_HANDLE_STEP) as usize).cloned())
+        else {
+            return Ok(0);
+        };
+        m.note(|| format!("{dll} {name}"));
+        match super::lookup(&dll, &name) {
+            Some(function) => Ok(m.host_function_address(function)),
+            // A function of a real DLL that the runtime lacks: saying "not
+            // found" would be a guess about the system being imitated.
+            None => Err(Stop::Unimplemented { dll, name }),
+        }
     },
-    LoadLibraryA(1) => |m, a| {
+    LoadLibraryA(1) => |m, a| -> HostResult {
+        // Only the DLLs the executable already imports from can be "loaded".
         let name = m.text(a[0]);
-        m.note(|| format!("{name:?} -> not found"));
-        0
+        match module_handle(m, &name) {
+            0 => Err(Stop::Unimplemented { dll: "KERNEL32.dll".into(), name: format!("LoadLibraryA({name:?})") }),
+            handle => Ok(handle),
+        }
     },
+    // Asks about processor features; none of the listed quirks or
+    // extensions exist on the machine imitated here (a Pentium II without
+    // the floating-point division flaw; MMX is reported through CPUID).
+    IsProcessorFeaturePresent(1) => |_, _| 0,
     UnhandledExceptionFilter(1) => |_, _| 0,
     Sleep(1) => |m, a| -> HostResult {
         if a[0] == 0 {
