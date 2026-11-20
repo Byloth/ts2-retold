@@ -123,7 +123,9 @@ cargo run --release --bin andy -- difftest --out out/difftest.jsonl --rounds 40
 cargo run --release --bin andy -- boot --trace --limit 400000000 --args "-log"
 # The same on the graphics adapter, writing every tenth frame shown
 cargo run --release --bin andy -- boot --limit 600000000 --gpu --frames out/frames --frame-step 10
-# In a window, with the keyboard (WSLg shows it on the Windows desktop)
+# In a window, with the keyboard (WSLg shows it on the Windows desktop).
+# Under WSL the graphics card is reached through OpenGL on Direct3D 12:
+export GALLIUM_DRIVER=d3d12 LD_LIBRARY_PATH=/usr/lib/wsl/lib
 cargo run --release --bin andy -- play
 # With recorded input (one change per line: READ press|release KEY)
 cargo run --release --bin andy -- boot --limit 1300000000 --gpu --input out/input/title.txt --frames out/frames --frame-step 25

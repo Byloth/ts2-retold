@@ -104,6 +104,43 @@ fn shader_color(format: PixelFormat, raw: u32) -> [f32; 4] {
     }
 }
 
+fn adapter_name(adapter: &wgpu::Adapter) -> String {
+    let info = adapter.get_info();
+    format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type)
+}
+
+/// The graphics adapter to use: one that can draw to the window, if there
+/// is a window; a real graphics card before a software renderer; and among
+/// equals Vulkan, Direct3D 12, Metal, then OpenGL. `ANDY_BACKEND` (vulkan,
+/// dx12, metal or gl) puts one backend first.
+///
+/// The system's own choice is not taken because it does not look at what
+/// kind of device is behind a backend: under WSL it picks Vulkan, which
+/// there is a software renderer, while OpenGL reaches the graphics card
+/// (with `GALLIUM_DRIVER=d3d12`).
+async fn choose_adapter(
+    instance: &wgpu::Instance,
+    window: Option<&wgpu::Surface<'_>>,
+) -> Result<wgpu::Adapter, Error> {
+    let wanted = std::env::var("ANDY_BACKEND").unwrap_or_default().to_ascii_lowercase();
+    let mut adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
+    if let Some(window) = window {
+        adapters.retain(|adapter| adapter.is_surface_supported(window));
+    }
+    adapters.sort_by_key(|adapter| {
+        let info = adapter.get_info();
+        let named = !wanted.is_empty() && format!("{:?}", info.backend).to_ascii_lowercase() == wanted;
+        let order = match info.backend {
+            wgpu::Backend::Vulkan => 0,
+            wgpu::Backend::Dx12 => 1,
+            wgpu::Backend::Metal => 2,
+            _ => 3,
+        };
+        (!named, info.device_type == wgpu::DeviceType::Cpu, order)
+    });
+    adapters.into_iter().next().ok_or_else(|| Error::NoAdapter("none was found".into()))
+}
+
 /// What a draw pipeline depends on. Everything else is uniforms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct PipelineKey {
@@ -112,7 +149,6 @@ struct PipelineKey {
     depth: Option<DepthState>,
     blend: Option<(BlendFactor, BlendFactor)>,
     cull: Cull,
-    flat: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -284,6 +320,12 @@ pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     adapter_name: String,
+    /// Whether depth textures can be copied to and from buffers. Where they
+    /// cannot (OpenGL), their values travel through a texture of numbers.
+    depth_copies: bool,
+    /// The pipelines of that detour: to a depth surface, and from one.
+    depth_detours: HashMap<bool, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+    rect_uniform_layout: wgpu::BindGroupLayout,
     surfaces: Vec<Option<Surface>>,
     shader: wgpu::ShaderModule,
     texture_layout: wgpu::BindGroupLayout,
@@ -320,24 +362,22 @@ impl Gpu {
 
     async fn open() -> Result<Gpu, Error> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| Error::NoAdapter(error.to_string()))?;
+        let adapter = choose_adapter(&instance, None).await?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor { label: Some("andy"), ..Default::default() })
             .await
             .map_err(|error| Error::NoDevice(error.to_string()))?;
-        let info = adapter.get_info();
-        Ok(Gpu::with_device(device, queue, format!("{} ({:?})", info.name, info.backend)))
+        Ok(Gpu::with_device(device, queue, &adapter))
     }
 
     /// The backend on a device opened by the caller, who may share it with
     /// a window.
-    pub fn with_device(device: wgpu::Device, queue: wgpu::Queue, adapter_name: String) -> Gpu {
+    pub fn with_device(device: wgpu::Device, queue: wgpu::Queue, adapter: &wgpu::Adapter) -> Gpu {
+        let adapter_name = adapter_name(adapter);
+        let depth_copies = adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::DEPTH_TEXTURE_AND_BUFFER_COPIES);
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let uniform_entry = |size: usize, dynamic: bool| wgpu::BindGroupLayoutEntry {
             binding: 0,
@@ -424,6 +464,9 @@ impl Gpu {
             device,
             queue,
             adapter_name,
+            depth_copies,
+            depth_detours: HashMap::new(),
+            rect_uniform_layout,
             surfaces: Vec::new(),
             shader,
             texture_layout,
@@ -488,9 +531,30 @@ impl Gpu {
     }
 
     /// Reads a rectangle of a surface's texture: rows of texels without padding.
-    fn read_texels(&self, id: SurfaceId, area: Rect) -> Vec<u8> {
+    fn read_texels(&mut self, id: SurfaceId, area: Rect) -> Vec<u8> {
         let surface = self.surface(id);
-        let row_bytes = area.width * surface.texel_size();
+        if surface.format == PixelFormat::Depth16 && !self.depth_copies {
+            let numbers = self.numbers_from_depth(id, area);
+            return self.read_texture(
+                &numbers,
+                wgpu::TextureAspect::All,
+                2,
+                Rect::whole(area.width, area.height),
+            );
+        }
+        let (texture, aspect, size) = (surface.texture.clone(), surface.aspect(), surface.texel_size());
+        self.read_texture(&texture, aspect, size, area)
+    }
+
+    /// Reads a rectangle of a texture: rows of texels without padding.
+    fn read_texture(
+        &self,
+        texture: &wgpu::Texture,
+        aspect: wgpu::TextureAspect,
+        texel_size: u32,
+        area: Rect,
+    ) -> Vec<u8> {
+        let row_bytes = area.width * texel_size;
         let padded = row_bytes.next_multiple_of(ROW_ALIGNMENT);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("read back"),
@@ -501,10 +565,10 @@ impl Gpu {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &surface.texture,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x: area.x, y: area.y, z: 0 },
-                aspect: surface.aspect(),
+                aspect,
             },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
@@ -528,6 +592,188 @@ impl Gpu {
             texels.extend_from_slice(&row[..row_bytes as usize]);
         }
         texels
+    }
+
+    /// The pipeline that turns numbers into depth (`to_depth`) or depth
+    /// into numbers, and the layout of the texture it reads.
+    fn depth_detour(&mut self, to_depth: bool) {
+        if self.depth_detours.contains_key(&to_depth) {
+            return;
+        }
+        // Numbers are read as unsigned integers, depth as unfiltered floats.
+        let sample_type = if to_depth {
+            wgpu::TextureSampleType::Uint
+        } else {
+            wgpu::TextureSampleType::Float { filterable: false }
+        };
+        let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("depth detour"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("depth detour"),
+            bind_group_layouts: &[Some(&self.rect_uniform_layout), Some(&layout)],
+            immediate_size: 0,
+        });
+        let numbers = [Some(wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::R16Uint,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("depth detour"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader,
+                entry_point: Some("vertex_cover"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: to_depth.then(|| wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &self.shader,
+                entry_point: Some(if to_depth {
+                    "fragment_depth_from_numbers"
+                } else {
+                    "fragment_numbers_from_depth"
+                }),
+                compilation_options: Default::default(),
+                targets: if to_depth { &[] } else { &numbers },
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        self.depth_detours.insert(to_depth, (pipeline, layout));
+    }
+
+    /// Runs one of the depth detours: a triangle over `area` of the target
+    /// that reads `source`.
+    fn run_depth_detour(
+        &mut self,
+        to_depth: bool,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        area: Rect,
+        uniforms: RectUniforms,
+    ) {
+        self.depth_detour(to_depth);
+        self.queue.write_buffer(&self.rect_uniforms, 0, bytemuck::bytes_of(&uniforms));
+        let (pipeline, layout) = &self.depth_detours[&to_depth];
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("depth detour"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source),
+            }],
+        });
+        let keep = wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store };
+        let color = [Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("depth detour"),
+                color_attachments: if to_depth { &[] } else { &color },
+                depth_stencil_attachment: to_depth.then_some(wgpu::RenderPassDepthStencilAttachment {
+                    view: target,
+                    depth_ops: Some(keep),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.rect_group, &[]);
+            pass.set_bind_group(1, &group, &[]);
+            pass.set_viewport(area.x as f32, area.y as f32, area.width as f32, area.height as f32, 0.0, 1.0);
+            pass.set_scissor_rect(area.x, area.y, area.width, area.height);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
+    fn numbers_texture(&self, width: u32, height: u32, usage: wgpu::TextureUsages) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth as numbers"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R16Uint,
+            usage,
+            view_formats: &[],
+        })
+    }
+
+    /// A rectangle of a depth surface as a texture of 16-bit numbers.
+    fn numbers_from_depth(&mut self, id: SurfaceId, area: Rect) -> wgpu::Texture {
+        let numbers = self.numbers_texture(
+            area.width,
+            area.height,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let target = numbers.create_view(&wgpu::TextureViewDescriptor::default());
+        let source = self.surface(id).view.clone();
+        let uniforms = RectUniforms {
+            value: [0.0; 4],
+            source: [area.x, area.y, 0, 0],
+            destination: [0; 4],
+            keyed: [0; 4],
+        };
+        self.run_depth_detour(false, &source, &target, Rect::whole(area.width, area.height), uniforms);
+        numbers
+    }
+
+    /// Writes rows of 16-bit numbers into a rectangle of a depth surface.
+    fn depth_from_numbers(&mut self, id: SurfaceId, area: Rect, texels: &[u8]) {
+        let numbers = self.numbers_texture(
+            area.width,
+            area.height,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        self.queue.write_texture(
+            numbers.as_image_copy(),
+            texels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(2 * area.width),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d { width: area.width, height: area.height, depth_or_array_layers: 1 },
+        );
+        let source = numbers.create_view(&wgpu::TextureViewDescriptor::default());
+        let target = self.surface(id).view.clone();
+        let uniforms = RectUniforms {
+            value: [0.0; 4],
+            source: [0; 4],
+            destination: [area.x, area.y, 0, 0],
+            keyed: [0; 4],
+        };
+        self.run_depth_detour(true, &source, &target, area, uniforms);
     }
 
     fn sampler(&mut self, key: SamplerKey) {
@@ -587,8 +833,7 @@ impl Gpu {
         if self.pipelines.contains_key(&key) {
             return;
         }
-        let (vertex, fragment) =
-            if key.flat { ("vertex_flat", "fragment_flat") } else { ("vertex_smooth", "fragment_smooth") };
+        let (vertex, fragment) = ("vertex_smooth", "fragment_smooth");
         let blend = key.blend.map(|(source, target)| {
             let component = wgpu::BlendComponent {
                 src_factor: blend_factor(source),
@@ -888,6 +1133,9 @@ impl Video for Gpu {
                 _ => texels.extend_from_slice(&row[..row_bytes]),
             }
         }
+        if surface.format == PixelFormat::Depth16 && !self.depth_copies {
+            return self.depth_from_numbers(id, area, &texels);
+        }
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &surface.texture,
@@ -1036,7 +1284,7 @@ impl Video for Gpu {
             fog: fog.map_or([0.0; 4], |color| shader_color(PixelFormat::Xrgb8888, color)),
         };
         let command = Command {
-            pipeline: PipelineKey { depth_attached: draw.depth.is_some(), depth, blend, cull, flat },
+            pipeline: PipelineKey { depth_attached: draw.depth.is_some(), depth, blend, cull },
             viewport,
             texture: texture.map(|sampling| {
                 let key = SamplerKey {
@@ -1051,8 +1299,29 @@ impl Video for Gpu {
                 ..(self.pending.indices.len() + draw.indices.len()) as u32,
             base_vertex: self.pending.vertices.len() as i32,
         };
-        self.pending.vertices.extend_from_slice(draw.vertices);
-        self.pending.indices.extend_from_slice(draw.indices);
+        if flat {
+            // Every pixel of a triangle takes the colours of its first
+            // vertex. Which vertex a graphics API takes for that differs, so
+            // each triangle gets three vertices of its own with those
+            // colours, and nothing is left to the API. (The runtime keeps a
+            // batch well under the 65,536 vertices an index reaches.)
+            for (number, triangle) in draw.indices.as_chunks::<3>().0.iter().enumerate() {
+                let first = draw.vertices[triangle[0] as usize];
+                for &index in triangle {
+                    let vertex = draw.vertices[index as usize];
+                    self.pending.vertices.push(Vertex {
+                        diffuse: first.diffuse,
+                        specular: first.specular,
+                        ..vertex
+                    });
+                }
+                let base = 3 * number as u16;
+                self.pending.indices.extend_from_slice(&[base, base + 1, base + 2]);
+            }
+        } else {
+            self.pending.vertices.extend_from_slice(draw.vertices);
+            self.pending.indices.extend_from_slice(draw.indices);
+        }
         self.pending.uniforms.push(uniforms);
         self.pending.commands.push(command);
         self.statistics.batches += 1;

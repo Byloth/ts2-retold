@@ -15,29 +15,23 @@ pub struct Presenter {
 
 impl Gpu {
     /// Opens the graphics adapter that can draw to a window, and the
-    /// window's picture, `width` by `height` pixels.
+    /// window's picture, `width` by `height` pixels. `display` is the
+    /// window system the window belongs to.
     pub fn for_window(
         window: impl Into<wgpu::SurfaceTarget<'static>>,
+        display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>,
         width: u32,
         height: u32,
     ) -> Result<(Gpu, Presenter), Error> {
         pollster::block_on(async {
-            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(display));
             let surface =
                 instance.create_surface(window).map_err(|error| Error::NoAdapter(error.to_string()))?;
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: Some(&surface),
-                    ..Default::default()
-                })
-                .await
-                .map_err(|error| Error::NoAdapter(error.to_string()))?;
+            let adapter = crate::choose_adapter(&instance, Some(&surface)).await?;
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor { label: Some("andy"), ..Default::default() })
                 .await
                 .map_err(|error| Error::NoDevice(error.to_string()))?;
-            let info = adapter.get_info();
             let capabilities = surface.get_capabilities(&adapter);
             // The surfaces hold colours as the display shows them, so the
             // window's format must not convert them again.
@@ -60,7 +54,7 @@ impl Gpu {
                 color_space: wgpu::SurfaceColorSpace::Auto,
             };
             surface.configure(&device, &configuration);
-            let gpu = Gpu::with_device(device, queue, format!("{} ({:?})", info.name, info.backend));
+            let gpu = Gpu::with_device(device, queue, &adapter);
             let presenter = Presenter::new(&gpu, surface, configuration);
             Ok((gpu, presenter))
         })
@@ -139,6 +133,30 @@ impl Presenter {
     pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
         (self.configuration.width, self.configuration.height) = (width.max(1), height.max(1));
         self.surface.configure(&gpu.device, &self.configuration);
+    }
+
+    /// Fills the window with black. Called as soon as the window exists: a
+    /// window is given a picture at once, not when the game first has one
+    /// (which is seconds later, after it has loaded).
+    pub fn clear(&mut self, gpu: &Gpu) {
+        let wgpu::CurrentSurfaceTexture::Success(frame) = self.surface.get_current_texture() else { return };
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        gpu.queue.submit([encoder.finish()]);
+        gpu.queue.present(frame);
     }
 
     /// Shows a surface in the window, as large as fits with its shape kept,

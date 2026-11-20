@@ -59,13 +59,31 @@ impl ApplicationHandler for App {
         let window = Arc::new(event_loop.create_window(Window::default_attributes()).expect("a window"));
         let size = window.inner_size();
         let picture = pollster::block_on(async {
-            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let display = Box::new(event_loop.owned_display_handle());
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(display));
             let surface = instance.create_surface(window.clone()).expect("a surface");
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: Some(&surface), ..Default::default() })
-                .await
-                .expect("an adapter");
-            println!("adapter: {:?}", adapter.get_info().name);
+            // Every adapter that can draw to the window; a real graphics
+            // card before a software one, or the backend named in BACKEND.
+            let wanted = std::env::var("BACKEND").unwrap_or_default().to_ascii_lowercase();
+            let mut adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
+            for adapter in &adapters {
+                let info = adapter.get_info();
+                println!(
+                    "adapter: {:?} | {} | {:?} | draws to the window: {}",
+                    info.backend,
+                    info.name,
+                    info.device_type,
+                    adapter.is_surface_supported(&surface)
+                );
+            }
+            adapters.retain(|adapter| adapter.is_surface_supported(&surface));
+            adapters.sort_by_key(|adapter| {
+                let info = adapter.get_info();
+                let named = !wanted.is_empty() && format!("{:?}", info.backend).to_ascii_lowercase() == wanted;
+                (!named, info.device_type == wgpu::DeviceType::Cpu)
+            });
+            let adapter = adapters.into_iter().next().expect("an adapter");
+            println!("chosen: {:?} | {}", adapter.get_info().backend, adapter.get_info().name);
             let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default()).await.expect("a device");
             let configuration = surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).expect("a format");
             surface.configure(&device, &configuration);

@@ -68,3 +68,20 @@ What follows from it:
   allow for that or run on one named software Vulkan driver.
 - The runtime talks to the renderer through an interface of its own, so it
   can still be built and tested, and the game booted, with no GPU at all.
+
+## 2026-11-20: which graphics adapter
+
+The backend chooses its adapter itself: one that can draw to the window, a
+real graphics card before a software renderer, then Vulkan, Direct3D 12,
+Metal, OpenGL; `ANDY_BACKEND` names a backend to put first. The system's
+default choice is not used, because under WSL it is Vulkan on a software
+renderer while OpenGL (with `GALLIUM_DRIVER=d3d12`) reaches the graphics
+card.
+
+The backend therefore has to work on OpenGL as on the others, and two
+things it did were not portable: copying depth textures to and from buffers
+(now done through a texture of 16-bit numbers where the API cannot), and
+taking a flat-shaded triangle's colour from "the first vertex" (now each
+such triangle gets vertices of its own with that colour). The tests pass
+on both.
+

@@ -37,21 +37,9 @@ struct Smooth {
     @location(2) uv: vec2<f32>,
 }
 
-struct Flat {
-    @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) diffuse: vec4<f32>,
-    @location(1) @interpolate(flat) specular: vec4<f32>,
-    @location(2) uv: vec2<f32>,
-}
-
 @vertex
 fn vertex_smooth(input: VertexInput) -> Smooth {
     return Smooth(input.position, input.diffuse.zyxw, input.specular.zyxw, input.uv);
-}
-
-@vertex
-fn vertex_flat(input: VertexInput) -> Flat {
-    return Flat(input.position, input.diffuse.zyxw, input.specular.zyxw, input.uv);
 }
 
 fn argument(selector: u32, diffuse: vec4<f32>, texel: vec4<f32>, specular: vec4<f32>) -> vec4<f32> {
@@ -132,11 +120,6 @@ fn fragment_smooth(input: Smooth) -> @location(0) vec4<f32> {
     return shade(input.diffuse, input.specular, input.uv);
 }
 
-@fragment
-fn fragment_flat(input: Flat) -> @location(0) vec4<f32> {
-    return shade(input.diffuse, input.specular, input.uv);
-}
-
 // --- Fills and copies -----------------------------------------------------
 //
 // Both draw one triangle that covers the viewport, which is set to the
@@ -204,4 +187,28 @@ fn vertex_show(@builtin(vertex_index) index: u32) -> Shown {
 @fragment
 fn fragment_show(input: Shown) -> @location(0) vec4<f32> {
     return vec4<f32>(textureSample(shown, shown_sampler, input.uv).xyz, 1.0);
+}
+
+// --- Depth surfaces where depth cannot be copied to and from buffers -------
+//
+// The 16-bit values travel through a texture of unsigned numbers instead.
+
+@group(1) @binding(0) var depth_numbers: texture_2d<u32>;
+// A depth texture read as plain, unfiltered numbers: every API can load a
+// texel of it that way.
+@group(1) @binding(0) var depth_values: texture_2d<f32>;
+
+// Writes the numbers of a texture, laid over the rectangle being drawn, as
+// depth.
+@fragment
+fn fragment_depth_from_numbers(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
+    let at = vec2<u32>(position.xy) - rect.destination.xy;
+    return f32(textureLoad(depth_numbers, at, 0).x) / 65535.0;
+}
+
+// Writes the depth of a rectangle of a depth surface as numbers.
+@fragment
+fn fragment_numbers_from_depth(@builtin(position) position: vec4<f32>) -> @location(0) u32 {
+    let at = vec2<u32>(position.xy) + rect.source.xy;
+    return u32(round(textureLoad(depth_values, at, 0).x * 65535.0));
 }

@@ -171,8 +171,10 @@ impl ApplicationHandler for Play {
             event_loop.create_window(attributes).map_err(|error| error.to_string()).and_then(|window| {
                 let window = Arc::new(window);
                 let size = window.inner_size();
-                let (gpu, presenter) = Gpu::for_window(window.clone(), size.width, size.height)
+                let display = Box::new(event_loop.owned_display_handle());
+                let (gpu, mut presenter) = Gpu::for_window(window.clone(), display, size.width, size.height)
                     .map_err(|error| error.to_string())?;
+                presenter.clear(&gpu);
                 Ok((window, gpu, presenter))
             });
         match opened {
