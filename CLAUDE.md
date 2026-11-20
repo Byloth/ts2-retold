@@ -8,7 +8,10 @@ Recon findings: `docs/RECON.md`. Decisions: `docs/adr/`. Analysis results:
 `docs/CODE-DISCOVERY.md`. Instruction semantics and their verification:
 `docs/SEMANTICS.md`.
 
-**Crates.** `crates/recomp` (`andy-recomp`): PE loader, code discovery, CLI.
+**Crates.** `crates/cli` (`andy`): the command-line tool.
+`crates/runtime` (`andy-runtime`): the machine, the loader and the replacement
+for the Windows API (ADR 0011); how far the game boots is in `docs/BOOT.md`.
+`crates/recomp` (`andy-recomp`): PE loader, code discovery, test generation.
 `crates/cpu` (`andy-cpu`): instruction semantics written once over a backend
 trait, plus the interpreter backend (ADR 0009) and the x87 model (ADR 0010).
 Every new instruction or change in `crates/cpu` must pass the differential
@@ -82,6 +85,9 @@ cargo run --release --bin andy -- analyze --json out/analysis.json
 # Instruction semantics against Unicorn; rerun after every change to crates/cpu
 cargo run --release --bin andy -- difftest --out out/difftest.jsonl --rounds 40
 .venv/bin/python tools/difftest.py out/difftest.jsonl --jobs 24
+
+# Run the game in the interpreter; lists system calls and where it stops
+cargo run --release --bin andy -- boot --trace
 ```
 
 `.venv` is created with `python3 -m venv .venv && .venv/bin/pip install unicorn==2.1.4`.

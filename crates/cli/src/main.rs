@@ -7,6 +7,9 @@ use std::{env, fs};
 use andy_recomp::analysis::{self, Analysis, EntryKind};
 use andy_recomp::pe::Image;
 use andy_recomp::{builds, difftest};
+use andy_runtime::files::Files;
+use andy_runtime::win32::Os;
+use andy_runtime::{Machine, Stop};
 
 const USAGE: &str = "\
 andy - recompiler tools
@@ -14,6 +17,9 @@ andy - recompiler tools
 USAGE:
     andy info    [EXE]              Print the layout of the executable
     andy analyze [EXE] [--json OUT] Discover code and functions
+    andy boot    [EXE] [--trace] [--limit N]
+                                    Run the game in the interpreter until it
+                                    stops, and report how far it got
     andy difftest [EXE] --out FILE [--rounds N]
                                     Write differential test cases for every
                                     distinct instruction in the executable
@@ -36,6 +42,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut json = None;
     let mut out = None;
     let mut rounds = 3u32;
+    let mut trace = false;
+    let mut limit = 2_000_000_000u64;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -45,6 +53,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
             }
             "--json" => json = Some(PathBuf::from(args.next().ok_or("--json needs a path")?)),
             "--out" => out = Some(PathBuf::from(args.next().ok_or("--out needs a path")?)),
+            "--trace" => trace = true,
+            "--limit" => {
+                limit = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--limit needs a number")?;
+            }
             "--rounds" => {
                 rounds = args
                     .next()
@@ -99,6 +114,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 println!("\nfull analysis written to {}", path.display());
             }
         }
+        "boot" => boot(&image, exe.parent().map(Path::to_path_buf), trace, limit),
         "difftest" => {
             let path = out.ok_or("difftest needs --out FILE")?;
             let analysis = analysis::analyze(&image).ok_or("no executable section at the entry point")?;
@@ -120,6 +136,89 @@ fn run(args: Vec<String>) -> Result<(), String> {
         other => return Err(format!("unknown command {other}\n\n{USAGE}")),
     }
     Ok(())
+}
+
+fn boot(image: &Image, game_dir: Option<PathBuf>, trace: bool, limit: u64) {
+    // The program reads the game directory and writes only to `out/run`.
+    let files = Files::new(game_dir, Some(PathBuf::from("out/run")));
+    let mut machine = Machine::load(image, Os::new(files));
+    machine.trace = Some(Vec::new());
+    let started = std::time::Instant::now();
+    let stop = machine.run(limit);
+    let elapsed = started.elapsed().as_secs_f64();
+
+    let calls = machine.trace.take().unwrap_or_default();
+    if trace {
+        println!();
+        for call in &calls {
+            let args: Vec<String> = call.args.iter().map(|a| format!("{a:#x}")).collect();
+            let detail = call
+                .detail
+                .as_deref()
+                .map(|d| format!("   ; {d}"))
+                .unwrap_or_default();
+            println!(
+                "  {:#010x}  {}({}) = {:#x}{detail}",
+                call.caller,
+                call.name,
+                args.join(", "),
+                call.result
+            );
+        }
+    }
+    println!("\ninstructions executed  {}", machine.cpu.instructions);
+    println!(
+        "speed                  {:.1} million/s",
+        machine.cpu.instructions as f64 / elapsed / 1e6
+    );
+    println!(
+        "system calls           {} ({} distinct)",
+        calls.len(),
+        machine.import_counts.len()
+    );
+    let mut counts: Vec<_> = machine.import_counts.iter().collect();
+    counts.sort_by(|a, b| b.1.cmp(a.1));
+    for (name, count) in counts.iter().take(12) {
+        println!("  {count:>8}  {name}");
+    }
+    for line in &machine.os.debug_output {
+        println!("debug output           {:?}", line.trim_end());
+    }
+    println!("x87 control word       {:#06x}", machine.cpu.fpu.control);
+    match machine.first_inexact {
+        Some(address) => println!("x87 model inexact      first at {address:#010x}"),
+        None => println!("x87 model inexact      never"),
+    }
+    let missing: Vec<&str> = machine
+        .os
+        .files
+        .log
+        .iter()
+        .filter(|(_, found)| !found)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    println!(
+        "files opened           {} ({} not found)",
+        machine.os.files.log.len(),
+        missing.len()
+    );
+    println!("\nstopped at eip {:#010x}: {}", machine.cpu.eip, describe(&stop));
+    if let Stop::Fault(_) = stop {
+        let r = &machine.cpu.regs;
+        println!(
+            "  eax {:08x} ecx {:08x} edx {:08x} ebx {:08x} esp {:08x} ebp {:08x} esi {:08x} edi {:08x}",
+            r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]
+        );
+    }
+}
+
+fn describe(stop: &Stop) -> String {
+    match stop {
+        Stop::Exit(code) => format!("the program exited with code {code}"),
+        Stop::Fault(fault) => format!("fault: {fault:?}"),
+        Stop::UnimplementedImport { dll, name } => format!("import not implemented yet: {dll} {name}"),
+        Stop::Budget => "instruction limit reached".into(),
+    }
 }
 
 fn info(image: &Image) {

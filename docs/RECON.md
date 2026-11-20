@@ -149,6 +149,9 @@ No networking, no `QueryPerformanceCounter`, no `GetTickCount` **[V]**.
   (`amstream.dll`) **[V]**. `data/FMV/fmv.bin` is an index still carrying the
   PSX names (`toy2fmv\tt.str`) **[V]**. Browsers cannot decode MPEG-1 natively:
   a WASM decoder is needed, or FMVs are stubbed first.
+- **CPU benchmark at startup:** ten timed runs of a one-million-iteration
+  floating-point loop at `0x47EF90`, observed while booting the game in the
+  interpreter **[V]** (`docs/BOOT.md`). Its use is **[U]**.
 - **Timing:** `timeGetTime` is the only wall-clock source, 11 references **[V]**.
   How it drives the simulation (fixed tick vs. variable delta) is **[U]** and is
   the first thing to reverse in Phase 1.

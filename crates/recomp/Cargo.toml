@@ -10,10 +10,6 @@ publish.workspace = true
 [lib]
 name = "andy_recomp"
 
-[[bin]]
-name = "andy"
-path = "src/bin/andy.rs"
-
 [dependencies]
 andy-cpu = { path = "../cpu" }
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info"] }

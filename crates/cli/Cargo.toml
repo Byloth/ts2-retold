@@ -1,0 +1,13 @@
+[package]
+name = "andy"
+version = "0.0.0"
+description = "Command-line front end: analyse the executable, test the semantics, run the game"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+andy-recomp = { path = "../recomp" }
+andy-runtime = { path = "../runtime" }
+serde_json = "1"
