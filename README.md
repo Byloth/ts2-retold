@@ -11,7 +11,13 @@ enhancements and, eventually, co-op.
 This is an unofficial fan project. It is not affiliated with, endorsed by or
 sponsored by Disney, Pixar, Activision or Traveller's Tales.
 
-**Status: Phase 0 (reconnaissance). Nothing is playable yet.**
+**Status: early. The recompiler can load and analyse the executable; nothing is
+playable yet.**
+
+```sh
+export TS2_GAME_DIR="/path/to/your/installed/game"
+cargo run --release --bin andy -- analyze
+```
 
 ## You need your own copy of the game
 
@@ -34,6 +40,7 @@ game and recompile it locally on your machine.
 
 - [`docs/BRIEF.md`](docs/BRIEF.md) — project brief and roadmap
 - [`docs/RECON.md`](docs/RECON.md) — Phase 0 findings on the executable and data
+- [`docs/CODE-DISCOVERY.md`](docs/CODE-DISCOVERY.md) — what the recompiler's analysis finds in the executable
 - [`docs/adr/`](docs/adr/) — architecture decision records
 
 ## Support
@@ -46,7 +53,7 @@ for the developer's time and nothing else: it does not buy or unlock anything.
 
 The code in this repository is licensed under the [Apache License 2.0](LICENSE).
 This covers only the project's own code and grants no rights over the original
-game.
+game. Third-party licenses are listed in [`docs/LICENSES.md`](docs/LICENSES.md).
 
 ## Trademarks and copyright
 

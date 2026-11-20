@@ -1,0 +1,21 @@
+[package]
+name = "andy-recomp"
+version = "0.0.0"
+description = "Static recompiler for the PC version of Toy Story 2 (1999): loads the user's own executable and analyses its code"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "andy_recomp"
+
+[[bin]]
+name = "andy"
+path = "src/bin/andy.rs"
+
+[dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"

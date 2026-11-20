@@ -62,3 +62,14 @@ Talk to the user in **Italian**. Code, comments, commit messages and docs are in
   Chrome on Windows.
 - Remind the user to raise the WSL memory limit in `.wslconfig` before heavy
   parallel builds.
+
+## Commands
+
+```sh
+export TS2_GAME_DIR="/mnt/e/Giochi/Toy Story 2"
+cargo test                                   # unit tests, no game files needed
+cargo run --release --bin andy -- info       # layout of the executable
+cargo run --release --bin andy -- analyze --json out/analysis.json
+```
+
+`out/` is git-ignored: everything in it is derived from the game.
