@@ -58,9 +58,18 @@ out of here into the roadmap or an ADR when work on them starts.
     buffer, logs the copy it is about to make (888x44 pixels) and dies in
     `weston_surface_copy_content`; the sub-surface had been registered
     with "surface has no view";
-  - it depends on timing: 3 runs in 3 on the software renderer, 1 in 3 on
-    the graphics card, none in 6 while nothing else was going on. Giving
-    the window a picture at once does not prevent it.
+  - it comes and goes: with the frame the game brought it down in 3 runs
+    of 3 on the software renderer and 5 of 11 on the graphics card; the
+    minimal program in none of 8 at one time and 4 of 6 at another, with
+    the owner working at the desktop the second time. In the traces it
+    follows the window being activated;
+  - it is not the version of wgpu (the minimal program built on wgpu 24
+    brought it down too), nor a pause in drawing, nor the lack of a first
+    picture;
+  - the same sub-surfaces are also shown wrongly when nothing crashes: the
+    frame's transparent borders, 44 pixels wide, appear as an opaque band
+    around the window (black around the game, a flat colour around the
+    test window).
   So it is a fault of WSLg's compositor with sub-surfaces, to be reported
   to WSLg with the minimal program and the log. For the window: a frame of
   the project's own, or X11 on WSLg (which gets the Windows frame but

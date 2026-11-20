@@ -1,6 +1,8 @@
 //! Opens a window with winit's own frame (client-side decorations on
-//! Wayland) and fills it with a colour, every frame or, with the argument
-//! `once`, a single time.
+//! Wayland) and fills it with a colour that changes slowly (over ten
+//! seconds, never abruptly): every frame; with the argument `once`, a
+//! single time; with `gap`, once and then again only after six seconds, as
+//! a program does that is busy loading.
 
 use std::sync::Arc;
 
@@ -20,19 +22,23 @@ struct App {
     window: Option<Arc<Window>>,
     picture: Option<Picture>,
     once: bool,
+    gap: bool,
+    started: Option<std::time::Instant>,
     frames: u64,
 }
 
 impl App {
     fn draw(&mut self) {
         let Some(picture) = &self.picture else { return };
-        if self.once && self.frames > 0 {
+        let elapsed = self.started.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f64();
+        if self.frames > 0 && (self.once || (self.gap && elapsed < 6.0)) {
             return;
         }
         let wgpu::CurrentSurfaceTexture::Success(frame) = picture.surface.get_current_texture() else { return };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = picture.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let shade = (self.frames % 120) as f64 / 120.0;
+        // A slow rise and fall between two dim colours.
+        let shade = 0.15 + 0.1 * (elapsed * std::f64::consts::TAU / 10.0).sin();
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
@@ -105,6 +111,7 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    let mut app = App { once: std::env::args().nth(1).as_deref() == Some("once"), ..Default::default() };
+    let mode = std::env::args().nth(1);
+    let mut app = App { once: mode.as_deref() == Some("once"), gap: mode.as_deref() == Some("gap"), ..Default::default() };
     EventLoop::new().expect("a window system").run_app(&mut app).expect("the event loop");
 }
