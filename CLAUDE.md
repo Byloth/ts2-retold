@@ -95,7 +95,9 @@ Talk to the user in **Italian**. Code, comments, commit messages and docs are in
   anything that must run on Windows, give the user a script or an exact
   PowerShell command.
 - mingw-w64 lives on the Windows side.
-- Work on the Linux filesystem; the game lives on `/mnt/...` and is only read.
+- Work on the Linux filesystem. The game is only read: the reference copy
+  is under the git-ignored `ref/`; the owner's installed copy, with
+  third-party fixes, is on `/mnt/e/Giochi/Toy Story 2` and is not the baseline.
 - Web target: build wasm in WSL, serve on localhost with COOP/COEP, open in
   Chrome on Windows.
 - Remind the user to raise the WSL memory limit in `.wslconfig` before heavy
@@ -104,7 +106,9 @@ Talk to the user in **Italian**. Code, comments, commit messages and docs are in
 ## Commands
 
 ```sh
-export TS2_GAME_DIR="/mnt/e/Giochi/Toy Story 2"
+# The reference copy (ADR 0003): the disc's files in ref/disc, laid out as an
+# installation by tools/game-dir-from-disc.sh. Both are git-ignored.
+export TS2_GAME_DIR="$PWD/ref/game"
 cargo test                                   # unit tests, no game files needed
 cargo run --release --bin andy -- info       # layout of the executable
 cargo run --release --bin andy -- analyze --json out/analysis.json

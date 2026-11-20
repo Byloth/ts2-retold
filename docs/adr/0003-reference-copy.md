@@ -70,3 +70,10 @@ dump of a pressed disc would still be welcome as a second witness.
   repackaging added (`regsetup.exe`, `DeIsL1.isu`). The executable names
   its music files and this name is not among them, nor anywhere else in it.
   It is taken to be an artefact of that repackaging.
+
+The tools run on `ref/game`, which `tools/game-dir-from-disc.sh` makes from
+the disc's files by linking the hard-disk part and the CD part side by side,
+as a full installation does. The game boots from it exactly as from the
+installed copy (same frames, same stopping point), without that copy's
+saves and settings.
+
