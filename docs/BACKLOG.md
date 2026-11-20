@@ -42,9 +42,12 @@ out of here into the roadmap or an ADR when work on them starts.
   browser cannot block on it: the web target needs a way to suspend the
   machine there (JavaScript Promise Integration, or never needing the
   transfer). So far the game has caused no transfer back at all.
-- **The GPU backend presents nowhere.** It renders off screen; `present`
-  only records which surface is shown. A window (native) and a canvas
-  (browser) are still to come.
+- **The window** (`andy play`) shows the picture, enlarged with its shape
+  kept, and takes the keyboard. Still to do: a canvas for the browser; a
+  frame on Wayland where the compositor draws none (winit's own frame
+  crashes WSLg's compositor, so it is left out, and the window there has
+  no title bar); full screen; the mouse and joysticks; trying it on
+  Windows with a real graphics card.
 - **One render pass per frame is not yet reached when the frame mixes
   copies and triangles**: a fill or copy between two batches ends the pass.
   Fills and copies could join the pass as commands.

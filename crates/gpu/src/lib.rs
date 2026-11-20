@@ -11,6 +11,8 @@
 //! possible on native targets only; in a browser it needs a way to suspend
 //! (`docs/BACKLOG.md`).
 
+mod window;
+
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
@@ -18,6 +20,8 @@ use andy_runtime::video::{
     Address, Argument, BlendFactor, Combine, Compare, Cull, DepthState, Draw, DrawState, Filter, Operation,
     PixelFormat, Rect, Source, SurfaceId, Vertex, Video,
 };
+
+pub use window::Presenter;
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const INDEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
@@ -1062,6 +1066,10 @@ impl Video for Gpu {
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }

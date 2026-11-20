@@ -18,6 +18,9 @@ and the energy display on top. Run to 1260 million instructions it has
 shown 4313 frames, the last 141 of the demo at about 4,500 triangles each
 (37 draw states in all).
 
+`andy play` runs the game in a window at the pace of its own clock, with
+the keyboard as its input.
+
 With recorded input (ADR 0017) it goes further: `--input` with a file
 saying `3700 press SPACE` and `3706 release SPACE` presses "jump" at the
 title screen and brings up the main menu (START GAME, OPTIONS, LOAD GAME,

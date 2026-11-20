@@ -46,7 +46,7 @@ const STACK_TOP: u32 = 0x0020_0000;
 const STACK_SIZE: u32 = 0x0010_0000;
 const TEB_ADDRESS: u32 = 0x7FFD_E000;
 /// Speed of the virtual clock: a machine of roughly the game's era.
-const INSTRUCTIONS_PER_MS: u64 = 50_000;
+pub const INSTRUCTIONS_PER_MS: u64 = 50_000;
 /// How many of the most recent host calls a trace is guaranteed to keep.
 const TRACE_KEPT: usize = 20_000;
 /// No host function takes more arguments than this.
@@ -381,7 +381,10 @@ impl Machine {
                 continue;
             }
             if self.cpu.instructions >= self.threads.slice_end {
-                if self.cpu.instructions >= self.deadline {
+                // The budget ends a run only between a thread's own
+                // instructions, where the run can be taken up again; inside
+                // a callback it waits for the callback to return.
+                if !in_callback && self.cpu.instructions >= self.deadline {
                     return Err(Stop::Budget);
                 }
                 // A thread inside a callback keeps running: its state cannot
@@ -408,10 +411,17 @@ impl Machine {
         }
     }
 
-    /// Runs until the program stops or `budget` more instructions have executed.
+    /// Runs until the program stops or `budget` more instructions have
+    /// executed. After [`Stop::Budget`] the run can be continued by calling
+    /// this again.
     pub fn run(&mut self, budget: u64) -> Stop {
         self.deadline = self.cpu.instructions.saturating_add(budget);
         self.run_threads()
+    }
+
+    /// The machine's clock, in milliseconds since it started.
+    pub fn clock(&self) -> u64 {
+        self.clock_ms()
     }
 
     /// Calls a function of the program with the `stdcall` convention and

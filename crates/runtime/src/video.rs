@@ -388,6 +388,7 @@ pub trait Video {
     fn present(&mut self, surface: SurfaceId);
     /// The backend as its concrete type, for code that knows which one it set up.
     fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// Reads the pixel at byte offset `at`.
@@ -608,6 +609,10 @@ impl Video for Headless {
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }

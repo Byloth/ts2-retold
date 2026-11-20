@@ -14,6 +14,7 @@ Every dependency or tool is listed here **before** it is adopted
 | `fontdue` 0.9 | MIT OR Apache-2.0 OR Zlib | turning glyph outlines into pixels for GDI text |
 | `ttf-parser` 0.25 | MIT OR Apache-2.0 | reading the bundled font's metric tables |
 | `wgpu` 30 | MIT OR Apache-2.0 | the GPU video backend (`crates/gpu`): Vulkan, Direct3D 12, Metal and WebGPU from one code base |
+| `winit` 0.30 | Apache-2.0 | the window of `andy play` (command-line tool only), without its own window frame for Wayland; its tree of platform bindings is MIT, Apache-2.0, Zlib, BSD or ISC |
 | `pollster` 1 | MIT OR Apache-2.0 | waiting for the graphics device to open, on native targets |
 | `png` 0.17 | MIT OR Apache-2.0 | `andy boot --surfaces`: writing surfaces as images for inspection (command-line tool only) |
 

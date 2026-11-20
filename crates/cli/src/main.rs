@@ -1,6 +1,7 @@
 //! Command-line front end of the recompiler.
 
 mod capture;
+mod play;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -38,6 +39,9 @@ USAGE:
                                     --input plays back recorded input (one
                                     line per change: READ press|release KEY)
                                     --with/--without ID switch a modification
+    andy play    [EXE] [--args TEXT] [--with/--without ID]
+                                    Run the game in a window, with the
+                                    keyboard
     andy mods                       List the modifications (docs/MODIFICATIONS.md)
     andy movie FILE --yuv OUT [--pictures N]
                                     Decode a movie of the game and write its
@@ -189,6 +193,19 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 frames: frames.map(|directory| (directory, frame_step)),
             },
         ),
+        "play" => {
+            // The program reads the game directory and writes only to `out/run`.
+            let files = Files::new(exe.parent().map(Path::to_path_buf), Some(PathBuf::from("out/run")));
+            let mut os = Os::new(files);
+            os.command_line_arguments = game_args;
+            os.mods = mods;
+            let (machine, stop) = play::play(Machine::load(&image, os))?;
+            println!("frames shown           {}", machine.os.ddraw.frames);
+            match stop {
+                Some(stop) => println!("stopped at eip {:#010x}: {}", machine.cpu.eip, describe(&stop)),
+                None => println!("window closed"),
+            }
+        }
         "difftest" => {
             let path = out.ok_or("difftest needs --out FILE")?;
             let analysis = analysis::analyze(&image).ok_or("no executable section at the entry point")?;
