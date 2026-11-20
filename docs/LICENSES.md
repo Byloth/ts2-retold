@@ -54,8 +54,6 @@ No copyleft and no noncommercial-only license is in the tree.
 | Wine `wingdi.h` (9.0) | LGPL-2.1 | Layout of `TEXTMETRICA` and GDI constant values. Kept in the git-ignored `ref/win`. Facts only, nothing transcribed. |
 | Wine `dlls/ddraw/device.c` (9.0) | LGPL-2.1 | How the DirectX 5 render states act on texture stage 0 (ADR 0014), a behaviour Wine established by tests on Windows. Kept in the git-ignored `ref/wine`. The rules are re-expressed, no code is copied. |
 
-| Toy Story 2 "Electronic Press Kit" CD (1999), supplied by the owner | all rights reserved by its owners | 25 screenshots and 7 clips of the original game, as pictures to compare the port against. Extracted to the git-ignored `ref/presskit`; never committed, never redistributed. |
-
 ## External projects consulted, not used
 
 Nothing has been copied from these; their licenses are not yet verified and
