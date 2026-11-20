@@ -2,8 +2,9 @@
 //!
 //! The machine runs in short stretches between the window's events. Each
 //! picture the game presents is shown, the keys held down in the window are
-//! the keyboard the game reads, and the machine is held back to the pace of
-//! its own clock, so that the game runs at its speed and no faster.
+//! the keyboard the game reads, and the machine's clock is kept in step with
+//! real time: it runs no faster, and while the game waits its clock goes no
+//! further than the present (`Machine::clock_limit`).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -216,20 +217,25 @@ impl ApplicationHandler for Play {
         }
         let turn = Instant::now();
         loop {
-            // Ahead of its own clock: wait for the time to pass.
-            let clock = Duration::from_millis(self.machine.clock() - self.clock_start);
-            let now = self.started.elapsed();
-            if clock > now {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(self.started + clock));
-                return;
-            }
+            // The machine's clock may go as far as real time has, counted
+            // from the same starting point.
+            let now = self.started.elapsed().as_millis() as u64;
+            let clock = self.machine.clock() - self.clock_start;
             // Far behind (the host was busy, or is too slow): do not try to
             // catch up, take the present as the new starting point.
-            if now - clock > Duration::from_millis(250) {
+            if now.saturating_sub(clock) > 250 {
                 (self.started, self.clock_start) = (Instant::now(), self.machine.clock());
+                continue;
             }
+            // Level with real time: come back in a millisecond.
+            if clock >= now {
+                let next = self.started + Duration::from_millis(clock + 1);
+                event_loop.set_control_flow(ControlFlow::WaitUntil(next));
+                return;
+            }
+            self.machine.clock_limit = Some(self.clock_start + now);
             match self.machine.run(STRETCH) {
-                Stop::Budget => {}
+                Stop::Budget | Stop::Idle => {}
                 stop => {
                     self.stopped = Some(stop);
                     event_loop.exit();

@@ -71,6 +71,10 @@ pub enum Stop {
     },
     /// The instruction budget given to [`Machine::run`] ran out.
     Budget,
+    /// Every thread is waiting for a time later than [`Machine::clock_limit`]
+    /// allows the clock to reach. The run can be continued once the limit
+    /// has been moved on.
+    Idle,
     /// Execution reached [`Machine::breakpoint`].
     Breakpoint,
     /// Every thread is waiting for something only another thread could do.
@@ -146,6 +150,12 @@ pub struct Machine {
     /// Stop before executing the instruction at this address. A debugging
     /// aid; the address is never a host function.
     pub breakpoint: Option<u32>,
+    /// How far, in milliseconds, the clock may be moved forward while every
+    /// thread waits. Without a limit a waiting machine skips straight to
+    /// the next thing that happens, which is what a run as fast as possible
+    /// wants; a run in step with real time sets the limit to the present
+    /// and is told [`Stop::Idle`] when there is nothing to do before it.
+    pub clock_limit: Option<u64>,
 }
 
 impl Machine {
@@ -190,6 +200,7 @@ impl Machine {
             note: None,
             first_inexact: None,
             breakpoint: None,
+            clock_limit: None,
         };
         machine.os.resources = image.resources.clone();
         for replacement in game::REPLACEMENTS {

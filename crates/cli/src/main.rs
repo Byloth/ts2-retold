@@ -475,6 +475,7 @@ fn describe(stop: &Stop) -> String {
             format!("callback {address:#x} returned with esp {actual:#x}, expected {expected:#x}")
         }
         Stop::Budget => "instruction limit reached".into(),
+        Stop::Idle => "waiting for time to pass".into(),
         Stop::Breakpoint => "breakpoint".into(),
         Stop::Deadlock => "every thread is waiting and nothing can wake one".into(),
         Stop::WouldBlock => "internal error: a wait escaped the scheduler".into(),

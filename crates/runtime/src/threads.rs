@@ -283,7 +283,7 @@ impl Machine {
 
     /// Picks the thread that runs next and makes it current. If every thread
     /// is waiting, the clock jumps to the first timeout or sound notification.
-    fn schedule(&mut self) -> Result<(), Stop> {
+    fn schedule(&mut self, may_idle: bool) -> Result<(), Stop> {
         loop {
             // Sound buffers signal events as their play cursors advance.
             let next_sound = self.sound_notifications();
@@ -310,6 +310,14 @@ impl Machine {
             match earliest {
                 Some(deadline) => {
                     let now = self.clock_ms();
+                    // In step with real time the clock goes no further than
+                    // its limit: the caller comes back when time has passed.
+                    // (Not while a callback waits on the host's stack, which
+                    // cannot be left and come back to.)
+                    if let Some(limit) = self.clock_limit.filter(|&limit| may_idle && deadline > limit) {
+                        self.threads.skipped_ms += limit.saturating_sub(now);
+                        return Err(Stop::Idle);
+                    }
                     self.threads.skipped_ms += deadline.saturating_sub(now).max(1);
                 }
                 None => return Err(Stop::Deadlock),
@@ -320,12 +328,18 @@ impl Machine {
     /// Runs the program's threads until the machine stops.
     pub(crate) fn run_threads(&mut self) -> Stop {
         self.threads.slice_end = self.cpu.instructions + TIME_SLICE;
+        // A run that ended idle is taken up where it ended: choosing a thread.
+        if self.threads.threads[self.threads.current].state != State::Ready
+            && let Err(stop) = self.schedule(true)
+        {
+            return stop;
+        }
         loop {
             match self.execute(false) {
                 Err(stop) => return stop,
                 Ok(Pause::CallbackReturned) => unreachable!("no callback is in progress at this level"),
                 Ok(Pause::Yield) => {
-                    if let Err(stop) = self.schedule() {
+                    if let Err(stop) = self.schedule(true) {
                         return stop;
                     }
                 }
@@ -371,7 +385,7 @@ impl Machine {
 
     fn run_others_until_resumed(&mut self, waiter: usize) -> Result<(), Stop> {
         loop {
-            self.schedule()?;
+            self.schedule(false)?;
             if self.threads.current == waiter {
                 return Ok(());
             }

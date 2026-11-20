@@ -44,9 +44,14 @@ out of here into the roadmap or an ADR when work on them starts.
   transfer). So far the game has caused no transfer back at all.
 - **The window** (`andy play`) shows the picture, enlarged with its shape
   kept, and takes the keyboard. Still to do: a canvas for the browser; a
-  frame on Wayland where the compositor draws none (winit's own frame
-  crashes WSLg's compositor, so it is left out, and the window there has
-  no title bar); full screen; the mouse and joysticks; trying it on
+  frame on Wayland where the compositor draws none. winit's own frame
+  (`sctk-adwaita`, five subsurfaces around the window) makes WSLg's
+  compositor (weston 9.0.0-215, WSLg 1.0.79) end with signal 11 about a
+  second after it lists those subsurfaces as windows of the RDP shell, so
+  the feature is off and the window there has no title bar. **The cause
+  inside the compositor has not been found**: it leaves no dump or
+  backtrace by default. To do: turn its dumps on, or reproduce it with a
+  minimal program, and read the RDP shell's source; full screen; the mouse and joysticks; trying it on
   Windows with a real graphics card.
 - **One render pass per frame is not yet reached when the frame mixes
   copies and triangles**: a fill or copy between two batches ends the pass.
