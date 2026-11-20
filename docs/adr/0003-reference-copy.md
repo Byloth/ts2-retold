@@ -59,8 +59,7 @@ dump of a pressed disc would still be welcome as a second witness.
   strings for 13 languages (`Setup\STRINGS\*.lag`) and 14 licence texts,
   and is configured for English with the language choice switched off.
 - **A hook for other languages exists**: `toy2.ini` accepts `LANGUAGE` and
-  `DEFTEXT` lines. How localised releases used them, and whether they had
-  their own executable, is not known (`UNVERIFIED`).
+  `DEFTEXT` lines. The localised releases did not use it: see below.
 - **Leftovers of development** are on the disc: PlayStation executables
   (`data\SLES_020.67`, `SLUS_008.93`, `psx.exe`, `system.cnf`), `.bak` and
   `.btm` build scripts.
@@ -76,4 +75,43 @@ the disc's files by linking the hard-disk part and the CD part side by side,
 as a full installation does. The game boots from it exactly as from the
 installed copy (same frames, same stopping point), without that copy's
 saves and settings.
+
+## 2026-11-20: the other language releases
+
+The owner supplied eight more disc images. Read in place, nothing kept.
+Each is one language, with **its own executable** (the texts are compiled
+in), so localisation was not done through `toy2.ini`:
+
+| Language | `toy2.exe` bytes | Linked (UTC) | SHA-256 |
+|---|---|---|---|
+| English (reference copy) | 1290290 | 1999-10-29 10:40 | `023eb6a9459443b34d24cf685591bfeb3b95e1acf579405f6d8fa4407ccbdaf0` |
+| French | 1298482 | 2000-01-24 13:43 | `72f9647e601cb39fb450bac7a00375302d63e0ba51fbf0794551b806b3d11ced` |
+| English (2003 disc) | 1228800 | 1999-10-29 10:40 | `74bada2d0032379ab506949e839b15773b33bb9377e99af198378690d8b722c9` |
+| Norwegian | 1294386 | 2000-02-09 10:55 | `66e853a746b375f2ac38313f86acd2c3ad09cac1677662fe4fe9c55d853788ab` |
+| Italian | 1298482 | 2000-02-16 18:42 | `e46abf778d2c532883000d313c1ca383130389ba704266c5190ced7f2cfbfeb5` |
+| Finnish | 1294386 | 2000-02-16 21:33 | `28edf6c8a50c9e5e5e1654135c95569b2220d195d1994313230f15b0f753c41b` |
+| Swedish | 1294386 | 2000-02-08 15:48 | `d0f1fcab148839db56e9b0cc4df501c679b4a07ca889abde42c132185cece86b` |
+| Dutch | 1294386 | 2000-02-11 16:44 | `acc7cfd3b5d0f9c67a291e15ff9c510ae3566782a074cf4f7c5432dc6ab0a99b` |
+| Spanish | 1298482 | 2000-02-09 11:31 | `19e5b251aad700aefedc9da25ba169b54d6fcc8fd59daad6c19d3398cf343d6b` |
+
+Compared with the reference copy, file by file:
+
+- **Movies**: 18 of the 22 differ on every disc, 4 are the same everywhere.
+  On the seven European discs the video stream of a sampled movie is the
+  same and the audio stream is different on each, which is what dubbing
+  gives; the audio was not listened to.
+- **Sound effects**: of 266 files 163 are the same on every disc; the rest
+  differ per language (speech).
+- **Music**: 22 of 23 files are the same everywhere.
+- **Level and graphics files** (`.ngn`): different on every disc.
+- The 2003 English disc has another installer, an executable with the
+  reference copy's link time but another size and hash, the reference
+  copy's sound effects, and movies encoded again at 320×240.
+
+German, Danish and Portuguese, which the installer has strings for, are not
+among them. Only the reference build is supported: every address the
+project knows (`crates/runtime/src/game.rs`, the analysis) belongs to it.
+Supporting another language means analysing its executable, or carrying
+its texts and files over to the reference build; that is recorded in the
+backlog.
 

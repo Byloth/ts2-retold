@@ -84,8 +84,12 @@ out of here into the roadmap or an ADR when work on them starts.
 ## To verify with the owner's help
 
 - A verified dump of a pressed disc as a second witness for the reference
-  copy in `ref/disc` (ADR 0003), and how localised releases were made
-  (`LANGUAGE` and `DEFTEXT` in `toy2.ini`, or their own executable).
+  copy in `ref/disc` (ADR 0003).
+- **Other languages.** Eight language releases exist as separate builds
+  with their own executable, dubbed movies and speech (ADR 0003). The
+  project supports the English reference build only. To decide: analyse
+  each executable, or bring a language's texts, movies and sounds to the
+  reference build as a catalogued modification.
 - Reference screenshots of the original game, once the port draws.
 - Which font Windows picks for the face name "ariel" (the game's spelling;
   no such font exists). The runtime answers with its Arial substitute.
