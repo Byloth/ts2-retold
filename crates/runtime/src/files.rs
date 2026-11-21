@@ -28,8 +28,25 @@ pub struct OpenFile {
     dirty: bool,
 }
 
+/// What is done to a texture file (`*.ngn`) of the game as it is read:
+/// given its bytes, the bytes to read in their place, if they change.
+/// This is where pictures rebuilt when the game is built take the place
+/// of the discs' own (the typefaces' one atlas, ADR 0016).
+pub struct TextureFilter(pub Box<TextureChange>);
+
+/// A texture file's bytes to what is read in their place, if they change.
+pub type TextureChange = dyn Fn(&[u8]) -> Option<Vec<u8>>;
+
+impl std::fmt::Debug for TextureFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TextureFilter")
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Files {
+    /// Applied to every texture file read from the game's directories.
+    pub texture_filter: Option<TextureFilter>,
     game_dir: Option<PathBuf>,
     /// Another language's game directory: the files that are language
     /// ([`is_language_file`]) are read from it where it has them.
@@ -164,7 +181,9 @@ impl Files {
             Some(path) => path,
             None => Self::resolve(self.game_dir.as_ref()?, parts)?,
         };
-        if path.is_file() { fs::read(path).ok() } else { None }
+        let data = if path.is_file() { fs::read(path).ok()? } else { return None };
+        let filter = self.texture_filter.as_ref().filter(|_| name.to_ascii_lowercase().ends_with(".ngn"));
+        Some(filter.and_then(|filter| (filter.0)(&data)).unwrap_or(data))
     }
 
     /// Deletes a file as the program sees it. Returns whether it existed.

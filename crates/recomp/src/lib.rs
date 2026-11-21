@@ -12,3 +12,4 @@ pub mod menu;
 pub mod pairing;
 pub mod pe;
 pub mod textures;
+pub mod typeface;

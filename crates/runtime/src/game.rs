@@ -8,7 +8,7 @@
 
 use andy_cpu::interp::Fault;
 
-use crate::mods::{MENU_ARROWS_BY_TEXT, SKIP_MODE_SELECT};
+use crate::mods::{MENU_ARROWS_BY_TEXT, ONE_TYPEFACE, SKIP_MODE_SELECT};
 use crate::{Machine, Stop};
 
 /// A function of the game that a modification replaces with native code.
@@ -54,6 +54,15 @@ pub static REPLACEMENTS: &[Replacement] = &[
         reference_only: true,
         function: draw_main_menu_arrows,
     },
+    Replacement {
+        modification: ONE_TYPEFACE,
+        address: |_| 0x0049_B580,
+        name: "text in the large typeface, centred",
+        callee_pops: 0,
+        resume: None,
+        reference_only: true,
+        function: crate::typeface::draw_large_centred,
+    },
 ];
 
 // The main menu (the function at 0x437C40) draws, every frame, two arrows
@@ -69,7 +78,7 @@ const MAIN_MENU_ARROWS: u32 = 0x0043_7E61;
 const MAIN_MENU_AFTER_ARROWS: u32 = 0x0043_7EAE;
 /// The function that draws a sprite: x, y, sheet, picture, three colour
 /// values, opacity and two scales.
-const DRAW_SPRITE: u32 = 0x0049_3F40;
+pub(crate) const DRAW_SPRITE: u32 = 0x0049_3F40;
 /// The sheet of the arrows; its pictures 0 and 1 point right and left.
 const ARROW_SHEET: u32 = 0x3E;
 /// Not zero when there is a game to continue: the first entry then reads
@@ -82,10 +91,8 @@ const MAIN_MENU_TEXTS: [u32; 6] =
 /// The first entry's height on the screen and the step to the next.
 const MAIN_MENU_TOP: u32 = 0x78;
 const MAIN_MENU_STEP: u32 = 0x14;
-/// The middle of the screen and the step between letters of the large
-/// typeface, as the function at 0x49B580 has them.
-const SCREEN_MIDDLE: i32 = 160;
-const LARGE_LETTER_STEP: i32 = 12;
+/// The middle of the screen, on which the menus' texts are centred.
+pub(crate) const SCREEN_MIDDLE: i32 = 160;
 /// How far left of a text's first letter the left arrow is drawn, and how
 /// far right of its last letter's place the right one: what the original
 /// has for its ten-letter entry (100 - 64 and 240 - 220).
@@ -105,23 +112,25 @@ fn draw_main_menu_arrows(m: &mut Machine) -> Result<(), Stop> {
     let (step, y) = (m.cpu.regs[0], m.cpu.regs[7]);
     let brightness = step * 4;
     m.cpu.regs[6] = brightness;
-    // Half the width of each entry's text, in letters.
+    // Half the width of each entry's text, as the text function lays it
+    // out. (With the text function switched off, the reference's own
+    // lays it out twelve apart whatever its length: the same up to
+    // twenty letters.)
     let continuing = m.game_word(GAME_TO_CONTINUE)? != 0;
-    let mut letters = [0i32; 5];
-    for (entry, letters) in letters.iter_mut().enumerate() {
+    let mut half_widths = [0i32; 5];
+    for (entry, half_width) in half_widths.iter_mut().enumerate() {
         let site = match entry {
             0 => MAIN_MENU_TEXTS[usize::from(continuing)],
             other => MAIN_MENU_TEXTS[other + 1],
         };
         let text = m.game_word(site)?;
-        while m.memory.read(text + *letters as u32, 1).is_some_and(|byte| byte != 0) {
-            *letters += 1;
-        }
+        let text = crate::typeface::text_at(m, text);
+        *half_width = crate::typeface::large_half_width(&text);
     }
     // Where the arrows are between two entries, in 256ths of a step.
     let along = (y.saturating_sub(MAIN_MENU_TOP) as i32 * 256 / MAIN_MENU_STEP as i32).clamp(0, 4 * 256);
     let (from, part) = ((along / 256).min(3) as usize, along - (along / 256).min(3) * 256);
-    let half_width = LARGE_LETTER_STEP * (letters[from] * (256 - part) + letters[from + 1] * part) / 512;
+    let half_width = (half_widths[from] * (256 - part) + half_widths[from + 1] * part) / 256;
     let (left, right) = (SCREEN_MIDDLE - half_width - ARROW_BEFORE, SCREEN_MIDDLE + half_width + ARROW_AFTER);
     let esp = m.cpu.regs[4];
     for (x, picture) in [(left, 0), (right, 1)] {
@@ -199,7 +208,7 @@ const MODE_HEIGHT: u32 = 0x08;
 const MODE_NEXT: u32 = 0xA4;
 
 impl Machine {
-    fn game_word(&mut self, address: u32) -> Result<u32, Stop> {
+    pub(crate) fn game_word(&mut self, address: u32) -> Result<u32, Stop> {
         self.memory.read(address, 4).ok_or(Stop::Fault(Fault::Memory { address, write: false }))
     }
 

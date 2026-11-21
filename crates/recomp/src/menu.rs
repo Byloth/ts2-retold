@@ -37,6 +37,40 @@ pub fn load_before_options(image: &mut Image) -> Result<(), String> {
     Ok(())
 }
 
+/// The project's wording of the main menu's entry for loading and saving,
+/// in the language of a build (the reference's, English, for `None`).
+/// Decided by the owner: the stroke says both, and the typeface has it.
+pub fn load_save_wording(language: Option<&str>) -> &'static [u8] {
+    match language {
+        Some(crate::builds::ITALIAN) => b"carica / salva",
+        Some(crate::builds::FRENCH) => b"charger / sauvegarder",
+        Some(crate::builds::SPANISH) => b"cargar / guardar",
+        _ => b"load / save",
+    }
+}
+
+/// Makes the main menu's entry for loading and saving read `wording`. To
+/// be done before [`load_before_options`], which moves the entry.
+pub fn word_load_and_save(image: &mut Image, wording: &[u8]) -> Result<(), String> {
+    use crate::pe::Section;
+    if image.read_u32(THIRD_ANSWER) != Some(4) {
+        return Err("the main menu is not the reference build's, or its entries were moved".into());
+    }
+    let end = image.sections.iter().map(|section| section.va + section.virtual_size).max();
+    let va = end.unwrap_or(image.base).next_multiple_of(0x1000);
+    let mut data = wording.to_vec();
+    data.push(0);
+    image.sections.push(Section {
+        name: ".menu".into(),
+        va,
+        virtual_size: data.len() as u32,
+        flags: 0x4000_0040, // initialised data, readable
+        data,
+    });
+    write(image, THIRD_TEXT, va);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,13 +90,18 @@ mod tests {
         let section =
             Section { name: ".text".into(), va: base, virtual_size: 0x400, flags: 0x2000_0020, data };
         let mut image = Image { base: 0x40_0000, sections: vec![section], ..Image::default() };
+        // The third entry worded anew, then moved to the second place.
+        word_load_and_save(&mut image, load_save_wording(None)).unwrap();
+        let worded = image.read_u32(THIRD_TEXT).unwrap();
+        assert_eq!(image.c_string(worded).as_deref(), Some("load / save"));
         load_before_options(&mut image).unwrap();
         assert_eq!((image.read_u32(SECOND_ANSWER), image.read_u32(THIRD_ANSWER)), (Some(4), Some(3)));
         assert_eq!(
             (image.read_u32(SECOND_TEXT), image.read_u32(THIRD_TEXT)),
-            (Some(0x4F_67F0), Some(0x4F_5AF4))
+            (Some(worded), Some(0x4F_5AF4))
         );
         // Not twice, and not on something else.
         assert!(load_before_options(&mut image).is_err());
+        assert!(word_load_and_save(&mut image, b"x").is_err());
     }
 }

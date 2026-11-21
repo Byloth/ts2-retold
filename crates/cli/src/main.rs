@@ -1,5 +1,6 @@
 //! Command-line front end of the recompiler.
 
+mod atlas;
 mod capture;
 mod frame;
 mod play;
@@ -57,6 +58,11 @@ USAGE:
                                     keyboard and the sound device;
                                     --seconds closes the window after N
                                     seconds of the machine's clock
+    andy atlas --out FILE.png       Put the one atlas of the large typeface
+                                    together from the discs at hand
+                                    (TS2_LANGUAGE_DIR, TS2_OTHER_DISCS) and
+                                    write it as a picture (derived from the
+                                    game: keep it out of git)
     andy textures FILE              List the pictures of one of the game's
                                     texture files (*.ngn)
     andy pair FIRST SECOND [--json OUT]
@@ -233,10 +239,36 @@ fn run(args: Vec<String>) -> Result<(), String> {
         None => println!("build     UNKNOWN - addresses and patches are not valid for this file"),
     }
 
-    if mods.is_enabled(andy_runtime::mods::LANGUAGE) {
-        image = in_another_language(&bytes, image)?;
-    }
     let is_reference = builds::identify(&bytes).map(|build| build.id) == Some(builds::REFERENCE);
+    let mut language = None;
+    if mods.is_enabled(andy_runtime::mods::LANGUAGE) {
+        if !is_reference {
+            return Err("another language can only be brought to the reference build".into());
+        }
+        let (in_language, build) = in_another_language(image)?;
+        (image, language) = (in_language, Some(build));
+    }
+    // The typefaces' one atlas, for the reference build's code.
+    let one_typeface = is_reference && mods.is_enabled(andy_runtime::mods::ONE_TYPEFACE);
+    let atlas = match (one_typeface, exe.parent()) {
+        (true, Some(game_dir)) if matches!(command.as_str(), "boot" | "play" | "atlas") => {
+            let atlas = build_atlas(game_dir, &image)?;
+            andy_recomp::typeface::install_sheet_record(&mut image)?;
+            Some(std::rc::Rc::new(atlas))
+        }
+        _ => None,
+    };
+    if one_typeface && mods.is_enabled(andy_runtime::mods::MENU_LOAD_SAVE_WORDING) {
+        let wording = andy_recomp::menu::load_save_wording(language);
+        andy_recomp::menu::word_load_and_save(&mut image, wording)?;
+    }
+    let filter_textures = |files: &mut Files| {
+        if let Some(atlas) = atlas.clone() {
+            let filter =
+                andy_runtime::files::TextureFilter(Box::new(move |file| atlas.in_texture_file(file)));
+            files.texture_filter = Some(filter);
+        }
+    };
     if is_reference && mods.is_enabled(andy_runtime::mods::MENU_LOAD_BEFORE_OPTIONS) {
         andy_recomp::menu::load_before_options(&mut image)?;
     }
@@ -248,6 +280,18 @@ fn run(args: Vec<String>) -> Result<(), String> {
     };
 
     match command.as_str() {
+        "atlas" => {
+            let (atlas, path) =
+                (atlas.ok_or("no atlas without one-typeface")?, out.ok_or("atlas needs --out FILE")?);
+            // Blue, green, red in the page; red, green, blue in the file.
+            let rgb: Vec<u8> =
+                atlas.pixels.chunks(3).flat_map(|pixel| [pixel[2], pixel[1], pixel[0]]).collect();
+            let file = fs::File::create(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+            let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 256, 256);
+            encoder.set_color(png::ColorType::Rgb);
+            let written = encoder.write_header().and_then(|mut writer| writer.write_image_data(&rgb));
+            written.map_err(|error| format!("{}: {error}", path.display()))?;
+        }
         "info" => info(&image),
         "analyze" => {
             let analysis = analysis::analyze(&image).ok_or("no executable section at the entry point")?;
@@ -265,6 +309,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "boot" => boot(
             &image,
             BootOptions {
+                atlas: atlas.clone(),
                 mods,
                 addresses,
                 game_dir: exe.parent().map(Path::to_path_buf),
@@ -288,6 +333,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             if let Some(dir) = language_dir(&mods) {
                 files.set_language_dir(dir);
             }
+            filter_textures(&mut files);
             let mut os = Os::new(files);
             os.command_line_arguments = game_args;
             os.mods = mods;
@@ -323,6 +369,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
 }
 
 struct BootOptions {
+    /// The typefaces' one atlas, put into the texture files as they are read.
+    atlas: Option<std::rc::Rc<atlas::Atlas>>,
     mods: Modifications,
     addresses: andy_runtime::game::Addresses,
     game_dir: Option<PathBuf>,
@@ -364,6 +412,7 @@ fn parse_hex(text: &str) -> Option<u32> {
 
 fn boot(image: &Image, options: BootOptions) {
     let BootOptions {
+        atlas,
         mods,
         addresses,
         game_dir,
@@ -387,6 +436,10 @@ fn boot(image: &Image, options: BootOptions) {
     let mut files = Files::new(game_dir, Some(write_dir));
     if let Some(dir) = language_dir(&mods) {
         files.set_language_dir(dir);
+    }
+    if let Some(atlas) = atlas {
+        let filter = andy_runtime::files::TextureFilter(Box::new(move |file| atlas.in_texture_file(file)));
+        files.texture_filter = Some(filter);
     }
     let mut os = Os::new(files);
     os.command_line_arguments = game_args;
@@ -653,79 +706,53 @@ fn language_dir(mods: &Modifications) -> Option<PathBuf> {
 }
 
 /// The reference image in another language, taken from the user's disc
-/// of that language (ADR 0016). Which language it is, the disc says.
-fn in_another_language(reference_bytes: &[u8], reference: Image) -> Result<Image, String> {
-    if builds::identify(reference_bytes).map(|build| build.id) != Some(builds::REFERENCE) {
-        return Err("another language can only be brought to the reference build".into());
-    }
+/// of that language (ADR 0016), and which build that disc is. A language
+/// is its texts (and its files, see `language_dir`): nothing else.
+fn in_another_language(reference: Image) -> Result<(Image, &'static str), String> {
     let dir = env::var_os("TS2_LANGUAGE_DIR")
         .ok_or("language needs TS2_LANGUAGE_DIR, the game in that language")?;
-    let path = Path::new(&dir).join("toy2.exe");
+    let (build, other) = language_build(Path::new(&dir))?;
+    let pairing = andy_recomp::pairing::pair(&reference, &other);
+    let mut hybrid = andy_recomp::language::Hybrid::new(&reference, &other, &pairing);
+    hybrid.texts(&[]);
+    let transplant = hybrid.finish();
+    println!("language  {build}: {} places refer to its texts", transplant.moved.len());
+    Ok((transplant.image, build))
+}
+
+/// The executable of a disc of another language: which build it is, and
+/// its image.
+fn language_build(game_dir: &Path) -> Result<(&'static str, Image), String> {
+    let path = game_dir.join("toy2.exe");
     let bytes = fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let build = builds::identify(&bytes)
         .map(|build| build.id)
         .filter(|id| [builds::ITALIAN, builds::FRENCH, builds::SPANISH].contains(id))
         .ok_or_else(|| format!("{} is not a build of the game whose language is known", path.display()))?;
-    let other = Image::parse(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
-    let pairing = andy_recomp::pairing::pair(&reference, &other);
-    let mut hybrid = andy_recomp::language::Hybrid::new(&reference, &other, &pairing);
-    hybrid.corrections = andy_recomp::language::corrections(build);
-    hybrid.texts(&[]);
-    if build != builds::ITALIAN {
-        let transplant = hybrid.finish();
-        println!("language  {build}: {} places refer to its texts", transplant.moved.len());
-        return Ok(transplant.image);
+    let image = Image::parse(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok((build, image))
+}
+
+/// The one atlas of the large typeface, from the reference disc and every
+/// other disc at hand: the language's (`TS2_LANGUAGE_DIR`) and those
+/// listed in `TS2_OTHER_DISCS`, game directories with `:` between them.
+/// The atlas has what all of them have, whatever the language played.
+fn build_atlas(reference_dir: &Path, reference: &Image) -> Result<atlas::Atlas, String> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for variable in ["TS2_LANGUAGE_DIR", "TS2_OTHER_DISCS"] {
+        if let Some(value) = env::var_os(variable) {
+            dirs.extend(env::split_paths(&value).filter(|dir| !dir.as_os_str().is_empty()));
+        }
     }
-    // Italian alone, for the time being: its own functions for drawing
-    // text and what goes with them (see `ITALIAN_FUNCTIONS`).
-    hybrid.tables(andy_recomp::language::ITALIAN_TABLES);
-    let tables = hybrid.added.len();
-    let analysis = analysis::analyze(&other).ok_or("the executable has no code")?;
-    let function_starts = |analysis: &analysis::Analysis| {
-        let mut starts: Vec<u32> = analysis.functions.iter().map(|function| function.start).collect();
-        starts.sort_unstable();
-        starts.dedup();
-        starts
-    };
-    let starts = function_starts(&analysis);
-    let reference_analysis = analysis::analyze(&reference).ok_or("the executable has no code")?;
-    let reference_starts = function_starts(&reference_analysis);
-    hybrid.functions =
-        andy_recomp::pairing::common_functions(&reference, &other, (&reference_starts, &starts))
-            .into_iter()
-            .map(|(reference, other, length)| (other, reference, length))
-            .collect();
-    hybrid.functions.sort_unstable();
-    let grafts: Vec<_> = andy_recomp::language::ITALIAN_FUNCTIONS
-        .iter()
-        .map(|&(reference, other)| {
-            let end = starts[starts.partition_point(|&start| start <= other)..].first().copied();
-            let reference = (reference != 0).then_some(reference);
-            end.map(|end| andy_recomp::language::Graft { reference, other: (other, end) })
-                .ok_or(format!("no end found for the Italian function at {other:#x}"))
-        })
-        .collect::<Result<_, _>>()?;
-    let counterparts = andy_recomp::language::ITALIAN_COUNTERPARTS;
-    hybrid.graft(&grafts, counterparts, &analysis.instruction_starts).map_err(|problems| {
-        let problems: Vec<String> = problems.iter().map(|problem| format!("{problem:x?}")).collect();
-        format!("the language's functions cannot be taken over: {}", problems.join(", "))
-    })?;
-    let (inferred, added) = (hybrid.inferred.clone(), hybrid.added.clone());
-    let transplant = hybrid.finish();
-    println!(
-        "language  {build}: {} places refer to its texts, {} functions are its own (for the time being)",
-        transplant.moved.len(),
-        grafts.len()
-    );
-    for (other, reference) in inferred {
-        println!("          {other:#010x} there taken as {reference:#010x} here, by its neighbours");
-    }
-    for (other, now, size) in added.into_iter().skip(tables) {
-        println!(
-            "          {other:#010x} there, {size} bytes only the Italian build has, now at {now:#010x}"
-        );
-    }
-    Ok(transplant.image)
+    dirs.sort();
+    dirs.dedup();
+    let others = dirs
+        .into_iter()
+        .map(|dir| language_build(&dir).map(|(_, image)| (dir, image)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let atlas = atlas::build((reference_dir, reference), &others)?;
+    println!("typeface  one atlas from {} discs, with {:?}", others.len() + 1, atlas.signs);
+    Ok(atlas)
 }
 
 /// Pairs the addresses of two builds of the game and reports how well.

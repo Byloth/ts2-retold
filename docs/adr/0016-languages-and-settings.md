@@ -206,13 +206,9 @@ modifications of that one code (ADR 0004): the entry for loading and
 saving before the options in the main menu.
 
 State: 1 and 2 are done for Italian, French and Spanish (the
-modification `language`, the disc in `TS2_LANGUAGE_DIR` says which). 3
-and the one way of drawing text are not: Italian borrows its executable's
-functions meanwhile (`ITALIAN_FUNCTIONS`, to be removed), French and
-Spanish show letters with accents, and some without, as wrong glyphs.
-The large typeface of the menus has no stroke and no hyphen in any
-language's texture (the Italian game shows a gap for its hyphen), so the
-corrected Italian entry reads "carica salva".
+modification `language`, the disc in `TS2_LANGUAGE_DIR` says which). The
+one way of drawing text is done for the large typeface (see "The large
+typeface done" below); no function of another build is used any more.
 
 ## One atlas, one typeface, one function (2026-11-21, decided by the owner)
 
@@ -282,3 +278,25 @@ Added by the owner the same day, for the one function:
   extent, worked out when it is drawn. Done for the main menu's arrows
   (`menu-arrows-by-text`), with the reference's letter step; to be led
   through the one function's measuring when it exists.
+
+## The large typeface done (2026-11-21)
+
+- The atlas is one page with **each sign once, in a place of its own**,
+  whatever disc it comes from: the 48 common cells, then the two arrows,
+  `Ç ¿ ¡ Ø Æ Œ`, the grave and acute accents, an empty place, the
+  circumflex, diaeresis, tilde and ring, and the hyphen
+  (`typeface::PLACES`). Every language can use every sign. The places are
+  chosen so that no sign whose picture reaches the bottom of its cell
+  stands over another (a sprite is drawn from the very edge of its cell
+  and the picture repeats); this is checked when the atlas is made.
+- Which sign a disc's cell is, is asked of the disc's own executable in a
+  machine of its own (`Machine::record_calls_to`); its text function is
+  found through the pairing, by position among the functions that differ.
+- The discs at hand are the reference, `TS2_LANGUAGE_DIR` and those of
+  `TS2_OTHER_DISCS`. A sign no disc at hand has is an empty cell.
+- **One timing, the reference's** (the owner, the same day): no code of
+  another build runs, so nothing of a language's build can make a screen
+  last longer. The opening movies are the same files on the four discs.
+- The texts worded by the project are one modification,
+  `menu-load-save-wording`; the earlier correction of the Italian text is
+  gone with it.

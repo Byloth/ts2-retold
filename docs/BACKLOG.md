@@ -165,58 +165,37 @@ out of here into the roadmap or an ADR when work on them starts.
   disc of that language through an address map between the two builds
   (`andy pair`). The owner's direction: a language is data only, one
   mechanism for all, no code of a language's own. Done for the three:
-  the texts, place by place (330, 345 and 333 places) with corrections
-  worded by the project; speech, movies and all textures read from the
+  the texts, place by place (330, 345 and 333 places); speech, movies and all textures read from the
   language's disc. **Next, in this order:**
-  1. the typefaces: one atlas of each, rebuilt from all the discs when
-     the game is built, one table from character to glyph and one native
-     function in place of each of the reference's text functions
-     (ADR 0016, "One atlas, one typeface, one function", which lists the
-     steps; done of them: reading and rewriting the texture files);
-  2. then the Italian executable's functions go (`ITALIAN_FUNCTIONS`,
-     `ITALIAN_TABLES`, `ITALIAN_COUNTERPARTS` and the transplanting of
-     functions with them, unless something else needs it);
-  3. the main menu's entry for loading and saving worded with the stroke
-     the large typeface does have ("carica / salva"), once the one
-     function draws it (its order, before the options, and the arrows
-     that follow the text are done: `menu-load-before-options`,
-     `menu-arrows-by-text`);
-  4. line breaks in texts (`\n`), laid out by the one function; texts
-     that a language's build split over two lines are two texts there and
-     one in the reference: to be joined as data with a line break;
-  5. the other places where something is put beside a text by a fixed
+  1. the typefaces. **Done for the large one** (`one-typeface`): one
+     atlas put together from all the discs at hand, one table, one native
+     function in place of `0x49B580`; with it the Italian executable's
+     functions and tables are gone, and every language runs the
+     reference's code with the reference's timings (same number of frames
+     and the same instants of every change of screen up to the main menu,
+     in the four languages). Still to do the same way: the small typeface
+     (`0x49B2A0`, `0x49B3B0`), the levels' one (`0x49B630`, whose page
+     differs between the English disc and the others) and the text boxes
+     (`0x49D390`, `0x49D910`). Until then accents in those are wrong in
+     Italian, French and Spanish;
+  2. texts that a language's build split over two lines are two texts
+     there and one in the reference: to be joined as data with a line
+     break (the one function lays `\n` out already);
+  3. the other places where something is put beside a text by a fixed
      number, to be found screen by screen and placed from the text's
      extent like the main menu's arrows.
-  Until 1, French and Spanish show accents and some plain letters as
-  wrong glyphs (their textures are laid out for their own code), and
-  Italian is right only by the borrowed functions:
-  **Checked against the Italian game itself**, which `andy boot` runs as
-  it is (`andy boot ref/game-it/toy2.exe`, with `TS2_GAME_DIR` set to the
-  reference): with the same recorded input, of 76 pictures taken every
-  100 frames from the start into the first level, 62 are the same pixel
-  for pixel: the legal screens, the movies, the title, the main menu and
-  the loading screen among them. The 14 that differ are the fade to the
-  level map, one of the map, and those in the level, where the two runs
-  are not at the same instant (the hybrid's code is not the Italian
-  build's, so the same frame falls at another moment of the game's clock)
-  and where the hybrid has the reference's level data on purpose.
-  Still to do:
-  - the same check for every other screen: options, controls, graphics
-    settings, loading and saving, the pause menu, the messages of the
-    levels, the credits, the movie viewer. Each needs a recording that
-    reaches it;
-  - the twelve bytes of `ITALIAN_TABLES` are not understood, only seen to
-    be needed; and what each of the 19 functions is, is known from the
-    texts they use and where they stand, not from reading them;
-  - one variable the Italian build alone has (4 bytes, used by its level
-    map function) was given room of its own, and three addresses were
-    taken from their neighbours for lack of a pair: each is printed when
-    the game starts;
-  - the Italian movies have other lengths, so recordings made for the
-    English sequence do not fit (`out/input/it-level.txt` is one for it);
-  - code outside the image's code section is decoded again every time it
-    runs (`Machine::fetch`): the copied functions are slow in the
-    interpreter;
+  Known about the atlas of the large typeface:
+  - no disc's executable draws `Ø` (the Spanish and French pages seem to
+    have its picture): its place in the atlas is empty, `UNVERIFIED`
+    whether any text needs it;
+  - a letter with an accent was seen to be drawn as each build draws it
+    (same cells, the accent 4 higher) by the recorded calls, not yet on a
+    screen: no recording reaches a text of the large typeface with one;
+  - the atlas is made at every start; a built game would make it once.
+  Still to do besides:
+  - the comparison with each language's own game for every other screen:
+    options, controls, graphics settings, loading and saving, the pause
+    menu, the messages of the levels, the credits, the movie viewer;
   - choosing the language in a settings file instead of `--with`;
   - a reading of all the text pairs by someone who knows the game
     (`andy pair --json`).

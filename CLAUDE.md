@@ -138,7 +138,11 @@ cargo run --release --bin andy -- boot --limit 6000000000 --seconds 400 --gpu --
 # A language is data only: nothing in the code is for one language.
 export TS2_LANGUAGE_DIR="$PWD/ref/game-it"
 cargo run --release --bin andy -- play --with language
-# The Italian game itself, as a comparison for the hybrid (TS2_GAME_DIR
+# The one atlas of the large typeface takes its signs from every disc at
+# hand: the language's and these (game directories, `:` between them)
+export TS2_OTHER_DISCS="$PWD/ref/game-it:$PWD/ref/game-fr:$PWD/ref/game-es"
+cargo run --release --bin andy -- atlas --out out/lang/atlas.png
+# The Italian game itself, as a comparison (TS2_GAME_DIR
 # stays the reference: its addresses are translated for the other build)
 cargo run --release --bin andy -- boot ref/game-it/toy2.exe --limit 9000000000 --seconds 230 --gpu --input out/input/it-level.txt --frames out/frames-it --frame-step 100
 # The addresses of one language's build in another's, and the texts that change

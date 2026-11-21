@@ -20,6 +20,7 @@ pub mod keys;
 pub mod mods;
 pub mod os;
 pub mod threads;
+pub mod typeface;
 pub mod video;
 pub mod win32;
 
@@ -126,6 +127,10 @@ pub struct Machine {
     pub os: Os,
     /// What draws and shows the game's surfaces. Headless until replaced.
     pub video: Box<dyn Video>,
+    /// The calls to the functions being listened to
+    /// ([`Machine::record_calls_to`]): the function and the first ten
+    /// words of its arguments.
+    pub recorded_calls: Vec<(u32, [u32; 10])>,
     /// What receives the sound. Without one nothing is mixed.
     pub audio: Option<Box<dyn audio::Audio>>,
     pub threads: Threads,
@@ -188,6 +193,7 @@ impl Machine {
             memory,
             os,
             video: Box::new(Headless::default()),
+            recorded_calls: Vec::new(),
             audio: None,
             threads: Threads::new(),
             host: Vec::new(),
@@ -288,6 +294,36 @@ impl Machine {
             Some(index) => Ok(Fetched::Replacement(self.replacements[(index - FIRST_REPLACEMENT) as usize])),
             // Outside the code section: decode every time.
             None => interp::decode(&mut self.memory, address).map(Fetched::Instruction).ok_or(Fault::Invalid),
+        }
+    }
+
+    /// From now on a call to the function at `address` is not carried
+    /// out: it is written down in [`Machine::recorded_calls`] and returns
+    /// at once (as a C function, leaving its arguments). For finding out
+    /// what a function of the game does with another: which sprites a
+    /// text function draws.
+    pub fn record_calls_to(&mut self, address: u32) {
+        static RECORDER: Replacement = Replacement {
+            modification: "",
+            address: |_| 0,
+            name: "recorded call",
+            callee_pops: 0,
+            resume: None,
+            reference_only: false,
+            function: |m| {
+                let (function, esp) = (m.cpu.eip, m.cpu.regs[4]);
+                let mut arguments = [0; 10];
+                for (number, argument) in arguments.iter_mut().enumerate() {
+                    *argument = m.memory.read(esp + 4 + 4 * number as u32, 4).unwrap_or(0);
+                }
+                m.recorded_calls.push((function, arguments));
+                Ok(())
+            },
+        };
+        let offset = address.wrapping_sub(self.code_start) as usize;
+        if offset < self.decoded_index.len() {
+            self.decoded_index[offset] = FIRST_REPLACEMENT + self.replacements.len() as u32;
+            self.replacements.push(&RECORDER);
         }
     }
 

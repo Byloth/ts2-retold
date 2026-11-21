@@ -6,7 +6,9 @@ list. With every entry off the port behaves like the original.
 
 | Identifier | Class | Affects simulation | On by default | What it does |
 |---|---|---|---|---|
-| `language` | feature | no | no | The game in another language (ADR 0016), from the user's own disc of that language (`TS2_LANGUAGE_DIR`): Italian, French or Spanish, told by the disc. A language is data: the places of the executable that refer to a text refer to the text that language's executable has in the same place, with a short list of corrections the project words itself; speech, movies and textures are read from that disc. Level data and code stay the reference's. **Incomplete**: the reference's code cannot draw letters with accents. Until one way of drawing text serves every language, Italian alone borrows 19 functions and four tables of the Italian executable (to be removed), and French and Spanish show accents, and some plain letters, as wrong glyphs. |
+| `language` | feature | no | no | The game in another language (ADR 0016), from the user's own disc of that language (`TS2_LANGUAGE_DIR`): Italian, French or Spanish, told by the disc. A language is data and nothing else: the places of the executable that refer to a text refer to the text that language's executable has in the same place; speech, movies and textures are read from that disc. Code, level data and timings stay the reference's. **Incomplete**: only the large typeface of the menus is drawn the one way (`one-typeface`); in the other typefaces letters with accents are still wrong. |
+| `one-typeface` | feature | no | yes | Text in the large typeface is drawn by one function with one table from character to glyph, for every language, from one atlas put together from all the discs at hand, with every sign any of them has, each once (ADR 0016): the hyphen, the accents, `¿ ¡ Æ Œ Ç` are there for every language. It also draws the digits and signs the original's function leaves out though the typeface has them (the stroke among them), lays out texts with line breaks, and sets a line closer when it is too wide. English texts come out as in the original, pixel for pixel. |
+| `menu-load-save-wording` | feature | no | yes | The main menu's entry for loading and saving reads "load / save" ("carica / salva", "charger / sauvegarder", "cargar / guardar"), where the original has "load game" and the other languages "carica-salva opzioni", "charger-sauvegarder", "cargar-guardar". Needs `one-typeface` for the stroke. Decided by the owner. |
 | `menu-arrows-by-text` | fix | no | yes | The two arrows of the main menu stand beside the text of the entry chosen, wherever it begins and ends, and go from one width to the other as they move. The original draws them at two fixed places that suit its first entry, ten letters long: beside a shorter entry they stand far off, and on a longer one (in other languages) they fall on the text. |
 | `menu-load-before-options` | feature | no | yes | In the main menu the entry for loading and saving comes before the options (the original has the options second and loading third), in every language. Decided by the owner. |
 | `skip-mode-select` | feature | no | yes | The start-up "Screen Mode Select" window does not exist: the game's routine for it is replaced by one that makes the choice the original proposes when nothing was saved (the first hardware 3D device and the first mode at least 480 lines high: 640×480 at 16 bits, full screen). Choices saved in `toy2.cfg` are ignored, since they index lists that differ from one machine to another. |
@@ -40,24 +42,34 @@ With the modification off the original routine runs and its window would
 have to be shown, which needs GDI text (`docs/BACKLOG.md`); until then the
 machine stops at the first text output.
 
-`language` does not replace functions with native ones: it changes
-the image before it is loaded (`crates/recomp/src/language.rs`) and says
-which files are read from the Italian disc (`crates/runtime/src/files.rs`).
-The addresses of the reference executable are paired with those of the
-Italian one through their code (`crates/recomp/src/pairing.rs`). Each
-place that refers to a text is made to refer to the Italian text of the
-paired place. For Italian alone, and only until text is drawn one way
-for every language (ADR 0016), each function listed as language
-(`ITALIAN_FUNCTIONS`) is copied from the Italian executable into a section after the image, every
-address in it translated through the pairing and every call led to the
-reference's function (or to another copied one); the reference's function
-begins with a jump to it. Tables of the Italian build that go with its
-language (`ITALIAN_TABLES`) are copied the same way, and what referred to
-the reference's refers to them. The functions that differ for other reasons
-(the Italian build is a later revision) are listed too
-(`ITALIAN_COUNTERPARTS`) and stay the reference's.
+`language` does not replace functions: it changes the image before it is
+loaded (`crates/recomp/src/language.rs`) and says which files are read
+from the other language's disc (`crates/runtime/src/files.rs`). The
+addresses of the reference executable are paired with those of the other
+build through their code (`crates/recomp/src/pairing.rs`), and each place
+that refers to a text is made to refer to the text of the paired place.
+Nothing else: no function and no table of the other build is taken, and
+the code that runs, with its timings, is the reference's for every
+language (ADR 0016, "A language is data").
 
-The hybrid is checked against the Italian game itself: `andy boot` runs the
+`one-typeface` has three parts. When the game is started, the one atlas
+of the large typeface is put together from the discs at hand
+(`crates/cli/src/atlas.rs`, `crates/recomp/src/typeface.rs`): the 48
+cells every disc has, then every other sign once, in a fixed place,
+whichever disc it comes from. Which sign a disc's cell holds is asked of
+that disc's own executable, whose text function is run on every character
+with the calls to its sprite function written down. The atlas takes the
+place of each disc's page as texture files are read
+(`Files::texture_filter`), and the image gets a sheet record with all 64
+cells. Then the reference's text function (`0x49B580`) is replaced by a
+native one (`crates/runtime/src/typeface.rs`) drawing through one table
+from character to glyph, the same for every language: with the English
+texts the pictures are the original's, pixel for pixel.
+
+`menu-load-save-wording` changes the image: the entry's text is the
+project's own, in a section of its own (`crates/recomp/src/menu.rs`).
+
+A language's game can itself be run as a comparison: `andy boot` runs the
 Italian executable as it is (the addresses the runtime knows are translated
 through the pairing), and the pictures of the two runs with the same input
 are compared. Nothing of either executable is in the

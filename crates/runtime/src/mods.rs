@@ -31,9 +31,34 @@ pub const SKIP_MODE_SELECT: &str = "skip-mode-select";
 
 pub const LANGUAGE: &str = "language";
 pub const MENU_ARROWS_BY_TEXT: &str = "menu-arrows-by-text";
+pub const MENU_LOAD_SAVE_WORDING: &str = "menu-load-save-wording";
+pub const ONE_TYPEFACE: &str = "one-typeface";
 pub const MENU_LOAD_BEFORE_OPTIONS: &str = "menu-load-before-options";
 
 pub static CATALOGUE: &[Modification] = &[
+    Modification {
+        id: ONE_TYPEFACE,
+        class: Class::Feature,
+        affects_simulation: false,
+        enabled_by_default: true,
+        summary: "Text in the large typeface is drawn by one function with one table from character to \
+                  glyph, for every language, from one atlas put together from all the discs at hand, with \
+                  every sign any of them has, each once (ADR 0016): the hyphen, the accents and the signs \
+                  of each language are there for every language. It also draws the digits and signs the \
+                  original's function leaves out though the typeface has them (the stroke among them), \
+                  lays out texts with line breaks, and sets a line closer when it is too wide. English \
+                  texts come out as in the original, pixel for pixel.",
+    },
+    Modification {
+        id: MENU_LOAD_SAVE_WORDING,
+        class: Class::Feature,
+        affects_simulation: false,
+        enabled_by_default: true,
+        summary: "The main menu's entry for loading and saving reads \"load / save\" (in Italian \
+                  \"carica / salva\", in French \"charger / sauvegarder\", in Spanish \"cargar / \
+                  guardar\"), where the original has \"load game\" and the other languages \
+                  \"carica-salva opzioni\", \"charger-sauvegarder\", \"cargar-guardar\". Needs one-typeface for the stroke. Decided by the owner.",
+    },
     Modification {
         id: MENU_ARROWS_BY_TEXT,
         class: Class::Fix,
@@ -59,13 +84,12 @@ pub static CATALOGUE: &[Modification] = &[
         affects_simulation: false,
         enabled_by_default: false,
         summary: "The game in another language (ADR 0016), from the user's own disc of that language \
-                  (TS2_LANGUAGE_DIR): Italian, French or Spanish, told by the disc. A language is data: \
-                  the places of the executable that refer to a text refer to the text that language's \
-                  executable has in the same place, with a short list of corrections; speech, movies and \
-                  textures are read from that disc. Level data and code stay the reference's. \
-                  INCOMPLETE: the reference's code cannot draw letters with accents; until one way of \
-                  drawing text serves every language, Italian alone borrows the Italian executable's own \
-                  functions for it (to be removed), and French and Spanish show accents wrongly.",
+                  (TS2_LANGUAGE_DIR): Italian, French or Spanish, told by the disc. A language is data and \
+                  nothing else: the places of the executable that refer to a text refer to the text that \
+                  language's executable has in the same place; speech, movies and textures are read from \
+                  that disc. Code, level data and timings stay the reference's. INCOMPLETE: only the \
+                  large typeface of the menus is drawn the one way (one-typeface); in the other \
+                  typefaces letters with accents are still wrong.",
     },
     Modification {
         id: SKIP_MODE_SELECT,
@@ -93,6 +117,11 @@ impl Default for Modifications {
 }
 
 impl Modifications {
+    /// None switched on: the game as its executable is.
+    pub fn none() -> Modifications {
+        Modifications { enabled: Vec::new() }
+    }
+
     pub fn is_enabled(&self, id: &str) -> bool {
         self.enabled.contains(&id)
     }
