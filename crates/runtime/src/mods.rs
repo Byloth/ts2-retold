@@ -105,7 +105,8 @@ pub static CATALOGUE: &[Modification] = &[
                   the game's own code still places the camera from the angles, brings it nearer when something is \
                   in the way and turns it to the character. The camera's two actions turn it as in the original's \
                   \"passive\" camera. The directions the character walks in follow the camera, as in the original. \
-                  Cameras the levels script, the visor and the pause are the original's.",
+                  In the visor (first person) the mouse aims. Cameras the levels script and the pause are \
+                  the original's.",
     },
     Modification {
         id: LANGUAGE,
