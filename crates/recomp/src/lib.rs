@@ -7,4 +7,5 @@
 pub mod analysis;
 pub mod builds;
 pub mod difftest;
+pub mod pairing;
 pub mod pe;

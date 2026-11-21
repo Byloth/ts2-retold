@@ -162,10 +162,14 @@ out of here into the roadmap or an ADR when work on them starts.
   copy in `ref/disc` (ADR 0003).
 - **Italian** (ADR 0016): to be a hybrid on the reference build, made by
   transplanting texts and the language's own functions from the Italian
-  executable through an address map between the two builds. The map has
-  been tried in a script and works; nothing of it is in the tools yet.
-  Next: the map in `crates/recomp`, the texts, the files served from the
-  Italian disc, then the functions one by one, the glyph functions first
+  executable through an address map between the two builds. The map
+  exists (`crates/recomp/src/pairing.rs`, `andy pair`): on the two
+  executables it aligns 33,023 of 33,186 relocation sites in the code
+  and 1,521 of 1,522 elsewhere, pairs 8,622 addresses, 5 of them with
+  more than one answer and 41 left without. Next: the texts, taken site
+  by site (one English text can stand for two Italian ones: the name of
+  the "back" key and the menu's "go back"); the files served from the
+  Italian disc; then the functions one by one, the glyph functions first
   (where the font's accents come from in the data is not yet known).
 - **The other languages**: French, Spanish, Dutch, Swedish, Norwegian and
   Finnish are at hand as disc images; German, Danish and Portuguese have

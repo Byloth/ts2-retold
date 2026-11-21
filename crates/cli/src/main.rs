@@ -54,6 +54,9 @@ USAGE:
                                     keyboard and the sound device;
                                     --seconds closes the window after N
                                     seconds of the machine's clock
+    andy pair FIRST SECOND          Pair the addresses of two builds of the
+                                    game (two language versions) through
+                                    their code, and report how well (ADR 0016)
     andy mods                       List the modifications (docs/MODIFICATIONS.md)
     andy movie FILE [--yuv OUT [--pictures N]] [--pcm OUT]
                                     Decode a movie of the game and write its
@@ -158,6 +161,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
     if command == "mods" {
         list_modifications();
         return Ok(());
+    }
+    if command == "pair" {
+        let (first, second) = (positional.get(1), positional.get(2));
+        let (Some(first), Some(second)) = (first, second) else {
+            return Err("pair needs two executables".into());
+        };
+        return pair(Path::new(first), Path::new(second));
     }
     if command == "movie" {
         let file = positional.get(1).ok_or("movie needs a file")?;
@@ -497,6 +507,46 @@ fn write_surfaces(machine: &mut Machine, directory: &Path) -> Result<usize, Box<
 
 /// Decodes a movie and writes its pictures one after another as planar
 /// YUV 4:2:0, the form other decoders can write too.
+/// Pairs the addresses of two builds of the game and reports how well.
+fn pair(first: &Path, second: &Path) -> Result<(), String> {
+    let load = |path: &Path| -> Result<Image, String> {
+        let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        println!("{}  {}", builds::sha256_hex(&bytes), path.display());
+        Image::parse(&bytes).map_err(|error| format!("{}: {error}", path.display()))
+    };
+    let (first, second) = (load(first)?, load(second)?);
+    let pairing = andy_recomp::pairing::pair(&first, &second);
+    let (a, b, aligned) = pairing.code_sites;
+    println!("relocation sites in the code   {a} and {b}, {aligned} aligned");
+    let (a, b, aligned) = pairing.data_sites;
+    println!("relocation sites elsewhere     {a} and {b}, {aligned} aligned");
+    println!("addresses paired               {}", pairing.pairs.len());
+    println!("  given more than one answer   {}", pairing.conflicts.len());
+    for (from, answers) in &pairing.conflicts {
+        let answers: Vec<String> =
+            answers.iter().map(|(to, count)| format!("{to:#010x} by {count}")).collect();
+        println!("    {from:#010x}: {}", answers.join(", "));
+    }
+    println!("addresses without a pair       {}", pairing.unpaired.len());
+    // Texts: pairs of different strings of printable characters.
+    let text = |image: &Image, at: u32| {
+        let section = image.section_at(at)?;
+        let tail = section.data.get((at - section.va) as usize..)?;
+        let bytes = &tail[..tail.iter().position(|&byte| byte == 0)?];
+        let printable = |byte: &u8| matches!(byte, 9 | 10 | 13 | 32..=126 | 0xA0..);
+        (bytes.len() >= 2 && bytes.iter().all(printable) && !image.is_reloc(at)).then(|| bytes.to_vec())
+    };
+    let differing = pairing
+        .pairs
+        .iter()
+        .filter(
+            |&(&from, &to)| matches!((text(&first, from), text(&second, to)), (Some(a), Some(b)) if a != b),
+        )
+        .count();
+    println!("pairs of different strings     {differing}");
+    Ok(())
+}
+
 fn movie(file: &Path, yuv: Option<&Path>, pcm: Option<&Path>, limit: u64) -> Result<(), String> {
     use std::io::Write;
     let bytes = fs::read(file).map_err(|error| format!("{}: {error}", file.display()))?;
