@@ -10,3 +10,4 @@ pub mod difftest;
 pub mod language;
 pub mod pairing;
 pub mod pe;
+pub mod textures;

@@ -213,3 +213,59 @@ Spanish show letters with accents, and some without, as wrong glyphs.
 The large typeface of the menus has no stroke and no hyphen in any
 language's texture (the Italian game shows a gap for its hyphen), so the
 corrected Italian entry reads "carica salva".
+
+## One atlas, one typeface, one function (2026-11-21, decided by the owner)
+
+The owner settled how text is to be drawn: **when the game is built, the
+atlas of each typeface is rebuilt from all the languages' discs**, with
+every character any of them needs; the built game has one atlas, one
+typeface, one function that draws it, and a language changes the text
+and nothing else.
+
+What the discs hold (found by looking, 2026-11-21):
+
+- A texture file (`*.ngn`) begins with its pictures as plain bitmap
+  files, each with a name; `texNN` is the texture the sprite sheets call
+  number NN (`crates/recomp/src/textures.rs` reads them and can put a
+  picture back; all 187 texture files of the four discs read and write
+  back unchanged).
+- There are three typefaces, each a sheet of sprites over a texture:
+  - the **large** one of the menus (sheet 0x32, cells of 32 by 32 in
+    `tex31` of the front end's texture files). Its first 48 cells are the
+    same picture on all four discs: the letters, the digits and
+    `. , ; : \ / ' ! ? ( )`. The English code draws only the letters and
+    the apostrophe of these. The last 16 cells differ by language: two
+    arrows everywhere, then accents and `¿ ¡ Ø Æ Œ Ç` or a dash, laid out
+    differently in each. Taken together they are 21 different cell
+    pictures, more than 16: the same sign is drawn slightly differently
+    on different discs, so the atlas has to be put together by which
+    sign a cell is, not by its pixels. The Italian disc even carries the
+    Spanish page in three of its files;
+  - the **small** one (sheet 0x43, cells of 16 by 24 in `tex10`): the
+    same picture on all four discs;
+  - the one of the **levels' texts**, part of the page of the levels'
+    own sprites (`tex31` of a level's texture file): one picture on the
+    English disc, another, with more signs, on the three others, which
+    agree.
+- Which glyph a character is, is in each build's code: the reference
+  knows letters and the apostrophe; each language's build maps its own
+  accents to its own cells.
+
+How it is to be built:
+
+1. For each language's build, run its text functions in the interpreter
+   on every character and record what they draw: this says, for each of
+   its cells beyond the common ones, which sign it is.
+2. Put the atlas of each typeface together: the common cells as they
+   are, then one cell for each sign any language has. Write it into the
+   texture files in place of each disc's own page, when the game is
+   built (for the interpreter: when a texture file is read).
+3. One table from character to glyph, or to letter and accent, for the
+   atlas; the project's own, the same for every language.
+4. One native function for each of the reference's text functions,
+   drawing through that table with the reference's own layout. With the
+   English texts the pictures must be the reference's.
+5. The Italian executable's functions go.
+
+This is a modification (ADR 0004): with it off the reference draws its
+own text from its own pages.

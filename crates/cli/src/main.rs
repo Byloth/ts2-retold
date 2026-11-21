@@ -57,6 +57,8 @@ USAGE:
                                     keyboard and the sound device;
                                     --seconds closes the window after N
                                     seconds of the machine's clock
+    andy textures FILE              List the pictures of one of the game's
+                                    texture files (*.ngn)
     andy pair FIRST SECOND [--json OUT]
                                     Pair the addresses of two builds of the
                                     game (two language versions) through
@@ -169,6 +171,32 @@ fn run(args: Vec<String>) -> Result<(), String> {
     };
     if command == "mods" {
         list_modifications();
+        return Ok(());
+    }
+    if command == "textures" {
+        let file = positional.get(1).ok_or("textures needs a file")?;
+        let bytes = fs::read(file).map_err(|error| format!("{file}: {error}"))?;
+        let pictures =
+            andy_recomp::textures::pictures(&bytes).map_err(|error| format!("{file}: {error:?}"))?;
+        for picture in &pictures {
+            println!(
+                "{:8} {:4} x {:<4} {}",
+                picture.name,
+                picture.width,
+                picture.height,
+                builds::sha256_hex(&picture.pixels)
+            );
+        }
+        // Putting each picture back must give the file again; the ones
+        // with a palette cannot be put back and are left out.
+        let (mut again, mut written) = (bytes.clone(), 0);
+        for picture in &pictures {
+            if let Ok(file) = andy_recomp::textures::with_picture(&again, picture) {
+                (again, written) = (file, written + 1);
+            }
+        }
+        let verdict = if again == bytes { "the same" } else { "DIFFERENT" };
+        println!("{} pictures; with {written} of them written back, the file is {verdict}", pictures.len());
         return Ok(());
     }
     if command == "pair" {

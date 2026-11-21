@@ -168,20 +168,21 @@ out of here into the roadmap or an ADR when work on them starts.
   the texts, place by place (330, 345 and 333 places) with corrections
   worded by the project; speech, movies and all textures read from the
   language's disc. **Next, in this order:**
-  1. the typefaces as tables, had by running each build's own text
-     functions in the interpreter on every character and recording what
-     they draw;
-  2. one way of drawing text, native, in place of the reference's text
-     functions, driven by those tables, fitting a text into its room;
-     with English tables the same pictures as the reference;
-  3. then the Italian executable's functions go (`ITALIAN_FUNCTIONS`,
+  1. the typefaces: one atlas of each, rebuilt from all the discs when
+     the game is built, one table from character to glyph and one native
+     function in place of each of the reference's text functions
+     (ADR 0016, "One atlas, one typeface, one function", which lists the
+     steps; done of them: reading and rewriting the texture files);
+  2. then the Italian executable's functions go (`ITALIAN_FUNCTIONS`,
      `ITALIAN_TABLES`, `ITALIAN_COUNTERPARTS` and the transplanting of
      functions with them, unless something else needs it);
-  4. the main menu with loading and saving before the options, for every
-     language, as a modification of the reference's menu;
-  5. texts that a language's build split over two lines are two texts
+  3. the main menu with loading and saving before the options, for every
+     language, as a modification of the reference's menu; and its entry
+     worded with the stroke the large typeface does have ("carica /
+     salva"), once the one function draws it;
+  4. texts that a language's build split over two lines are two texts
      there and one in the reference: to be joined as data.
-  Until 2, French and Spanish show accents and some plain letters as
+  Until 1, French and Spanish show accents and some plain letters as
   wrong glyphs (their textures are laid out for their own code), and
   Italian is right only by the borrowed functions:
   **Checked against the Italian game itself**, which `andy boot` runs as
