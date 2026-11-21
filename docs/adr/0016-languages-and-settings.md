@@ -358,3 +358,25 @@ Added by the owner the same day, for the one function:
   top of its cell and cannot be moved higher; the Spanish and Italian
   accents are moved down in their cells instead.
 
+## A fifth function: the large typeface in quads (2026-11-22)
+
+The screens for loading and saving and a level's name draw the large
+typeface through one more function of the reference (`0x49D390`, with a
+`printf` before it at `0x49B990`): a text centred on a place, thirteen
+apart, as quads cut straight from the typeface's page, not as sprites.
+For each character it works out a cell's corner on the page: letters,
+digits and eleven signs, all where the one table has them; anything
+else is passed over, so the other languages lost their accented letters
+there altogether ("MEN PRINCIPAL").
+
+Only the stretch that works out the cell is replaced (`0x49D3DA` to
+`0x49D57C`): the cell is the one table's, a character with no glyph is
+passed over as before (the stretch can end at two places), and a letter
+with an accent is its letter, with the accent drawn over it by the
+function itself, called for a text that is the accent alone. The
+drawing stays the game's own. English frames are the same as before.
+
+The four codes the reference's function maps to half cells (`0xB2`,
+`0xB3`, `0xB9`, `0xBA`, leftovers of another layout of the page) draw
+nothing now; no text has them.
+

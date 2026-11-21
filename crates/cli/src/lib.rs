@@ -302,8 +302,14 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
 
     // The compiled blocks belong to one code: the code section as it now
     // is, with what the language and the modifications chosen changed.
+    // They are also cut where the runtime's replacements start and resume:
+    // those places are part of what they belong to.
     let code = image.sections.iter().find(|section| section.is_executable());
-    let code_sha256 = code.map(|section| builds::sha256_hex(&section.data)).unwrap_or_default();
+    let mut cut_from = code.map(|section| section.data.clone()).unwrap_or_default();
+    for point in andy_runtime::game::replacement_points() {
+        cut_from.extend(point.to_le_bytes());
+    }
+    let code_sha256 = builds::sha256_hex(&cut_from);
     let blocks = match compiled.filter(|_| !interpret) {
         Some(blocks) if blocks.code_sha256 != code_sha256 => {
             return Err("this program's compiled code was written from other code than this: another \

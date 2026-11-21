@@ -221,7 +221,9 @@ out of here into the roadmap or an ADR when work on them starts.
   1. the typefaces: **done** (`one-typeface`). One atlas of each of the
      three (large, small, levels') put together from all the discs at
      hand, one table, and native functions in place of the reference's
-     four (`0x49B580`, `0x49B2A0`, `0x49B3B0`, `0x49B630`); the Italian
+     four (`0x49B580`, `0x49B2A0`, `0x49B3B0`, `0x49B630`) and of the
+     glyph choice of a fifth (`0x49D390`, the large typeface in quads:
+     the screens for loading and saving, a level's name); the Italian
      executable's functions and tables are gone, and every language runs
      the reference's code with the reference's timings. The boxes of the
      levels' messages (`0x49D390`, `0x49D910`) keep the game's own layout
@@ -251,6 +253,14 @@ out of here into the roadmap or an ADR when work on them starts.
     of a level, the screens for saving and for the keys;
   - the atlases are made at every start; a built game would make them
     once.
+  Known about the texts, seen on the screen where keys are chosen:
+  - in Italian and Spanish the second line of hints reads "pulsante
+    desiderato" / "botón deseado" where English has "return to accept,
+    esc to cancel": a place the two builds' code was aligned at though
+    they draw other things there. With the two hints left in English
+    (above), that screen's hints need the two builds read side by side;
+  - the name of a long key ("barra spaziatrice") runs off the screen's
+    right edge: it is drawn from a fixed place.
   Known about the layout, where the reference's suits English only:
   - the pause menu's dark box is as wide as the English texts: the
     Spanish ones run past it;

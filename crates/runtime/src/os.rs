@@ -26,6 +26,9 @@ pub(crate) const GAME_KEY: &str = "hklm\\software\\travellerstalestoystory2";
 pub struct Os {
     heap_next: u32,
     virtual_next: u32,
+    /// Texts the runtime hands to the game again and again, by where
+    /// each was put ([`Os::kept_string`]).
+    kept_strings: std::collections::HashMap<Vec<u8>, u32>,
     /// Guest addresses of strings handed out once and kept alive.
     pub(crate) command_line: u32,
     /// What follows the program name on its command line.
@@ -105,6 +108,17 @@ impl Os {
         (HEAP_START + HEAP_HEADER..self.heap_next)
             .contains(&block)
             .then(|| memory.read(block - HEAP_HEADER, 4))?
+    }
+
+    /// A NUL-terminated copy of `text` in guest memory that is made once
+    /// and kept: for texts the runtime hands to the game again and again.
+    pub fn kept_string(&mut self, memory: &mut Memory, text: &[u8]) -> u32 {
+        if let Some(&at) = self.kept_strings.get(text) {
+            return at;
+        }
+        let at = self.string(memory, text);
+        self.kept_strings.insert(text.to_vec(), at);
+        at
     }
 
     /// Stores a NUL-terminated copy of `text` in guest memory.

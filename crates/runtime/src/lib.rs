@@ -172,6 +172,10 @@ pub struct Machine {
     /// Stop before executing the instruction at this address. A debugging
     /// aid; the address is never a host function.
     pub breakpoint: Option<u32>,
+    /// Set by the native code of a stretch that can end at more than one
+    /// place: where the game goes on this time (one of the stretch's
+    /// `also_resumes`).
+    pub resume_at: Option<u32>,
     /// The game's code as compiled blocks, if the machine has it, and for
     /// each byte of the code the number, from one, of the block that
     /// begins there.
@@ -235,6 +239,7 @@ impl Machine {
             note: None,
             first_inexact: None,
             breakpoint: None,
+            resume_at: None,
             blocks: None,
             block_index: Vec::new(),
             check_blocks: false,
@@ -351,6 +356,7 @@ impl Machine {
             name: "recorded call",
             callee_pops: 0,
             resume: None,
+            also_resumes: &[],
             reference_only: false,
             function: |m| {
                 let (function, esp) = (m.cpu.eip, m.cpu.regs[4]);
@@ -375,9 +381,11 @@ impl Machine {
     /// Runs the native function that stands in for a function of the game,
     /// then returns to the game's caller.
     fn run_replacement(&mut self, replacement: &Replacement) -> Result<(), Stop> {
+        self.resume_at = None;
         (replacement.function)(self)?;
-        // A stretch of code inside a function: the game goes on after it.
-        if let Some(resume) = replacement.resume {
+        // A stretch of code inside a function: the game goes on after it,
+        // or where the native code said.
+        if let Some(resume) = self.resume_at.take().or(replacement.resume) {
             self.cpu.eip = resume;
             return Ok(());
         }

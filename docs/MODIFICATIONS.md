@@ -71,7 +71,9 @@ The atlas takes the place of each disc's page as texture files are read
 (`Files::texture_filter`), and the image gets a sheet record with all the
 atlas's cells. Then the reference's text functions (`0x49B580` for the
 large typeface, `0x49B2A0` and `0x49B3B0` for the small one, `0x49B630`
-for a character of the levels' one) are replaced
+for a character of the levels' one, and the stretch `0x49D3DA` to
+`0x49D57C` of `0x49D390`, which chooses the glyph of a text drawn in
+quads) are replaced
 by native ones (`crates/runtime/src/typeface.rs`) that lay a text out one
 way and draw through one table from character to glyph, the same for
 every language: with the English texts the pictures are the original's,

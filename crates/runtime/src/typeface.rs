@@ -239,6 +239,70 @@ pub fn draw_level_character(m: &mut Machine) -> Result<(), Stop> {
     Ok(())
 }
 
+// The reference has one more way of drawing the large typeface: the
+// function at 0x49D390 (the screens for loading and saving, a level's
+// name) draws a text centred on a place, thirteen apart, as quads it
+// takes straight from the typeface's page. For each character it works
+// out the corner of a cell of the page (letters, digits and eleven
+// signs; anything else is passed over) and then draws the quad.
+
+/// The function, the stretch of it that works out a character's cell
+/// (from the character's fetching to the drawing), where the drawing
+/// begins, and where a character that is not drawn goes on.
+const DRAW_QUADS: u32 = 0x0049_D390;
+pub(crate) const QUADS_GLYPH: u32 = 0x0049_D3DA;
+pub(crate) const QUADS_DRAW: u32 = 0x0049_D57C;
+pub(crate) const QUADS_NEXT: u32 = 0x0049_D654;
+/// How far the function's first letter is from the place the text is
+/// centred on, for a text of one letter (half of thirteen, rounded down).
+const QUADS_HALF_STEP: i32 = 6;
+
+/// Replaces the stretch that works out a character's cell: the cell is
+/// the one table's, so every sign of the atlas can be drawn, and a letter
+/// with an accent is its letter with the accent drawn over it (by the
+/// function itself, called for a text that is the accent alone).
+///
+/// At the stretch's start `ecx` holds the text and `edi` the character's
+/// number; on the stack are the height (`esp+0x34`), where this
+/// character goes (`esp+0x18`) and the four numbers of its colour
+/// (`esp+0x3C` on). The stretch leaves the cell's corner on the page at
+/// `esp+0x38` (across) and `esp+0x10` (down).
+pub fn choose_quads_glyph(m: &mut Machine) -> Result<(), Stop> {
+    let (esp, text, number) = (m.cpu.regs[4], m.cpu.regs[1], m.cpu.regs[7]);
+    let character = m.game_word(text.wrapping_add(number))? as u8;
+    let Some(glyph) = LARGE.glyph(character) else {
+        m.resume_at = Some(QUADS_NEXT);
+        return Ok(());
+    };
+    if let Some(accent) = glyph.accent.and_then(accent_character) {
+        let (y, x) = (m.game_word(esp + 0x34)? as i32, m.game_word(esp + 0x18)? as i32);
+        let mut colour = [0; 4];
+        for (place, value) in colour.iter_mut().enumerate() {
+            *value = m.game_word(esp + 0x3C + 4 * place as u32)?;
+        }
+        let alone = m.os.kept_string(&mut m.memory, &[accent]);
+        let [c1, c2, c3, c4] = colour;
+        let arguments = [alone, (y - LARGE.accent_rise) as u32, (x + QUADS_HALF_STEP) as u32, c1, c2, c3, c4];
+        m.call_guest_c(DRAW_QUADS, &arguments)?;
+    }
+    let across = LARGE.across as u32;
+    let corner = [(glyph.cell % across) * LARGE.cell.0 as u32, (glyph.cell / across) * LARGE.cell.1 as u32];
+    for (at, value) in [esp + 0x38, esp + 0x10].into_iter().zip(corner) {
+        m.memory
+            .write(at, 4, value)
+            .ok_or(Stop::Fault(andy_cpu::interp::Fault::Memory { address: at, write: true }))?;
+    }
+    Ok(())
+}
+
+/// The character that is an accent standing alone, by the accent's cell
+/// in the large typeface's atlas.
+fn accent_character(cell: u32) -> Option<u8> {
+    [b'`', 0xB4, b'^', 0xA8, b'~', 0xB0].into_iter().find(|&character| {
+        LARGE.glyph(character).is_some_and(|glyph| glyph.cell == cell && glyph.accent.is_none())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +319,15 @@ mod tests {
         assert_eq!(first + 23 * step / 256, 270);
         assert_eq!(large_half_width(b"start game"), 60);
         assert_eq!(large_half_width(b"a\nstart game\nab"), 60);
+    }
+
+    #[test]
+    fn every_accent_of_the_large_typeface_has_a_character_of_its_own() {
+        for letter in [0xE0u8, 0xE9, 0xEA, 0xEB, 0xF1, 0xE5] {
+            let accent = LARGE.glyph(letter).unwrap().accent.unwrap();
+            let alone = accent_character(accent).unwrap();
+            assert_eq!(LARGE.glyph(alone).map(|glyph| (glyph.cell, glyph.accent)), Some((accent, None)));
+        }
     }
 
     #[test]

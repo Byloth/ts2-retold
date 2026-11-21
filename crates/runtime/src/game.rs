@@ -28,6 +28,9 @@ pub struct Replacement {
     /// function: where the game goes on after it. The native code leaves
     /// the registers and the stack as the stretch would.
     pub resume: Option<u32>,
+    /// Other places the game may go on at after a stretch, which the
+    /// native code then says itself ([`Machine::resume_at`]).
+    pub also_resumes: &'static [u32],
     /// Whether it is written against the reference build's code and data
     /// and so cannot serve another build run as it is.
     pub reference_only: bool,
@@ -41,7 +44,8 @@ pub struct Replacement {
 /// be cut at (`andy_recomp::blocks`).
 pub fn replacement_points() -> Vec<u32> {
     let points = REPLACEMENTS.iter().flat_map(|replacement| {
-        [Some((replacement.address)(&Addresses::REFERENCE)), replacement.resume].into_iter().flatten()
+        let fixed = [Some((replacement.address)(&Addresses::REFERENCE)), replacement.resume];
+        fixed.into_iter().flatten().chain(replacement.also_resumes.iter().copied())
     });
     points.collect()
 }
@@ -53,6 +57,7 @@ pub static REPLACEMENTS: &[Replacement] = &[
         name: "screen mode select",
         callee_pops: 0,
         resume: None,
+        also_resumes: &[],
         reference_only: false,
         function: select_screen_mode,
     },
@@ -62,6 +67,7 @@ pub static REPLACEMENTS: &[Replacement] = &[
         name: "main menu arrows",
         callee_pops: 0,
         resume: Some(MAIN_MENU_AFTER_ARROWS),
+        also_resumes: &[],
         reference_only: true,
         function: draw_main_menu_arrows,
     },
@@ -71,6 +77,7 @@ pub static REPLACEMENTS: &[Replacement] = &[
         name: "options menu pointers",
         callee_pops: 0,
         resume: Some(OPTIONS_AFTER_POINTERS),
+        also_resumes: &[],
         reference_only: true,
         function: draw_options_pointers,
     },
@@ -80,6 +87,7 @@ pub static REPLACEMENTS: &[Replacement] = &[
         name: "text in the large typeface, centred",
         callee_pops: 0,
         resume: None,
+        also_resumes: &[],
         reference_only: true,
         function: crate::typeface::draw_large_centred,
     },
@@ -89,6 +97,7 @@ pub static REPLACEMENTS: &[Replacement] = &[
         name: "text in the small typeface, centred",
         callee_pops: 0,
         resume: None,
+        also_resumes: &[],
         reference_only: true,
         function: crate::typeface::draw_small_centred,
     },
@@ -98,6 +107,7 @@ pub static REPLACEMENTS: &[Replacement] = &[
         name: "text in the small typeface, at a place",
         callee_pops: 0,
         resume: None,
+        also_resumes: &[],
         reference_only: true,
         function: crate::typeface::draw_small_at,
     },
@@ -107,8 +117,19 @@ pub static REPLACEMENTS: &[Replacement] = &[
         name: "a character of the levels' typeface",
         callee_pops: 0,
         resume: None,
+        also_resumes: &[],
         reference_only: true,
         function: crate::typeface::draw_level_character,
+    },
+    Replacement {
+        modification: ONE_TYPEFACE,
+        address: |_| crate::typeface::QUADS_GLYPH,
+        name: "which glyph of the large typeface a character of a text drawn in quads is",
+        callee_pops: 0,
+        resume: Some(crate::typeface::QUADS_DRAW),
+        also_resumes: &[crate::typeface::QUADS_NEXT],
+        reference_only: true,
+        function: crate::typeface::choose_quads_glyph,
     },
 ];
 

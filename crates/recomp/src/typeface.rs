@@ -77,6 +77,12 @@ pub struct Glyph {
 pub fn sign_of(character: u8) -> Option<Sign> {
     Some(match character {
         b'-' => Hyphen,
+        // An accent standing alone.
+        b'`' => Grave,
+        0xB4 => Acute,
+        b'^' => Circumflex,
+        0xA8 => Diaeresis,
+        b'~' => Tilde,
         b'|' => Pipe,
         b'*' => Asterisk,
         b'\'' => Apostrophe,
