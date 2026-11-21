@@ -55,6 +55,15 @@ pub static REPLACEMENTS: &[Replacement] = &[
         function: draw_main_menu_arrows,
     },
     Replacement {
+        modification: MENU_ARROWS_BY_TEXT,
+        address: |_| OPTIONS_POINTERS,
+        name: "options menu pointers",
+        callee_pops: 0,
+        resume: Some(OPTIONS_AFTER_POINTERS),
+        reference_only: true,
+        function: draw_options_pointers,
+    },
+    Replacement {
         modification: ONE_TYPEFACE,
         address: |_| 0x0049_B580,
         name: "text in the large typeface, centred",
@@ -116,6 +125,67 @@ pub(crate) const SCREEN_MIDDLE: i32 = 160;
 /// has for its ten-letter entry (100 - 64 and 240 - 220).
 const ARROW_BEFORE: i32 = 36;
 const ARROW_AFTER: i32 = 20;
+
+// The options menu (in the function at 0x437400) draws, every frame, two
+// pointers beside the entry chosen, at x = 48 and x = 240, and then its
+// four entries in the small typeface, centred, eight apart: right for an
+// entry of twenty letters, the longest the reference has. A longer one,
+// as other languages have, runs under the pointers.
+
+/// Where the stretch that draws the two pointers begins, and where the
+/// code goes on after the two calls (it then removes their eight
+/// arguments).
+const OPTIONS_POINTERS: u32 = 0x0043_75FB;
+const OPTIONS_AFTER_POINTERS: u32 = 0x0043_7620;
+/// The sheet of the pointers, and the first of its pictures they turn
+/// through.
+const POINTER_SHEET: u32 = 0x34;
+const POINTER_PICTURES: u32 = 0x10;
+/// Where the code holds the address of each entry's text.
+const OPTIONS_TEXTS: [u32; 4] = [0x0043_7641, 0x0043_7657, 0x0043_766C, 0x0043_7682];
+/// The height the pointers are at beside the first entry (the first of
+/// the heights at 0x4F6BD4) and the step to the next.
+const OPTIONS_TOP: i32 = 65;
+const OPTIONS_STEP: i32 = 20;
+/// Where the reference draws the two pointers, and how far left of a
+/// text's first letter the left one is then: what it has for its entry
+/// of twenty letters (80 - 48; the right one is drawn where the text
+/// ends).
+const POINTER_LEFT: i32 = 48;
+const POINTER_RIGHT: i32 = 240;
+const POINTER_BEFORE: i32 = 32;
+
+/// Replaces the stretch of the options menu that draws the two pointers:
+/// where the entry they are at is wider than the reference's widest, they
+/// stand further apart, beside it; never closer than the reference has
+/// them.
+///
+/// At the stretch's start `ebx` holds the picture the left pointer is
+/// turned to and `esi` the pointers' height; it leaves the arguments of
+/// its two calls on the stack.
+fn draw_options_pointers(m: &mut Machine) -> Result<(), Stop> {
+    let (turn, y) = (m.cpu.regs[3], m.cpu.regs[6]);
+    let mut half_widths = [0i32; 4];
+    for (site, half_width) in OPTIONS_TEXTS.into_iter().zip(&mut half_widths) {
+        let text = m.game_word(site)?;
+        let text = crate::typeface::text_at(m, text);
+        *half_width = crate::typeface::small_half_width(&text);
+    }
+    // Where the pointers are between two entries, in 256ths of a step.
+    let along = ((y as i32 - OPTIONS_TOP) * 256 / OPTIONS_STEP).clamp(0, 3 * 256);
+    let (from, part) = ((along / 256).min(2) as usize, along - (along / 256).min(2) * 256);
+    let half_width = (half_widths[from] * (256 - part) + half_widths[from + 1] * part) / 256;
+    let left = POINTER_LEFT.min(SCREEN_MIDDLE - half_width - POINTER_BEFORE);
+    let right = POINTER_RIGHT.max(SCREEN_MIDDLE + half_width);
+    let esp = m.cpu.regs[4];
+    let pictures = [turn + POINTER_PICTURES, ((turn + 2) & 7) + POINTER_PICTURES];
+    for (x, picture) in [left, right].into_iter().zip(pictures) {
+        m.call_guest_c(crate::typeface::DRAW_ICON, &[x as u32, y, POINTER_SHEET, picture])?;
+    }
+    // The stretch's two calls leave their arguments for the code after it.
+    m.cpu.regs[4] = esp - 4 * 8;
+    Ok(())
+}
 
 /// Replaces the stretch of the main menu that draws the two arrows: they
 /// are drawn beside the text of the entry they are at, wherever that text

@@ -76,6 +76,38 @@ fn start_of_text(image: &Image, at: u32) -> u32 {
     start
 }
 
+/// What was done with the texts that stand, in one build or the other,
+/// between two places that were aligned (see [`Hybrid::texts_between`]).
+/// Places are given by where the address is written, each in its build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Between {
+    /// A place of the reference was given the other build's texts, in
+    /// their order: one, or several as the lines of one text.
+    Given { site: u32, texts: Vec<u32> },
+    /// Texts the other build draws right after an aligned text were made
+    /// further lines of it.
+    Continued { site: u32, texts: Vec<u32> },
+    /// Nothing was done: the two builds have these places, which could
+    /// not be told apart. The reference's stay as they are.
+    Left { reference: Vec<u32>, other: Vec<u32> },
+}
+
+/// How far after a place of the other build a text may be referred to and
+/// still be taken for a further line of that place's text: two calls of a
+/// text function with their arguments.
+const CONTINUATION_REACH: u32 = 48;
+
+/// The most lines the other build's texts are made into for one place of
+/// the reference: it draws in two lines what the reference draws in one.
+/// More than that for one place is not one text cut in pieces.
+const MOST_LINES: usize = 2;
+
+/// Whether a text is words, and not a sign or a filler: only such are
+/// told apart by where they stand.
+fn is_words(text: &[u8]) -> bool {
+    text.len() >= 2 && text.iter().any(u8::is_ascii_lowercase)
+}
+
 /// The reference image being given another language.
 pub struct Hybrid<'a> {
     reference: &'a Image,
@@ -144,6 +176,145 @@ impl<'a> Hybrid<'a> {
             self.write(site, now);
             self.moved.push(Moved { site, from, to, now });
         }
+    }
+
+    /// Puts a text of the project's making beside the other build's.
+    fn place_bytes(&mut self, bytes: &[u8]) -> u32 {
+        let at = self.section_va + self.texts.len() as u32;
+        self.texts.extend_from_slice(bytes);
+        self.texts.push(0);
+        self.texts.resize(self.texts.len().next_multiple_of(4), 0);
+        at
+    }
+
+    /// The other build's texts referred to from these places of it, as
+    /// the lines of one text.
+    fn lines(&self, sites: &[u32]) -> Vec<u8> {
+        let texts = sites.iter().filter_map(|&site| text(self.other, self.other.read_u32(site)?));
+        let lines: Vec<&[u8]> = texts.map(|line| line.trim_ascii_end()).collect();
+        lines.join(&b'\n')
+    }
+
+    /// Deals with the texts [`Hybrid::texts`] cannot reach: those referred
+    /// to from places of the code that were not aligned, because the code
+    /// around them differs between the builds. To be called after it.
+    ///
+    /// Between two aligned places the two builds refer to texts in the
+    /// same order. Texts that are the same in both (the names of keys,
+    /// signs) are taken as the same places, and divide the stretch. In
+    /// what is left between them:
+    ///
+    /// - as many texts in the other build as in the reference, or twice
+    ///   as many: each place of the reference gets its
+    ///   one, or its several as the lines of one text (the other build
+    ///   draws in two lines what the reference draws in one);
+    /// - texts in the other build only, right after an aligned place whose
+    ///   text was brought over: further lines of that text;
+    /// - anything else is left alone and reported.
+    pub fn texts_between(&mut self) -> Vec<Between> {
+        let (reference, other) = (self.reference, self.other);
+        let in_code = |image: &Image, site: u32| image.section_at(site).is_some_and(Section::is_executable);
+        let mut aligned: Vec<(u32, u32)> = self.pairing.sites.clone();
+        aligned.retain(|&(here, there)| in_code(reference, here) && in_code(other, there));
+        aligned.sort_unstable();
+        // The places of a build's code that refer to a text and were not aligned.
+        let loose = |image: &Image, taken: Vec<u32>| -> Vec<u32> {
+            let refers_to_text = |site: u32| {
+                let text = image.read_u32(site).and_then(|at| text(image, at));
+                text.is_some_and(|text| !is_source_path(text))
+            };
+            let mut sites: Vec<u32> = image.relocs.clone();
+            sites.retain(|&site| {
+                in_code(image, site) && taken.binary_search(&site).is_err() && refers_to_text(site)
+            });
+            sites
+        };
+        let mut taken_there: Vec<u32> = aligned.iter().map(|&(_, there)| there).collect();
+        taken_there.sort_unstable();
+        let here = loose(reference, aligned.iter().map(|&(here, _)| here).collect());
+        let there = loose(other, taken_there);
+        let content = |image: &'a Image, site: u32| image.read_u32(site).and_then(|at| text(image, at));
+
+        let mut done = Vec::new();
+        let ends = aligned.iter().copied().chain([(u32::MAX, u32::MAX)]);
+        let mut from = (0u32, 0u32);
+        for to in ends {
+            let within = |sites: &[u32], low: u32, high: u32| -> Vec<u32> {
+                sites.iter().copied().filter(|&site| site > low && site < high).collect()
+            };
+            let (ours, theirs) = (within(&here, from.0, to.0), within(&there, from.1, to.1));
+            let head = Some(from).filter(|&(here, _)| here != 0);
+            from = to;
+            if ours.is_empty() && theirs.is_empty() {
+                continue;
+            }
+            // Texts that are the same in both, in order, divide the stretch.
+            let (mut pieces, mut piece, mut next) = (Vec::new(), (Vec::new(), head), 0);
+            for &site in &ours {
+                let same =
+                    (next..theirs.len()).find(|&at| content(other, theirs[at]) == content(reference, site));
+                match same {
+                    Some(at) => {
+                        let (ours, head) = std::mem::replace(&mut piece, (Vec::new(), None));
+                        pieces.push((ours, theirs[next..at].to_vec(), head));
+                        next = at + 1;
+                    }
+                    None => piece.0.push(site),
+                }
+            }
+            pieces.push((piece.0, theirs[next..].to_vec(), piece.1));
+            for (ours, theirs, head) in pieces {
+                let words = |image: &'a Image, sites: Vec<u32>| -> Vec<u32> {
+                    sites.into_iter().filter(|&site| content(image, site).is_some_and(is_words)).collect()
+                };
+                let (ours, theirs) = (words(reference, ours), words(other, theirs));
+                if theirs.is_empty() {
+                    if !ours.is_empty() {
+                        done.push(Between::Left { reference: ours, other: theirs });
+                    }
+                } else if ours.is_empty() {
+                    // Further lines of the aligned text before them.
+                    let moved = head.and_then(|(here, there)| {
+                        let near = theirs
+                            .iter()
+                            .zip([there].iter().chain(&theirs))
+                            .all(|(&site, &before)| site - before <= CONTINUATION_REACH);
+                        self.moved.iter().position(|moved| moved.site == here && near)
+                    });
+                    match moved {
+                        Some(moved) => {
+                            let site = self.moved[moved].site;
+                            let first = self.pairing.sites.iter().find(|&&(here, _)| here == site);
+                            let mut sites = vec![first.expect("it was moved by its pair").1];
+                            sites.extend(&theirs);
+                            let now = self.place_bytes(&self.lines(&sites));
+                            self.write(site, now);
+                            self.moved[moved].now = now;
+                            done.push(Between::Continued { site, texts: theirs });
+                        }
+                        None => done.push(Between::Left { reference: ours, other: theirs }),
+                    }
+                } else if theirs.len() % ours.len() == 0 && theirs.len() / ours.len() <= MOST_LINES {
+                    let each = theirs.len() / ours.len();
+                    for (&site, theirs) in ours.iter().zip(theirs.chunks(each)) {
+                        let (from, to) = (reference.read_u32(site), other.read_u32(theirs[0]));
+                        let (from, to) =
+                            (from.expect("it refers to a text"), to.expect("it refers to a text"));
+                        let now = if each == 1 {
+                            self.place_text(to)
+                        } else {
+                            self.place_bytes(&self.lines(theirs))
+                        };
+                        self.write(site, now);
+                        self.moved.push(Moved { site, from, to, now });
+                        done.push(Between::Given { site, texts: theirs.to_vec() });
+                    }
+                } else {
+                    done.push(Between::Left { reference: ours, other: theirs });
+                }
+            }
+        }
+        done
     }
 
     /// The image with its new sections.
@@ -273,5 +444,84 @@ mod tests {
         assert_eq!(text(&reference, reference.read_u32(CODE + 1).unwrap()), Some(&b"start game"[..]));
         let kept = transplant_texts(&reference, &other, &pairing, &[DATA]);
         assert_eq!(kept.moved.len(), 1);
+    }
+
+    /// The text a place of an image refers to.
+    fn pointed(image: &Image, site: u32) -> Vec<u8> {
+        text(image, image.read_u32(site).unwrap()).unwrap().to_vec()
+    }
+
+    #[test]
+    fn texts_between_aligned_places_are_told_apart_by_their_order() {
+        // The reference draws: a title, two entries, a key's name, a hint.
+        let reference = image(
+            &[b"pause menu", b"continue", b"exit level", b"???", b"jump to select"],
+            &[0, 1, 2, 3, 4],
+            &[],
+        );
+        // The other build: its title and after it a second line of it; its
+        // two entries; the same key's name; its hint in two lines.
+        let texts: [&[u8]; 7] = [
+            b"menu di pausa",
+            b"del gioco ",
+            b"continua",
+            b"esci dal livello",
+            b"???",
+            b"premi salto",
+            b"per scegliere",
+        ];
+        let other = image(&texts, &[0, 1, 2, 3, 4, 5, 6], &[]);
+        // Only the titles were aligned: the code around the rest differs.
+        let mut pairing = pair(&reference, &other);
+        pairing.sites = vec![(CODE + 1, CODE + 1)];
+        let mut hybrid = Hybrid::new(&reference, &other, &pairing);
+        hybrid.texts(&[]);
+        let done = hybrid.texts_between();
+        let site = |push: u32| CODE + 1 + 5 * push;
+        assert_eq!(
+            done,
+            [
+                // The key's name divides what follows the title in two.
+                // Before it: two for two. (The title's second line is
+                // among them, so nothing says it is one: three for two.)
+                Between::Left { reference: vec![site(1), site(2)], other: vec![site(1), site(2), site(3)] },
+                Between::Given { site: site(4), texts: vec![site(5), site(6)] },
+            ]
+        );
+        let image = hybrid.finish().image;
+        assert_eq!(pointed(&image, site(0)), b"menu di pausa");
+        assert_eq!(pointed(&image, site(1)), b"continue");
+        assert_eq!(pointed(&image, site(4)), b"premi salto\nper scegliere");
+
+        // Without the second line of the title: two for two, in order.
+        let other = image_of(&[texts[0], texts[2], texts[3], texts[4], texts[5]]);
+        let mut pairing = pair(&reference, &other);
+        pairing.sites = vec![(CODE + 1, CODE + 1)];
+        let mut hybrid = Hybrid::new(&reference, &other, &pairing);
+        hybrid.texts(&[]);
+        let done = hybrid.texts_between();
+        assert_eq!(done.len(), 3);
+        let image = hybrid.finish().image;
+        assert_eq!(pointed(&image, site(1)), b"continua");
+        assert_eq!(pointed(&image, site(2)), b"esci dal livello");
+        assert_eq!(pointed(&image, site(4)), b"premi salto");
+
+        // A text of the other build alone, right after an aligned text:
+        // a further line of it. Further away it is not.
+        let reference = image_of(&[b"select slot", b"file.dat"]);
+        let other = image_of(&[b"scegli la casella ", b"da cui caricare", b"file.dat"]);
+        let mut pairing = pair(&reference, &other);
+        pairing.sites = vec![(CODE + 1, CODE + 1), (CODE + 6, CODE + 11)];
+        let mut hybrid = Hybrid::new(&reference, &other, &pairing);
+        hybrid.texts(&[]);
+        assert_eq!(hybrid.texts_between(), [Between::Continued { site: CODE + 1, texts: vec![CODE + 6] }]);
+        let image = hybrid.finish().image;
+        assert_eq!(pointed(&image, CODE + 1), b"scegli la casella\nda cui caricare");
+    }
+
+    /// An image that pushes each of its texts once, in order.
+    fn image_of(texts: &[&[u8]]) -> Image {
+        let pushed: Vec<usize> = (0..texts.len()).collect();
+        image(texts, &pushed, &[])
     }
 }

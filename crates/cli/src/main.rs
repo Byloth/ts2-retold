@@ -727,8 +727,38 @@ fn in_another_language(reference: Image) -> Result<(Image, &'static str), String
     let pairing = andy_recomp::pairing::pair(&reference, &other);
     let mut hybrid = andy_recomp::language::Hybrid::new(&reference, &other, &pairing);
     hybrid.texts(&[]);
+    let between = hybrid.texts_between();
     let transplant = hybrid.finish();
     println!("language  {build}: {} places refer to its texts", transplant.moved.len());
+    // What could not be told apart stays in the reference's language: said
+    // every time, so that it is not taken for done.
+    let latin = |image: &Image, site: &u32| -> String {
+        let text = image.read_u32(*site).and_then(|at| andy_recomp::language::text(image, at));
+        format!(
+            "{site:#x} {:?}",
+            text.unwrap_or_default().iter().map(|&byte| byte as char).collect::<String>()
+        )
+    };
+    for done in &between {
+        use andy_recomp::language::Between;
+        match done {
+            Between::Left { reference: ours, other: theirs }
+                if !ours.is_empty() || env::var_os("ANDY_TEXTS").is_some() =>
+            {
+                let ours: Vec<String> = ours.iter().map(|site| latin(&reference, site)).collect();
+                let theirs: Vec<String> = theirs.iter().map(|site| latin(&other, site)).collect();
+                println!("          left as they are: {} (there: {})", ours.join(", "), theirs.join(", "));
+            }
+            Between::Given { site, texts } | Between::Continued { site, texts }
+                if env::var_os("ANDY_TEXTS").is_some() =>
+            {
+                let theirs: Vec<String> = texts.iter().map(|site| latin(&other, site)).collect();
+                let kind = if matches!(done, Between::Given { .. }) { "given" } else { "continued with" };
+                println!("          {} {kind} {}", latin(&reference, site), theirs.join(", "));
+            }
+            _ => {}
+        }
+    }
     Ok((transplant.image, build))
 }
 

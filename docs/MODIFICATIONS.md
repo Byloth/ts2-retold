@@ -9,7 +9,7 @@ list. With every entry off the port behaves like the original.
 | `language` | feature | no | no | The game in another language (ADR 0016), from the user's own disc of that language (`TS2_LANGUAGE_DIR`): Italian, French or Spanish, told by the disc. A language is data and nothing else: the places of the executable that refer to a text refer to the text that language's executable has in the same place; speech, movies and textures are read from that disc. Code, level data and timings stay the reference's. **Incomplete**: only the large typeface of the menus is drawn the one way (`one-typeface`); in the other typefaces letters with accents are still wrong. |
 | `one-typeface` | feature | no | yes | Text in the large and the small typeface is drawn by one function with one table from character to glyph, for every language, from one atlas put together from all the discs at hand, with every sign any of them has, each once (ADR 0016): the hyphen, the accents, `¿ ¡ Æ Œ Ç` are there for every language. It also draws the digits and signs the original's function leaves out though the typeface has them (the stroke among them), lays out texts with line breaks, and sets a line closer when it is too wide. English texts come out as in the original, pixel for pixel. |
 | `menu-load-save-wording` | feature | no | yes | The main menu's entry for loading and saving reads "load/save" ("carica/salva", "charger/sauvegarder", "cargar/guardar"), where the original has "load game" and the other languages "carica-salva opzioni", "charger-sauvegarder", "cargar-guardar". Needs `one-typeface` for the stroke. Decided by the owner. |
-| `menu-arrows-by-text` | fix | no | yes | The two arrows of the main menu stand beside the text of the entry chosen, wherever it begins and ends, and go from one width to the other as they move. The original draws them at two fixed places that suit its first entry, ten letters long: beside a shorter entry they stand far off, and on a longer one (in other languages) they fall on the text. |
+| `menu-arrows-by-text` | fix | no | yes | What a menu draws beside the entry chosen follows that entry's text, worked out when it is drawn. The two arrows of the main menu stand beside the text wherever it begins and ends, and go from one width to the other as they move; the original draws them at two fixed places that suit its first entry, ten letters long: beside a shorter entry they stand far off, and on a longer one (in other languages) they fall on the text. The two pointers of the options menu stand where the original has them, and further apart where an entry is wider than the original's widest, twenty letters. |
 | `menu-load-before-options` | feature | no | yes | In the main menu the entry for loading and saving comes before the options (the original has the options second and loading third), in every language. Decided by the owner. |
 | `skip-mode-select` | feature | no | yes | The start-up "Screen Mode Select" window does not exist: the game's routine for it is replaced by one that makes the choice the original proposes when nothing was saved (the first hardware 3D device and the first mode at least 480 lines high: 640×480 at 16 bits, full screen). Choices saved in `toy2.cfg` are ignored, since they index lists that differ from one machine to another. |
 
@@ -27,7 +27,9 @@ goes on after the stretch. `menu-arrows-by-text` replaces the stretch of
 the main menu (`0x437E61` to `0x437EAE`) that draws the two arrows: it
 measures the text of the entry they are at (the large typeface sets its
 letters 12 apart) and calls the game's own sprite function with the two
-places worked out, where the original passes 64 and 240.
+places worked out, where the original passes 64 and 240. The same
+modification replaces the stretch of the options menu (`0x4375FB` to
+`0x437620`) that draws its two pointers at 48 and 240.
 
 A modification can also be **a change of the image** before it is loaded:
 `menu-load-before-options` exchanges, in the main menu's code, the texts
@@ -48,6 +50,13 @@ from the other language's disc (`crates/runtime/src/files.rs`). The
 addresses of the reference executable are paired with those of the other
 build through their code (`crates/recomp/src/pairing.rs`), and each place
 that refers to a text is made to refer to the text of the paired place.
+Texts referred to from places that could not be aligned, because the code
+around them differs, are told apart by their order between two aligned
+places (`Hybrid::texts_between`): one for one, two of the other build as
+the two lines of one text where it draws in two lines what the reference
+draws in one, and a text right after an aligned one as a further line of
+it. What cannot be told apart stays in English and is listed every time
+the game is started.
 Nothing else: no function and no table of the other build is taken, and
 the code that runs, with its timings, is the reference's for every
 language (ADR 0016, "A language is data").

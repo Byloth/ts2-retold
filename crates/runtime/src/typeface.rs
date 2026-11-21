@@ -37,7 +37,7 @@ const USUAL_SIZE: i32 = 0x800;
 /// icon (x, y, sheet, picture), the sheet of the buttons' icons, and the
 /// picture drawn for each of the characters 1 to 4 in a centred text of
 /// the small typeface.
-const DRAW_ICON: u32 = 0x0049_4820;
+pub(crate) const DRAW_ICON: u32 = 0x0049_4820;
 const BUTTONS_SHEET: u32 = 0x44;
 const BUTTONS: [u32; 4] = [2, 3, 1, 0];
 
@@ -62,6 +62,15 @@ pub fn large_half_width(text: &[u8]) -> i32 {
             let (first, _) = large_line(line.len());
             SCREEN_MIDDLE - first
         })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Half the width of the widest line of a text in the small typeface,
+/// centred on the screen at its usual size.
+pub fn small_half_width(text: &[u8]) -> i32 {
+    text.split(|&byte| byte == b'\n')
+        .map(|line| SCREEN_MIDDLE - centred_line(line.len(), SMALL_STEP, SMALL_WIDEST).0)
         .max()
         .unwrap_or(0)
 }

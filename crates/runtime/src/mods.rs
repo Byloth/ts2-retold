@@ -64,10 +64,13 @@ pub static CATALOGUE: &[Modification] = &[
         class: Class::Fix,
         affects_simulation: false,
         enabled_by_default: true,
-        summary: "The two arrows of the main menu stand beside the text of the entry chosen, wherever it \
-                  begins and ends, and go from one width to the other as they move. The original draws \
-                  them at two fixed places that suit its first entry, ten letters long: beside a shorter \
-                  entry they stand far off, and on a longer one (in other languages) they fall on the text.",
+        summary: "What a menu draws beside the entry chosen follows that entry's text, worked out when \
+                  it is drawn. The two arrows of the main menu stand beside the text wherever it begins \
+                  and ends, and go from one width to the other as they move; the original draws them at \
+                  two fixed places that suit its first entry, ten letters long: beside a shorter entry \
+                  they stand far off, and on a longer one (in other languages) they fall on the text. \
+                  The two pointers of the options menu stand where the original has them, and further \
+                  apart where an entry is wider than the original's widest, twenty letters.",
     },
     Modification {
         id: MENU_LOAD_BEFORE_OPTIONS,

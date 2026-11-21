@@ -187,9 +187,16 @@ out of here into the roadmap or an ADR when work on them starts.
      differs between the English disc and the others) and the text boxes
      (`0x49D390`, `0x49D910`). Until then accents in those are wrong in
      Italian, French and Spanish;
-  2. texts that a language's build split over two lines are two texts
-     there and one in the reference: to be joined as data with a line
-     break (the one function lays `\n` out already);
+  2. texts that a language's build split over two lines are joined as
+     the lines of one text (`Hybrid::texts_between`), and about thirty
+     texts each language had left in English, in code that differs
+     between the builds, are brought over by their order (the pause
+     menu, the slots for saving, the hints). **Left in English**, listed
+     at every start: in Italian and Spanish two hints of the screen
+     where keys are chosen (the other build has five lines for the
+     reference's three texts); in Italian "you need more tokens" and
+     "jump to select" of the level map. Each needs reading the two
+     builds' code at that place;
   3. the other places where something is put beside a text by a fixed
      number, to be found screen by screen and placed from the text's
      extent like the main menu's arrows.
