@@ -276,6 +276,19 @@ struct Pending {
     commands: Vec<Command>,
 }
 
+/// How many rectangles (fills, copies) one submission has uniforms for.
+const RECT_SLOTS: u64 = 256;
+
+/// How much of each buffer the work of the pending submission uses: bytes
+/// of vertices, of indices and of draw uniforms, and rectangles' uniforms.
+#[derive(Debug, Default, Clone, Copy)]
+struct Used {
+    vertices: u64,
+    indices: u64,
+    uniforms: u64,
+    rects: u64,
+}
+
 /// A buffer that is replaced by a larger one when it is too small.
 struct Growing {
     buffer: wgpu::Buffer,
@@ -349,6 +362,16 @@ pub struct Gpu {
     uniform_stride: u64,
     rect_uniforms: wgpu::Buffer,
     rect_group: wgpu::BindGroup,
+    /// Bytes from one rectangle's uniforms to the next in their buffer.
+    rect_stride: u64,
+    /// Work recorded and not yet given to the graphics adapter: it is
+    /// given all at once ([`Gpu::submit`]), a frame's worth as a rule.
+    finished: Vec<wgpu::CommandBuffer>,
+    /// Where, in the buffers, the work recorded since the last
+    /// submission ends: what is recorded next writes after it, since
+    /// everything written to a buffer is there before any of the
+    /// submission's work runs.
+    used: Used,
     /// The surface last presented.
     pub presented: Option<SurfaceId>,
     pub statistics: Statistics,
@@ -411,7 +434,7 @@ impl Gpu {
         let draw_uniform_layout =
             layout("draw uniforms", &[uniform_entry(std::mem::size_of::<DrawUniforms>(), true)]);
         let rect_uniform_layout =
-            layout("rectangle uniforms", &[uniform_entry(std::mem::size_of::<RectUniforms>(), false)]);
+            layout("rectangle uniforms", &[uniform_entry(std::mem::size_of::<RectUniforms>(), true)]);
         let texture_layout = layout("texture", &[texture_entry, sampler_entry]);
         let source_layout = layout("copy source", &[texture_entry]);
         let pipeline_layout = |label: &str, groups: &[Option<&wgpu::BindGroupLayout>]| {
@@ -449,16 +472,25 @@ impl Gpu {
         let uniforms =
             Growing::new(&device, "draw uniforms", wgpu::BufferUsages::UNIFORM, 64 * uniform_stride);
         let uniform_group = Gpu::uniform_group(&device, &draw_uniform_layout, &uniforms.buffer);
+        let rect_stride = (std::mem::size_of::<RectUniforms>() as u64)
+            .next_multiple_of(device.limits().min_uniform_buffer_offset_alignment as u64);
         let rect_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rectangle uniforms"),
-            size: std::mem::size_of::<RectUniforms>() as u64,
+            size: RECT_SLOTS * rect_stride,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let rect_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("rectangle uniforms"),
             layout: &rect_uniform_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: rect_uniforms.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &rect_uniforms,
+                    offset: 0,
+                    size: NonZeroU64::new(std::mem::size_of::<RectUniforms>() as u64),
+                }),
+            }],
         });
         Gpu {
             device,
@@ -487,6 +519,9 @@ impl Gpu {
             uniform_stride,
             rect_uniforms,
             rect_group,
+            rect_stride,
+            finished: Vec::new(),
+            used: Used::default(),
             presented: None,
             statistics: Statistics::default(),
         }
@@ -516,6 +551,28 @@ impl Gpu {
         })
     }
 
+    /// Gives the graphics adapter the work recorded so far. Done once a
+    /// frame, and before anything that must come after that work: a
+    /// surface read back or written from outside, a surface destroyed.
+    pub fn submit(&mut self) {
+        if !self.finished.is_empty() {
+            self.queue.submit(self.finished.drain(..));
+        }
+        self.used = Used::default();
+    }
+
+    /// Writes a rectangle's uniforms where no work pending uses the
+    /// buffer, and says where: the offset to bind them at.
+    fn rect_uniforms(&mut self, uniforms: &RectUniforms) -> u32 {
+        if self.used.rects == RECT_SLOTS {
+            self.submit();
+        }
+        let offset = self.used.rects * self.rect_stride;
+        self.queue.write_buffer(&self.rect_uniforms, offset, bytemuck::bytes_of(uniforms));
+        self.used.rects += 1;
+        offset as u32
+    }
+
     fn surface(&self, id: SurfaceId) -> &Surface {
         self.surfaces[id.0 as usize].as_ref().expect("the surface exists")
     }
@@ -535,6 +592,7 @@ impl Gpu {
         let surface = self.surface(id);
         if surface.format == PixelFormat::Depth16 && !self.depth_copies {
             let numbers = self.numbers_from_depth(id, area);
+            self.submit();
             return self.read_texture(
                 &numbers,
                 wgpu::TextureAspect::All,
@@ -543,10 +601,13 @@ impl Gpu {
             );
         }
         let (texture, aspect, size) = (surface.texture.clone(), surface.aspect(), surface.texel_size());
+        // The work recorded so far runs before the texture is read.
+        self.submit();
         self.read_texture(&texture, aspect, size, area)
     }
 
     /// Reads a rectangle of a texture: rows of texels without padding.
+    /// The work recorded before has been given to the adapter.
     fn read_texture(
         &self,
         texture: &wgpu::Texture,
@@ -674,7 +735,7 @@ impl Gpu {
         uniforms: RectUniforms,
     ) {
         self.depth_detour(to_depth);
-        self.queue.write_buffer(&self.rect_uniforms, 0, bytemuck::bytes_of(&uniforms));
+        let offset = self.rect_uniforms(&uniforms);
         let (pipeline, layout) = &self.depth_detours[&to_depth];
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("depth detour"),
@@ -707,13 +768,13 @@ impl Gpu {
                 ..Default::default()
             });
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &self.rect_group, &[]);
+            pass.set_bind_group(0, &self.rect_group, &[offset]);
             pass.set_bind_group(1, &group, &[]);
             pass.set_viewport(area.x as f32, area.y as f32, area.width as f32, area.height as f32, 0.0, 1.0);
             pass.set_scissor_rect(area.x, area.y, area.width, area.height);
             pass.draw(0..3, 0..1);
         }
-        self.queue.submit([encoder.finish()]);
+        self.finished.push(encoder.finish());
     }
 
     fn numbers_texture(&self, width: u32, height: u32, usage: wgpu::TextureUsages) -> wgpu::Texture {
@@ -960,7 +1021,7 @@ impl Gpu {
         source: Option<&wgpu::TextureView>,
     ) {
         self.rect_pipeline(pipeline);
-        self.queue.write_buffer(&self.rect_uniforms, 0, bytemuck::bytes_of(&uniforms));
+        let offset = self.rect_uniforms(&uniforms);
         let source = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("copy source"),
             layout: &self.source_layout,
@@ -995,13 +1056,13 @@ impl Gpu {
                 ..Default::default()
             });
             pass.set_pipeline(&self.rect_pipelines[&pipeline]);
-            pass.set_bind_group(0, &self.rect_group, &[]);
+            pass.set_bind_group(0, &self.rect_group, &[offset]);
             pass.set_bind_group(1, &source, &[]);
             pass.set_viewport(area.x as f32, area.y as f32, area.width as f32, area.height as f32, 0.0, 1.0);
             pass.set_scissor_rect(area.x, area.y, area.width, area.height);
             pass.draw(0..3, 0..1);
         }
-        self.queue.submit([encoder.finish()]);
+        self.finished.push(encoder.finish());
     }
 
     /// Draws the triangles collected so far.
@@ -1021,15 +1082,30 @@ impl Gpu {
         let mut index_bytes = bytemuck::cast_slice::<u16, u8>(&pending.indices).to_vec();
         index_bytes.resize(index_bytes.len().next_multiple_of(4), 0);
         let vertex_bytes = bytemuck::cast_slice::<Vertex, u8>(&pending.vertices);
+        // After what the pending work uses of each buffer; if one has no
+        // room left, the pending work is given to the adapter first and
+        // the buffers are free again (and may then be replaced by larger
+        // ones).
+        let fits = |buffer: &Growing, used: u64, bytes: usize| used + bytes as u64 <= buffer.buffer.size();
+        if !(fits(&self.vertices, self.used.vertices, vertex_bytes.len())
+            && fits(&self.indices, self.used.indices, index_bytes.len())
+            && fits(&self.uniforms, self.used.uniforms, uniform_bytes.len()))
+        {
+            self.submit();
+        }
         self.vertices.reserve(&self.device, vertex_bytes.len() as u64);
         self.indices.reserve(&self.device, index_bytes.len() as u64);
         if self.uniforms.reserve(&self.device, uniform_bytes.len() as u64) {
             self.uniform_group =
                 Gpu::uniform_group(&self.device, &self.draw_uniform_layout, &self.uniforms.buffer);
         }
-        self.queue.write_buffer(&self.vertices.buffer, 0, vertex_bytes);
-        self.queue.write_buffer(&self.indices.buffer, 0, &index_bytes);
-        self.queue.write_buffer(&self.uniforms.buffer, 0, &uniform_bytes);
+        let at = self.used;
+        self.queue.write_buffer(&self.vertices.buffer, at.vertices, vertex_bytes);
+        self.queue.write_buffer(&self.indices.buffer, at.indices, &index_bytes);
+        self.queue.write_buffer(&self.uniforms.buffer, at.uniforms, &uniform_bytes);
+        self.used.vertices += vertex_bytes.len() as u64;
+        self.used.indices += index_bytes.len() as u64;
+        self.used.uniforms += uniform_bytes.len() as u64;
 
         let keep = wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -1052,19 +1128,20 @@ impl Gpu {
                 }),
                 ..Default::default()
             });
-            pass.set_vertex_buffer(0, self.vertices.buffer.slice(..));
-            pass.set_index_buffer(self.indices.buffer.slice(..), wgpu::IndexFormat::Uint16);
+            pass.set_vertex_buffer(0, self.vertices.buffer.slice(at.vertices..));
+            pass.set_index_buffer(self.indices.buffer.slice(at.indices..), wgpu::IndexFormat::Uint16);
             for (number, command) in pending.commands.iter().enumerate() {
                 let Rect { x, y, width, height } = command.viewport;
                 pass.set_pipeline(&self.pipelines[&command.pipeline]);
-                pass.set_bind_group(0, &self.uniform_group, &[(number as u64 * self.uniform_stride) as u32]);
+                let uniforms = at.uniforms + number as u64 * self.uniform_stride;
+                pass.set_bind_group(0, &self.uniform_group, &[uniforms as u32]);
                 pass.set_bind_group(1, &self.texture_groups[&command.texture], &[]);
                 pass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0.0, 1.0);
                 pass.set_scissor_rect(x, y, width, height);
                 pass.draw_indexed(command.indices.clone(), command.base_vertex, 0..1);
             }
         }
-        self.queue.submit([encoder.finish()]);
+        self.finished.push(encoder.finish());
         self.statistics.passes += 1;
         // Keep the vectors' memory for the next pass.
         self.pending = Pending { target: None, ..pending };
@@ -1106,6 +1183,7 @@ impl Video for Gpu {
 
     fn destroy_surface(&mut self, surface: SurfaceId) {
         self.flush();
+        self.submit();
         self.texture_groups.retain(|key, _| key.is_none_or(|(id, _)| id != surface));
         if self.presented == Some(surface) {
             self.presented = None;
@@ -1115,6 +1193,9 @@ impl Video for Gpu {
 
     fn upload(&mut self, id: SurfaceId, area: Rect, pitch: usize, pixels: &[u8]) {
         self.flush();
+        // The pixels written below are there before any pending work
+        // runs: what was drawn from the surface so far must run first.
+        self.submit();
         let surface = self.surface(id);
         let size = surface.format.bytes_per_pixel() as usize;
         let row_bytes = area.width as usize * size;
@@ -1241,7 +1322,7 @@ impl Video for Gpu {
                 wgpu::TexelCopyTextureInfo { origin, ..copy.as_image_copy() },
                 wgpu::Extent3d { width: from.width, height: from.height, depth_or_array_layers: 1 },
             );
-            self.queue.submit([encoder.finish()]);
+            self.finished.push(encoder.finish());
             copy.create_view(&wgpu::TextureViewDescriptor::default())
         } else {
             from_surface.view.clone()
@@ -1354,6 +1435,7 @@ impl Video for Gpu {
 
     fn present(&mut self, surface: SurfaceId) {
         self.flush();
+        self.submit();
         self.presented = Some(surface);
         self.statistics.frames_presented += 1;
     }

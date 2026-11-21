@@ -147,3 +147,14 @@ What is left in a frame on the graphics card: `Flip` 0.24 ms, a clear
 0.35 ms, each copy 0.3 ms. Every fill and copy is a render pass and a
 submission of its own: next is one submission a frame.
 
+**One submission a frame.** Every fill, copy and pass of triangles was
+given to the graphics adapter on its own; they are now recorded and given
+together when the frame is presented, or sooner when something must come
+after them (a surface read back or written from outside). What is written
+to a buffer is there before any work of a submission runs, so each piece
+of work writes after what the pending ones use. On the graphics card the
+first level goes from 345 to 374 frames a second; the time has moved into
+the one submission (0.45 ms a frame through OpenGL on Direct3D 12, which
+is how WSL reaches the card; `UNVERIFIED` what it is through Vulkan or
+Direct3D 12 on Windows itself).
+

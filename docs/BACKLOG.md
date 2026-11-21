@@ -92,9 +92,25 @@ out of here into the roadmap or an ADR when work on them starts.
     test window).
   So it is a fault of WSLg's compositor with sub-surfaces, to be reported
   to WSLg with the minimal program and the log.
-- **One render pass per frame is not yet reached when the frame mixes
-  copies and triangles**: a fill or copy between two batches ends the pass.
-  Fills and copies could join the pass as commands.
+- **Speed** (ADR 0020 has the measures). In the first level the compiled
+  game makes 482 frames a second without the graphics adapter and 374 on
+  the graphics card as WSL reaches it; the interpreter made 85. What a
+  frame's 2.7 ms now are, and what could be done about each:
+  - 1.2 ms the game's code, 655 thousand instructions at 1.8 ns: blocks
+    return to the machine's loop after every jump and call, and every
+    access to memory looks its page up. Next: several blocks of a function
+    as one piece of Rust with its jumps inside it, the registers held in
+    variables across it; memory as one stretch of addresses;
+  - 0.45 ms giving the frame's drawing to the graphics adapter, in one
+    submission. Still to do within it: a fill or copy between two batches
+    of triangles ends the render pass; they could join it as commands;
+  - the game runs its whole simulation and drawing for every frame it
+    presents, and presents at the display's 60 a second (`Flip` waits for
+    the vertical blank, ADR 0014). **Showing more than 60 different
+    frames a second** needs the drawing parted from the simulation: a
+    modification to be designed once the game's own step is known (for
+    the owner; not started).
+
 - **Render targets are 8 bits per channel on the GPU** whatever the
   surface's format (ADR 0014); the original's 16-bit banding and dithering
   are not reproduced. A faithful path would quantise and dither in the

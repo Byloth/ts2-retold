@@ -114,13 +114,9 @@ pub fn build(image: &Image, instruction_starts: &[u32], extra: &[u32]) -> Blocks
     while let Some(address) = pending.pop() {
         let mut emit = Emit::new();
         let (mut count, mut at) = (0u32, address);
-        loop {
-            // The block ends before an instruction that cannot be
-            // written: it is left to the interpreter.
-            let Some(instruction) = decode(image, at).filter(|_| starts.contains(&at) || at == address)
-            else {
-                break;
-            };
+        // The block ends before an instruction that cannot be written: it
+        // is left to the interpreter.
+        while let Some(instruction) = decode(image, at).filter(|_| starts.contains(&at) || at == address) {
             let before = emit.mark();
             emit.begin(count, at);
             sem::step(&mut emit, &instruction);

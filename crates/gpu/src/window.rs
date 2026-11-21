@@ -269,6 +269,7 @@ impl Presenter {
     /// time.
     pub fn show(&mut self, gpu: &mut Gpu, surface: Option<SurfaceId>) -> bool {
         gpu.flush();
+        gpu.submit();
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 frame
