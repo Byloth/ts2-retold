@@ -24,6 +24,20 @@ out of here into the roadmap or an ADR when work on them starts.
   opens (the runtime logs every file opened; much of `data/` looks like
   developer leftovers). Conversion never happens in the browser (ADR 0001).
 
+## Windows
+
+- **Native Windows is written, compiled, and never run.** The whole tool
+  type-checks for `x86_64-pc-windows-gnu`; the written game's Rust has
+  nothing of Linux in it; the sound device there is through `cpal`
+  (ADR 0019). `tools\windows\build.ps1` builds the tool, writes the
+  game's code out and compiles it, on Windows, from a clone on a Windows
+  drive. **To be run by the owner**, and what it shows fixed: the first
+  run on Windows of the window's own frame (dragging, resizing), of the
+  graphics adapter chosen there (Vulkan first, then Direct3D 12), of the
+  sound, and of the paths.
+- A program for Windows cannot be linked from WSL without mingw-w64
+  installed there, which ADR 0006 keeps on the Windows side.
+
 ## Gaps in the runtime
 
 - **GDI text has one typeface** (`crates/runtime/src/win32/text.rs`):

@@ -73,3 +73,18 @@ restarted the stream existed only for a fault of WSLg
 - `--sound` gives a file that can be compared between runs and builds.
 - The straight-line rate conversion is one of the things the cards of the
   time did; which the original setup did is `UNVERIFIED`.
+
+## Windows (2026-11-22)
+
+Where there is no PulseAudio server the device is opened through the
+system's own interface by the `cpal` crate (Apache-2.0; on Windows,
+WASAPI), in the format the device mixes in. The queue between the machine
+and the device already fed the device a little faster or slower; it now
+also fits the machine's 44,100 frames a second to a device of another
+rate, and the frames are given to the device's channels as it has them.
+
+`UNVERIFIED`: this is written and compiles for Windows
+(`cargo check --target x86_64-pc-windows-gnu`), and has never been run:
+nothing can be run on Windows from the development environment
+(ADR 0006).
+

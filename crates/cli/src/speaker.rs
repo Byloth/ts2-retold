@@ -12,8 +12,11 @@
 //! The speaker is opened once the window is on the screen
 //! (`crate::play`): what makes the sound exists before the sound does.
 //!
-//! The device is reached through the PulseAudio server (which PipeWire
-//! and WSLg also provide), spoken to directly: no system library is needed.
+//! On Linux the device is reached through the PulseAudio server (which
+//! PipeWire and WSLg also provide), spoken to directly: no system library
+//! is needed. On Windows it is reached through the system's own interface
+//! (the `cpal` crate), in the format the device mixes in: the queue then
+//! also fits the machine's rate to the device's.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -46,6 +49,11 @@ pub struct Feed {
     pub dropped: u64,
     /// Frames the device has taken, sound or silence.
     pub taken: u64,
+    /// How many frames of the machine's sound go into one of the
+    /// device's, less one: zero for a device that takes the machine's
+    /// rate, and for one of another rate the machine's rate over the
+    /// device's, less one.
+    pub stretch: f64,
 }
 
 impl Feed {
@@ -67,7 +75,7 @@ impl Feed {
         }
         // A queue longer than its target is fed faster, a shorter one slower.
         let off_target = (self.queue.len() as f64 - TARGET as f64) / TARGET as f64;
-        let pace = 1.0 + BEND * off_target.clamp(-1.0, 1.0);
+        let pace = (1.0 + self.stretch) * (1.0 + BEND * off_target.clamp(-1.0, 1.0));
         for frame in out {
             if self.flowing && self.queue.len() < 2 {
                 self.flowing = false;
@@ -95,10 +103,18 @@ impl Feed {
 pub struct Speaker {
     feed: Arc<Mutex<Feed>>,
     losses: Losses,
-    // The stream and the connection live as long as the speaker.
-    _stream: pulseaudio::PlaybackStream,
-    _client: pulseaudio::Client,
+    // The stream lives as long as the speaker.
+    _stream: Stream,
 }
+
+/// The stream to the sound device: through the PulseAudio server, with
+/// the connection to it.
+#[cfg(unix)]
+type Stream = (pulseaudio::PlaybackStream, pulseaudio::Client);
+/// The stream to the sound device: through the system's own interface
+/// (WASAPI on Windows).
+#[cfg(not(unix))]
+type Stream = cpal::Stream;
 
 /// What a speaker lost, readable after the speaker itself has been handed
 /// to the machine.
@@ -115,6 +131,74 @@ impl Losses {
     }
 }
 
+#[cfg(not(unix))]
+impl Speaker {
+    /// Opens the default sound device, in the format it mixes in: the
+    /// machine's sound is fitted to its rate and to its channels on the
+    /// way. `UNVERIFIED`: written and compiled for Windows, never run.
+    pub fn open() -> Result<Speaker, String> {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+        let device = cpal::default_host().default_output_device().ok_or("no sound device")?;
+        let supported = device
+            .default_output_config()
+            .map_err(|error| format!("no format of the sound device: {error}"))?;
+        let (format, channels) = (supported.sample_format(), supported.channels() as usize);
+        let config: cpal::StreamConfig = supported.into();
+        let stretch = OUTPUT_RATE as f64 / config.sample_rate.0 as f64 - 1.0;
+        let feed = Arc::new(Mutex::new(Feed { stretch, ..Feed::default() }));
+        // The device's next frames, each as its channels' samples: the
+        // machine's left and right on the first two (their mean on a
+        // device of one), nothing on the others.
+        fn fill<S: Copy>(
+            feed: &Mutex<Feed>,
+            channels: usize,
+            out: &mut [S],
+            silence: S,
+            sample: fn(i16) -> S,
+        ) {
+            let mut frames = vec![[0i16; 2]; out.len() / channels.max(1)];
+            // A poisoned lock means the other side panicked: silence.
+            if let Ok(mut feed) = feed.lock() {
+                feed.pull(&mut frames);
+            }
+            out.fill(silence);
+            for (out, frame) in out.chunks_exact_mut(channels.max(1)).zip(&frames) {
+                match out {
+                    [only] => *only = sample(((frame[0] as i32 + frame[1] as i32) / 2) as i16),
+                    [left, right, ..] => (*left, *right) = (sample(frame[0]), sample(frame[1])),
+                    [] => {}
+                }
+            }
+        }
+        let failed = |error: cpal::StreamError| eprintln!("sound: {error}");
+        let source = feed.clone();
+        let stream = match format {
+            cpal::SampleFormat::F32 => device.build_output_stream(
+                &config,
+                move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    fill(&source, channels, out, 0.0, |sample| sample as f32 / 32768.0)
+                },
+                failed,
+                None,
+            ),
+            cpal::SampleFormat::I16 => device.build_output_stream(
+                &config,
+                move |out: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                    fill(&source, channels, out, 0, |sample| sample)
+                },
+                failed,
+                None,
+            ),
+            other => return Err(format!("the sound device mixes in {other:?}, which is not handled yet")),
+        };
+        let stream = stream.map_err(|error| format!("no sound stream: {error}"))?;
+        stream.play().map_err(|error| format!("the sound stream does not start: {error}"))?;
+        Ok(Speaker { losses: Losses { feed: feed.clone() }, feed, _stream: stream })
+    }
+}
+
+#[cfg(unix)]
 impl Speaker {
     /// Opens the default sound device.
     pub fn open() -> Result<Speaker, String> {
@@ -152,9 +236,11 @@ impl Speaker {
         };
         let stream = pollster::block_on(client.create_playback_stream(params, callback.as_playback_source()))
             .map_err(|error| format!("no sound stream: {error}"))?;
-        Ok(Speaker { losses: Losses { feed: feed.clone() }, feed, _stream: stream, _client: client })
+        Ok(Speaker { losses: Losses { feed: feed.clone() }, feed, _stream: (stream, client) })
     }
+}
 
+impl Speaker {
     pub fn losses(&self) -> Losses {
         self.losses.clone()
     }

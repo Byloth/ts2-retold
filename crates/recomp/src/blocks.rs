@@ -200,7 +200,8 @@ impl Blocks {
     /// The crate, as its files' names and texts: a manifest, a table of
     /// the blocks, and the blocks themselves in modules. `repository` is
     /// where this project's crates are (the crate depends on them by
-    /// path), `code_sha256` says which code the blocks were written from.
+    /// path; it is written as it is between single quotes, so that a
+    /// Windows path's backslashes stay themselves), `code_sha256` says which code the blocks were written from.
     pub fn crate_files(&self, repository: &str, code_sha256: &str) -> Vec<(String, String)> {
         let mut files = Vec::new();
         files.push((
@@ -211,9 +212,9 @@ impl Blocks {
                  [package]\nname = \"andy-game\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
                  [[bin]]\nname = \"andy-game\"\npath = \"src/main.rs\"\n\n\
                  [dependencies]\n\
-                 andy = {{ path = \"{repository}/crates/cli\" }}\n\
-                 andy-cpu = {{ path = \"{repository}/crates/cpu\" }}\n\
-                 andy-runtime = {{ path = \"{repository}/crates/runtime\" }}\n\n\
+                 andy = {{ path = '{repository}/crates/cli' }}\n\
+                 andy-cpu = {{ path = '{repository}/crates/cpu' }}\n\
+                 andy-runtime = {{ path = '{repository}/crates/runtime' }}\n\n\
                  [workspace]\n\n\
                  [profile.release]\ndebug = false\nincremental = false\nlto = \"thin\"\n\n\
                  [profile.release.package.andy-game]\nopt-level = 2\ncodegen-units = 256\n"
