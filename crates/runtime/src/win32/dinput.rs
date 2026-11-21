@@ -1,7 +1,8 @@
 //! DINPUT: DirectInput.
 //!
-//! The machine has a keyboard and a mouse and no joystick. What they are
-//! doing is whatever [`Input`] says; the embedder (a window, a recording being
+//! The machine has a keyboard, a mouse and, while a joypad is plugged in
+//! ([`Input::pad`]), one joystick. What they are doing is whatever
+//! [`Input`] says; the embedder (a window, a recording being
 //! replayed) writes it and the game reads it through its devices. Reads are
 //! the only way input reaches the game here, which makes this the layer
 //! where input is recorded and replayed.
@@ -26,6 +27,16 @@ const IID_IDIRECTINPUTA: Guid =
     guid(0x89521360, 0xAA8A, 0x11CF, [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00]);
 const IID_IDIRECTINPUTDEVICEA: Guid =
     guid(0x5944E680, 0xC92E, 0x11CF, [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00]);
+/// The device interface of DirectInput 5: the first one's methods, then
+/// those of force feedback and `Poll`.
+const IID_IDIRECTINPUTDEVICE2A: Guid =
+    guid(0x5944E682, 0xC92E, 0x11CF, [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00]);
+/// The one joystick's own identifier: the machine's, not a real product's.
+const GUID_THE_JOYPAD: Guid =
+    guid(0x616E6479, 0x7061, 0x6431, [0x80, 0x00, 0x61, 0x6E, 0x64, 0x79, 0x00, 0x01]);
+const GUID_RX_AXIS: Guid = guid(0xA36D02F4, 0xC9F3, 0x11CF, [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00]);
+const GUID_RY_AXIS: Guid = guid(0xA36D02F5, 0xC9F3, 0x11CF, [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00]);
+const GUID_RZ_AXIS: Guid = guid(0xA36D02E3, 0xC9F3, 0x11CF, [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00]);
 const GUID_SYS_MOUSE: Guid =
     guid(0x6F1D2B60, 0xD5A0, 0x11CF, [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00]);
 const GUID_SYS_KEYBOARD: Guid =
@@ -38,12 +49,33 @@ const GUID_Z_AXIS: Guid = guid(0xA36D02E2, 0xC9F3, 0x11CF, [0xBF, 0xC7, 0x44, 0x
 const VERSIONS: std::ops::RangeInclusive<u32> = 0x0300..=0x05FF;
 const DIDEVTYPE_MOUSE: u32 = 2 | 2 << 8; // a traditional mouse
 const DIDEVTYPE_KEYBOARD: u32 = 3 | 4 << 8; // an enhanced PC keyboard
+const DIDEVTYPE_JOYSTICK: u32 = 4 | 4 << 8; // a game pad
 const DIDFT_AXIS: u32 = 0x03;
 const DIDFT_BUTTON: u32 = 0x0C;
+const DIDFT_POV: u32 = 0x10;
+/// The device must be polled before its state is read.
+const DIDC_POLLEDDEVICE: u32 = 2;
 const DIDFT_ANYINSTANCE: u32 = 0x00FF_FF00;
 const DIDC_ATTACHED: u32 = 1;
 pub const MOUSE_AXES: usize = 3;
 pub const MOUSE_BUTTONS: usize = 4;
+/// A joypad's axes in DirectInput's order: x, y, z, and the rotations about
+/// them. On a pad with two sticks the left one is x and y, the right one
+/// the rotations about x and y, and the triggers share z.
+pub const PAD_AXES: usize = 6;
+pub const PAD_BUTTONS: usize = 16;
+
+/// A joypad plugged in, and what it is doing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pad {
+    /// Each axis from -32768 to 32767, 0 at rest; y grows downwards, as
+    /// DirectInput has it.
+    pub axes: [i16; PAD_AXES],
+    pub buttons: [bool; PAD_BUTTONS],
+    /// The direction pad: one of eight directions clockwise from up, or
+    /// none.
+    pub hat: Option<u8>,
+}
 
 /// What the input devices are doing right now.
 #[derive(Debug, Clone)]
@@ -57,6 +89,8 @@ pub struct Input {
     /// it read the keyboard. Input goes by that one clock (ADR 0017).
     pub frame_motion: [i32; MOUSE_AXES],
     pub mouse_buttons: [bool; MOUSE_BUTTONS],
+    /// The joypad, while one is plugged in.
+    pub pad: Option<Pad>,
 }
 
 impl Default for Input {
@@ -66,6 +100,7 @@ impl Default for Input {
             mouse_motion: [0; MOUSE_AXES],
             frame_motion: [0; MOUSE_AXES],
             mouse_buttons: [false; MOUSE_BUTTONS],
+            pad: None,
         }
     }
 }
@@ -82,6 +117,7 @@ impl Input {
 enum Kind {
     Keyboard,
     Mouse,
+    Joystick,
 }
 
 /// One control of a device, as a data format maps it into the state block.
@@ -90,6 +126,10 @@ enum Control {
     Key(usize),
     MouseAxis(usize),
     MouseButton(usize),
+    PadAxis(usize),
+    PadButton(usize),
+    /// The direction pad, or a place for one the device does not have.
+    PadHat(bool),
 }
 
 #[derive(Debug)]
@@ -184,6 +224,7 @@ fn create_device(m: &mut Machine, a: &[u32]) -> u32 {
     let kind = match m.read_guid(identifier) {
         Some(GUID_SYS_KEYBOARD) => Kind::Keyboard,
         Some(GUID_SYS_MOUSE) => Kind::Mouse,
+        Some(GUID_THE_JOYPAD) if m.os.input.pad.is_some() => Kind::Joystick,
         Some(_) => return DIERR_DEVICENOTREG,
         None => return DIERR_INVALIDPARAM,
     };
@@ -200,12 +241,15 @@ fn enum_devices(m: &mut Machine, a: &[u32]) -> HostResult {
     if m.input_object(a[0]).is_none() {
         return Ok(DIERR_INVALIDPARAM);
     }
-    let devices = [
+    let mut devices = vec![
         (GUID_SYS_MOUSE, DIDEVTYPE_MOUSE, &b"Mouse"[..]),
         (GUID_SYS_KEYBOARD, DIDEVTYPE_KEYBOARD, &b"Keyboard"[..]),
     ];
+    if m.os.input.pad.is_some() {
+        devices.push((GUID_THE_JOYPAD, DIDEVTYPE_JOYSTICK, &b"Joypad"[..]));
+    }
     for (identifier, kind, name) in devices {
-        // A type of zero asks for every device. Asking for joysticks finds none.
+        // A type of zero asks for every device.
         if wanted_type != 0 && wanted_type != kind & 0xFF {
             continue;
         }
@@ -243,7 +287,9 @@ interface! { static DIRECT_INPUT = "IDirectInputA";
 fn device_query_interface(m: &mut Machine, a: &[u32]) -> u32 {
     let Some(wanted) = m.read_guid(a[1]) else { return DIERR_INVALIDPARAM };
     let Some(device) = m.input_device(a[0]) else { return DIERR_INVALIDPARAM };
-    if wanted != IID_IUNKNOWN && wanted != IID_IDIRECTINPUTDEVICEA {
+    // The one table of methods serves both device interfaces: the second
+    // adds methods after the first's.
+    if ![IID_IUNKNOWN, IID_IDIRECTINPUTDEVICEA, IID_IDIRECTINPUTDEVICE2A].contains(&wanted) {
         let _ = m.memory.write(a[2], 4, 0);
         return E_NOINTERFACE;
     }
@@ -273,12 +319,15 @@ fn get_capabilities(m: &mut Machine, a: &[u32]) -> u32 {
     if size != 24 && size != 44 {
         return DIERR_INVALIDPARAM;
     }
-    let (kind, axes, buttons) = match kind {
-        Kind::Keyboard => (DIDEVTYPE_KEYBOARD, 0, 256),
-        Kind::Mouse => (DIDEVTYPE_MOUSE, MOUSE_AXES as u32, MOUSE_BUTTONS as u32),
+    let (kind, flags, axes, buttons, hats) = match kind {
+        Kind::Keyboard => (DIDEVTYPE_KEYBOARD, DIDC_ATTACHED, 0, 256, 0),
+        Kind::Mouse => (DIDEVTYPE_MOUSE, DIDC_ATTACHED, MOUSE_AXES as u32, MOUSE_BUTTONS as u32, 0),
+        Kind::Joystick => {
+            (DIDEVTYPE_JOYSTICK, DIDC_ATTACHED | DIDC_POLLEDDEVICE, PAD_AXES as u32, PAD_BUTTONS as u32, 1)
+        }
     };
     let mut words = [0; 11];
-    words[..6].copy_from_slice(&[size, DIDC_ATTACHED, kind, axes, buttons, 0]);
+    words[..6].copy_from_slice(&[size, flags, kind, axes, buttons, hats]);
     if m.write_words(a[1], &words[..(size / 4) as usize]) { DI_OK } else { DIERR_INVALIDPARAM }
 }
 
@@ -296,7 +345,7 @@ fn set_data_format(m: &mut Machine, a: &[u32]) -> u32 {
         return DIERR_INVALIDPARAM;
     }
     let mut controls = Vec::with_capacity(count as usize);
-    let (mut next_axis, mut next_button) = (0, 0);
+    let (mut next_axis, mut next_button, mut next_hat) = (0, 0, 0);
     for n in 0..count {
         // DIOBJECTDATAFORMAT: GUID pointer, offset, type, flags.
         let [identifier, offset, kind_and_instance, _]: [u32; 4] = m.read_words(objects + 16 * n);
@@ -326,12 +375,41 @@ fn set_data_format(m: &mut Machine, a: &[u32]) -> u32 {
                 next_button = button + 1;
                 (button < MOUSE_BUTTONS).then_some(Control::MouseButton(button))
             }
+            Kind::Joystick if kind_and_instance & DIDFT_AXIS != 0 => {
+                // The joystick's format names its axes; sliders the pad
+                // does not have are left out.
+                let axis = match identifier {
+                    Some(GUID_X_AXIS) => Some(0),
+                    Some(GUID_Y_AXIS) => Some(1),
+                    Some(GUID_Z_AXIS) => Some(2),
+                    Some(GUID_RX_AXIS) => Some(3),
+                    Some(GUID_RY_AXIS) => Some(4),
+                    Some(GUID_RZ_AXIS) => Some(5),
+                    Some(_) => None,
+                    None if any_instance => Some(next_axis),
+                    None => Some(instance),
+                };
+                next_axis = axis.map_or(next_axis, |axis| axis + 1);
+                axis.filter(|&axis| axis < PAD_AXES).map(Control::PadAxis)
+            }
+            Kind::Joystick if kind_and_instance & DIDFT_POV != 0 => {
+                // The pad has one; the places of others read as centred.
+                let hat = if any_instance { next_hat } else { instance };
+                next_hat = hat + 1;
+                Some(Control::PadHat(hat == 0))
+            }
+            Kind::Joystick if kind_and_instance & DIDFT_BUTTON != 0 => {
+                let button = if any_instance { next_button } else { instance };
+                next_button = button + 1;
+                (button < PAD_BUTTONS).then_some(Control::PadButton(button))
+            }
             _ => None,
         };
         // A control the device does not have is left out; its place in the
         // state block stays zero.
         if let Some(control) = control {
-            let width = if matches!(control, Control::MouseAxis(_)) { 4 } else { 1 };
+            let wide = matches!(control, Control::MouseAxis(_) | Control::PadAxis(_) | Control::PadHat(_));
+            let width = if wide { 4 } else { 1 };
             if offset.checked_add(width).is_none_or(|end| end > data_size) {
                 return DIERR_INVALIDPARAM;
             }
@@ -387,6 +465,22 @@ fn get_device_state(m: &mut Machine, a: &[u32]) -> u32 {
             // Reading a relative axis consumes the frame's movement.
             Control::MouseAxis(axis) => state[at..at + 4]
                 .copy_from_slice(&std::mem::take(&mut input.frame_motion[axis]).to_le_bytes()),
+            // A pad pulled out reads as one at rest. An axis goes from 0 to
+            // 65535, DirectInput's range for one that was given none.
+            Control::PadAxis(axis) => {
+                let value = input.pad.map_or(0, |pad| pad.axes[axis]) as i32 + 0x8000;
+                state[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            Control::PadButton(button) => {
+                state[at] = if input.pad.is_some_and(|pad| pad.buttons[button]) { 0x80 } else { 0 };
+            }
+            // A direction in hundredths of a degree clockwise from up, or
+            // all ones when centred.
+            Control::PadHat(present) => {
+                let direction = input.pad.and_then(|pad| pad.hat).filter(|_| present);
+                let value = direction.map_or(u32::MAX, |direction| direction as u32 * 4500);
+                state[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            }
         }
     }
     if m.memory.load(out, &state).is_some() { DI_OK } else { DIERR_INVALIDPARAM }
@@ -412,4 +506,21 @@ interface! { static INPUT_DEVICE = "IDirectInputDeviceA";
     GetDeviceInfo(2),
     RunControlPanel(3),
     Initialize(4),
+    // IDirectInputDevice2A from here.
+    CreateEffect(5),
+    EnumEffects(4),
+    GetEffectInfo(3),
+    GetForceFeedbackState(2),
+    SendForceFeedbackCommand(2),
+    EnumCreatedEffectObjects(4),
+    Escape(2),
+    // The joystick is read when polled; the other devices have nothing
+    // to poll.
+    Poll(1) => |m, a| match m.input_device(a[0]) {
+        Some(device) if !device.acquired => DIERR_NOTACQUIRED,
+        Some(device) if device.kind == Kind::Joystick => DI_OK,
+        Some(_) => S_FALSE,
+        None => DIERR_INVALIDPARAM,
+    },
+    SendDeviceData(5),
 }

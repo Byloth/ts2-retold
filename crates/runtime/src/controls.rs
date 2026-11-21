@@ -18,6 +18,14 @@ use crate::{Machine, Stop};
 /// The `ret` of the function that reads the devices (`0x414AF0`): its
 /// mask of actions is complete there.
 pub const CONTROLS_READ: u32 = 0x0041_4E0A;
+/// The instruction before it, `pop ebx`: the last of the function's own.
+pub const CONTROLS_MADE: u32 = 0x0041_4E09;
+/// The keyboard as the function has just read it, a byte a key.
+const KEYS: u32 = 0x0052_9A00;
+/// The analogue pair for walking, sideways and forwards: the function
+/// sets each to a whole push for a direction held on the keyboard.
+const WALK: [u32; 2] = [0x0073_1CD8, 0x0073_1CDC];
+const WHOLE_PUSH: u32 = 0x8000;
 /// The mask of actions held, 16 bits.
 const ACTIONS: u32 = 0x0052_9B00;
 /// The pad word the game's own code reads while playing, a frame's.
@@ -31,6 +39,10 @@ const VIEW_VISOR: u32 = 4;
 /// Bits of the mask of actions, from the table of the game's controls
 /// screen (`0x500E58`).
 pub mod action {
+    pub const UP: u32 = 0x0010;
+    pub const RIGHT: u32 = 0x0020;
+    pub const DOWN: u32 = 0x0040;
+    pub const LEFT: u32 = 0x0080;
     pub const CAMERA_LEFT: u32 = 0x0100;
     pub const CAMERA_RIGHT: u32 = 0x0200;
     pub const VISOR: u32 = 0x0400;
@@ -60,7 +72,10 @@ pub struct Controls {
     /// How far the camera turns for one count of the mouse, sideways and
     /// up and down, in 256ths of the game's unit of angle (4096 a turn).
     pub turn: [i32; 2],
-    /// Whether moving the mouse up looks down.
+    /// How far it turns in a unit of the game's time step with a joypad's
+    /// second stick pushed all the way, in the same 256ths.
+    pub stick_turn: [i32; 2],
+    /// Whether moving the mouse or the stick up looks down.
     pub inverted: bool,
     /// The parts of a unit of angle not yet turned, sideways and up.
     pub(crate) turn_left_over: [i32; 2],
@@ -80,8 +95,10 @@ impl Default for Controls {
                 Binding::Action(action::SPIN),
                 Binding::Nothing,
             ],
-            // A count is 1.5 units: 2731 counts a turn.
-            turn: [384, 384],
+            // A count is seven eighths of a unit: 4681 counts a turn.
+            turn: [224, 224],
+            // Twice and once the rate of the camera's two actions.
+            stick_turn: [32 * 256, 16 * 256],
             inverted: false,
             turn_left_over: [0; 2],
             visor_held: false,
@@ -134,6 +151,43 @@ pub fn add_the_mouse(m: &mut Machine) -> Result<(), Stop> {
         let actions = m.game_half(ACTIONS)?;
         m.set_game_half(ACTIONS, actions | added)?;
     }
+    Ok(())
+}
+
+/// The keys that walk beside the game's own (the arrows): W, A, S and D,
+/// by their scan codes, as the hand on the keyboard has them when the
+/// other is on the mouse.
+const WALKING_KEYS: [(u32, u32); 4] =
+    [(0x11, action::UP), (0x1E, action::LEFT), (0x1F, action::DOWN), (0x20, action::RIGHT)];
+
+/// In place of the last instruction of the function that reads the
+/// devices, `pop ebx`: the directions of the walking keys held join the
+/// mask, as the function's own keys do, with the analogue pair at a whole
+/// push.
+pub fn add_walking_keys(m: &mut Machine) -> Result<(), Stop> {
+    let mut added = 0;
+    for (key, direction) in WALKING_KEYS {
+        if m.memory.read(KEYS + key, 1).unwrap_or(0) != 0 {
+            added |= direction;
+        }
+    }
+    if added != 0 {
+        let actions = m.game_half(ACTIONS)?;
+        m.set_game_half(ACTIONS, actions | added)?;
+        for (at, (forth, back)) in WALK.into_iter().zip([(action::RIGHT, action::LEFT), (action::UP, action::DOWN)])
+        {
+            if added & forth != 0 {
+                m.set_game_word(at, WHOLE_PUSH)?;
+            } else if added & back != 0 {
+                m.set_game_word(at, WHOLE_PUSH.wrapping_neg())?;
+            }
+        }
+    }
+    // The instruction this stands for.
+    let esp = m.cpu.regs[4];
+    m.cpu.regs[3] = m.game_word(esp)?;
+    m.cpu.regs[4] = esp + 4;
+    m.cpu.instructions += 1;
     Ok(())
 }
 

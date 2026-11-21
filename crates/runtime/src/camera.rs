@@ -61,13 +61,22 @@ const HEADING: u32 = 0x0052_F30E;
 const AIM_ELEVATION: u32 = 0x0C;
 const AIM_LIMITS: (i32, i32) = (0xC8, 0x720);
 
-/// The mouse's movement of this frame as angles, sideways and up or down.
-fn mouse_turn(m: &mut Machine) -> [i32; 2] {
+/// A joypad's second stick at rest: the game's own measure for its first.
+const STICK_AT_REST: i32 = 0x1800;
+
+/// What the player turns the view by in this frame, sideways and up or
+/// down, as angles: the mouse's movement, and a joypad's second stick
+/// held for the frame's time step.
+fn player_turn(m: &mut Machine, step: i32) -> [i32; 2] {
     let motion = m.os.input.frame_motion;
+    let stick = m.os.input.pad.map_or([0; 2], |pad| [pad.axes[3] as i32, pad.axes[4] as i32]);
     let controls = &mut m.os.controls;
     let mut turned = [0; 2];
     for axis in 0..2 {
-        let parts = motion[axis] * controls.turn[axis] + controls.turn_left_over[axis];
+        // Past its rest the stick turns in proportion, up to its rate.
+        let pushed = stick[axis].signum() * (stick[axis].abs() - STICK_AT_REST).max(0);
+        let by_stick = pushed * controls.stick_turn[axis] * step / (0x8000 - STICK_AT_REST);
+        let parts = motion[axis] * controls.turn[axis] + by_stick + controls.turn_left_over[axis];
         turned[axis] = parts.div_euclid(256);
         controls.turn_left_over[axis] = parts.rem_euclid(256);
     }
@@ -84,7 +93,8 @@ fn mouse_turn(m: &mut Machine) -> [i32; 2] {
 /// instructions do.
 pub fn aim_visor(m: &mut Machine) -> Result<(), Stop> {
     let camera = m.cpu.regs[5];
-    let [sideways, down] = mouse_turn(m);
+    let step = m.cpu.regs[3] as i32;
+    let [sideways, down] = player_turn(m, step);
     if sideways != 0 {
         let heading = m.game_half(HEADING)? as i32;
         m.set_game_half(HEADING, (heading + sideways) as u32 & 0xFFF)?;
@@ -122,7 +132,7 @@ pub fn orbit(m: &mut Machine) -> Result<(), Stop> {
 
     // The angles: the mouse's movement of this frame, and the camera's two
     // actions as the original's own camera takes them.
-    let turned = mouse_turn(m);
+    let turned = player_turn(m, step);
     let (left, right) = camera_actions(m)?;
     let keys = KEY_TURN * step * (left as i32 - right as i32);
     let yaw = (m.game_half(camera + YAW)? as i32 + turned[0] + keys) & 0xFFF;

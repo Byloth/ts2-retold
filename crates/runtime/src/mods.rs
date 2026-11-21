@@ -36,6 +36,7 @@ pub const ONE_TYPEFACE: &str = "one-typeface";
 pub const MENU_LOAD_BEFORE_OPTIONS: &str = "menu-load-before-options";
 pub const MOUSE_CONTROLS: &str = "mouse-controls";
 pub const ORBIT_CAMERA: &str = "orbit-camera";
+pub const WALKING_KEYS: &str = "walking-keys";
 
 pub static CATALOGUE: &[Modification] = &[
     Modification {
@@ -93,6 +94,16 @@ pub static CATALOGUE: &[Modification] = &[
                   fires, the middle one spins, and the right one holds the visor view (first person) for as long \
                   as it is held, where the key for it is a switch. The original takes no notice of the mouse; with \
                   the mouse left alone nothing differs.",
+    },
+    Modification {
+        id: WALKING_KEYS,
+        class: Class::Feature,
+        affects_simulation: false,
+        enabled_by_default: true,
+        summary: "W, A, S and D walk, beside the arrows (ADR 0021): where the game has read its devices, \
+                  the directions of those keys held are added to its mask of actions, as its own keys' \
+                  are. The arrows and every binding of the game's own stay as they are; the original \
+                  has nothing on those four keys. Decided by the owner.",
     },
     Modification {
         id: ORBIT_CAMERA,

@@ -69,15 +69,32 @@ What the game does was read from its code first (`docs/CODE-DISCOVERY.md`,
    gives it back. The game is given the mouse's own movement, not the
    pointer's.
 
+7. **W, A, S and D walk, beside the arrows** (`walking-keys`, decided by
+   the owner): added to the mask one instruction before the mouse's
+   buttons, from the keyboard as the function has just read it, with the
+   analogue pair at a whole push as the function's own keys leave it.
+8. **A joypad is the joystick the game already asks for.** The game
+   enumerates joysticks, reads the first through DirectInput and has its
+   own bindings for ten buttons and its own analogue walking; all the
+   runtime adds is the device (`Input::pad`: six axes, sixteen buttons, a
+   direction pad; a polled device with the second device interface, axes
+   from 0 to 65535). This works with every modification off. On top of it
+   `orbit-camera` reads the pad's second stick: past its rest it turns the
+   camera, and the visor's aim, in proportion.
+   Recordings carry the pad (`0 plug PAD`, `axis X -20000`, `press PAD_1`,
+   `hat 2`), read 0 being before the game starts, when it looks for
+   joysticks.
+
 ## Still to build (in this order)
 
 - The settings in the game's own screens: bindings of mouse and joypad in
   the controls screen, a third camera in the pause menu beside "active" and
   "passive", sensitivity and inverted axes; kept in the project's settings
   file (ADR 0016), not in the game's saved block.
-- The joypad: the joystick device the game already asks DirectInput for
-  (so that the original's own support works with every modification off),
-  and its second stick as the camera.
+- The joypad in the window: reading a real one (the `gilrs` crate, on
+  Windows; on Linux it wants the system's libudev headers, which are not
+  installed here) and plugging it into `Input::pad`. So far a pad exists
+  only in recordings.
 
 ## Consequences and what is not verified
 
@@ -96,4 +113,10 @@ What the game does was read from its code first (`docs/CODE-DISCOVERY.md`,
   game's culling.
 - Not run on Windows or with a real mouse by the author: the window's part
   (holding the pointer, relative movement) is the owner's to try.
-- Everything about the joystick in the game's code was read, not run.
+- The game's joystick code has been run with a recorded pad (walking with
+  the stick, jumping with the first button); the range of an axis that was
+  given none, 0 to 65535, and all ones for a direction pad that is not
+  there are DirectInput's as remembered, `UNVERIFIED` against a reference.
+- The mouse turns the camera by seven eighths of a unit of angle a count
+  (4681 counts a turn), lowered once on the owner's word; it wants a
+  setting.

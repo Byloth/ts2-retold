@@ -34,7 +34,7 @@ unset TS2_LANGUAGE_DIR TS2_OTHER_DISCS
 # recordings made by `play --record --state DIR` on an empty directory
 # want; `new-orbit` moreover leaves the camera turned by the mouse on (the
 # other recordings are of the keyboard and the original's camera).
-runs="level:260 pause:200 options:170 options-list:135 en-menu:150 robot:94:new stairs:90:new wall:100:new orbit:64:new-orbit visor:70:new-orbit"
+runs="level:260 pause:200 options:170 options-list:135 en-menu:150 robot:94:new stairs:90:new wall:100:new orbit:64:new-orbit visor:70:new-orbit pad:64:new-orbit wasd:59:new-orbit"
 
 mkdir -p out/check
 one() {
@@ -45,7 +45,7 @@ one() {
     rm -rf "$work"
     mkdir -p "$work"
     state=out/run
-    camera="--without orbit-camera"
+    camera="--without orbit-camera --without walking-keys"
     case $rest in *:new*) state=$work/state; mkdir -p "$state" ;; esac
     case $rest in *-orbit) camera= ;; esac
     # shellcheck disable=SC2086

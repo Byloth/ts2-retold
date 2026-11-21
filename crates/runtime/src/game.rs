@@ -8,7 +8,9 @@
 
 use andy_cpu::interp::Fault;
 
-use crate::mods::{MENU_ARROWS_BY_TEXT, MOUSE_CONTROLS, ONE_TYPEFACE, ORBIT_CAMERA, SKIP_MODE_SELECT};
+use crate::mods::{
+    MENU_ARROWS_BY_TEXT, MOUSE_CONTROLS, ONE_TYPEFACE, ORBIT_CAMERA, SKIP_MODE_SELECT, WALKING_KEYS,
+};
 use crate::{Machine, Stop};
 
 /// A function of the game that a modification replaces with native code.
@@ -51,6 +53,16 @@ pub fn replacement_points() -> Vec<u32> {
 }
 
 pub static REPLACEMENTS: &[Replacement] = &[
+    Replacement {
+        modification: WALKING_KEYS,
+        address: |_| crate::controls::CONTROLS_MADE,
+        name: "the walking keys among the controls",
+        callee_pops: 0,
+        resume: Some(crate::controls::CONTROLS_READ),
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::controls::add_walking_keys,
+    },
     Replacement {
         modification: MOUSE_CONTROLS,
         address: |_| crate::controls::CONTROLS_READ,

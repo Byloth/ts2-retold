@@ -678,7 +678,11 @@ fn boot(image: &Image, options: BootOptions) {
             .map_err(|error| error.to_string())
             .and_then(|text| andy_runtime::input::Recording::parse(&text));
         match recording {
-            Ok(recording) => machine.os.recording = Some(recording),
+            Ok(mut recording) => {
+                // What is there before the game starts: a joypad plugged in.
+                recording.apply(0, &mut machine.os.input);
+                machine.os.recording = Some(recording);
+            }
             Err(error) => {
                 eprintln!("{}: {error}", path.display());
                 return;
