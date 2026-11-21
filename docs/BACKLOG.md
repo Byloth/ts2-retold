@@ -307,8 +307,9 @@ out of here into the roadmap or an ADR when work on them starts.
   The owner's condition for using it is that nothing be worse than on the
   PC, so it waits for a German PC disc. The movies alone would be an
   improvement for any language, if their pictures are the same.
-- **A settings file** for the screen mode and the project's own settings
-  (ADR 0016).
+- **The settings file** (`retold.ini` in the state directory, ADR 0021)
+  holds the mouse's and the camera's settings; the screen mode and the
+  language (ADR 0016) are not in it yet.
 - Reference screenshots of the original game, once the port draws.
 - Which font Windows picks for the face name "ariel" (the game's spelling;
   no such font exists). The runtime answers with its Arial substitute.

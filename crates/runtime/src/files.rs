@@ -151,6 +151,20 @@ impl Files {
         self.injected.insert(name.to_ascii_lowercase(), data);
     }
 
+    /// A file of the project's own in the write directory, beside what
+    /// the program writes there: its bytes, if it is there.
+    pub fn read_own(&self, name: &str) -> Option<Vec<u8>> {
+        fs::read(self.write_dir.as_ref()?.join(name)).ok()
+    }
+
+    /// Writes a file of the project's own into the write directory. With
+    /// no write directory nothing is kept, as for what the program writes.
+    pub fn write_own(&self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        let Some(root) = &self.write_dir else { return Ok(()) };
+        fs::create_dir_all(root)?;
+        fs::write(root.join(name), data)
+    }
+
     /// Where a file the program wrote lives in the write directory.
     fn written_path(root: &Path, name: &str) -> PathBuf {
         root.join(name.to_ascii_lowercase())

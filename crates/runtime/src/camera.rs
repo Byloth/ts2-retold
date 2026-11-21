@@ -74,6 +74,9 @@ pub fn choose_camera(m: &mut Machine) -> Result<(), Stop> {
             _ => Some(()),
         };
         m.os.controls.camera_orbits = entry == 2;
+        // Which of the three it is, is the project's to remember: the
+        // game's saved block has a bit for its own two.
+        m.os.keep_settings();
     }
     m.set_game_half(MENU_PAGE, 0)?;
     m.set_game_half(MENU_ENTRY, 0)?;

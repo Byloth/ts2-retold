@@ -21,6 +21,7 @@ pub mod game;
 pub mod input;
 pub mod keys;
 pub mod mods;
+pub mod options;
 pub mod os;
 pub mod threads;
 pub mod typeface;

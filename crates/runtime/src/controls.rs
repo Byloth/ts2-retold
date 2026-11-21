@@ -82,6 +82,11 @@ pub struct Controls {
     pub camera_orbits: bool,
     /// The pause menu's name for that camera, in the game's language.
     pub orbit_camera_text: Vec<u8>,
+    /// The wordings of the options' entry "mouse and camera" and its
+    /// page, in the game's language.
+    pub page_wording: andy_recomp::menu::MouseAndCameraWording,
+    /// That page while it is open.
+    pub(crate) page: crate::options::Page,
     /// The parts of a unit of angle not yet turned, sideways and up.
     pub(crate) turn_left_over: [i32; 2],
     /// Whether the visor is on because a button is held.
@@ -101,16 +106,117 @@ impl Default for Controls {
                 Binding::Nothing,
             ],
             // A count is seven eighths of a unit: 4681 counts a turn.
-            turn: [224, 224],
+            turn: [DEFAULT_SENSITIVITY * SENSITIVITY_STEP; 2],
             // Twice and once the rate of the camera's two actions.
             stick_turn: [32 * 256, 16 * 256],
             inverted: false,
             camera_orbits: true,
             orbit_camera_text: b"orbit camera".to_vec(),
+            page_wording: andy_recomp::menu::mouse_and_camera_wording(None),
+            page: crate::options::Page::default(),
             turn_left_over: [0; 2],
             visor_held: false,
             visor_asked: false,
         }
+    }
+}
+
+/// The mouse's sensitivity as the options show it: so many steps, each
+/// this much of [`Controls::turn`]; the fourth is what the mouse turns by
+/// when nothing was set.
+pub const SENSITIVITY_STEPS: i32 = 10;
+pub const SENSITIVITY_STEP: i32 = 56;
+pub const DEFAULT_SENSITIVITY: i32 = 4;
+
+/// The file of the project's own settings in the state directory, beside
+/// the game's saves (ADR 0021): lines of `key=value`.
+pub const SETTINGS_FILE: &str = "retold.ini";
+/// The keys of the mouse's buttons in that file, in [`Controls::buttons`]'
+/// order, and the names of what a button can do.
+const BUTTON_KEYS: [&str; crate::win32::dinput::MOUSE_BUTTONS] =
+    ["left_button", "right_button", "middle_button", "fourth_button"];
+const BINDING_NAMES: [(&str, Binding); 4] = [
+    ("nothing", Binding::Nothing),
+    ("visor", Binding::VisorWhileHeld),
+    ("fire", Binding::Action(action::FIRE)),
+    ("spin", Binding::Action(action::SPIN)),
+];
+
+impl Controls {
+    /// The step of sensitivity nearest to what the mouse turns sideways by.
+    pub fn sensitivity(&self) -> i32 {
+        ((self.turn[0] + SENSITIVITY_STEP / 2) / SENSITIVITY_STEP).clamp(1, SENSITIVITY_STEPS)
+    }
+
+    /// Has the mouse turn by a step of sensitivity, sideways and up alike.
+    pub fn set_sensitivity(&mut self, step: i32) {
+        self.turn = [step.clamp(1, SENSITIVITY_STEPS) * SENSITIVITY_STEP; 2];
+    }
+
+    /// The settings as the settings file holds them.
+    pub fn settings_text(&self) -> String {
+        let mut text = format!("mouse_sensitivity={}\n", self.sensitivity());
+        text += &format!("vertical_inverted={}\n", if self.inverted { "yes" } else { "no" });
+        for (key, binding) in BUTTON_KEYS.into_iter().zip(self.buttons) {
+            if let Some((name, _)) = BINDING_NAMES.into_iter().find(|&(_, named)| named == binding) {
+                text += &format!("{key}={name}\n");
+            }
+        }
+        text += &format!("camera={}\n", if self.camera_orbits { "orbit" } else { "game" });
+        text
+    }
+
+    /// Takes the settings a settings file's text holds. A line that is not
+    /// a known key with one of its values is passed over, and what it
+    /// would have set stays as it is; `#` starts a comment.
+    pub fn read_settings(&mut self, text: &str) {
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("");
+            let Some((key, value)) = line.split_once('=') else { continue };
+            let (key, value) = (key.trim(), value.trim());
+            let yes_or_no = match value {
+                "yes" => Some(true),
+                "no" => Some(false),
+                _ => None,
+            };
+            match key {
+                "mouse_sensitivity" => {
+                    let step = value.parse().ok().filter(|step| (1..=SENSITIVITY_STEPS).contains(step));
+                    if let Some(step) = step {
+                        self.set_sensitivity(step);
+                    }
+                }
+                "vertical_inverted" => self.inverted = yes_or_no.unwrap_or(self.inverted),
+                "camera" => match value {
+                    "orbit" => self.camera_orbits = true,
+                    "game" => self.camera_orbits = false,
+                    _ => {}
+                },
+                _ => {
+                    let button = BUTTON_KEYS.iter().position(|&button| button == key);
+                    let binding = BINDING_NAMES.into_iter().find(|&(name, _)| name == value);
+                    if let (Some(button), Some((_, binding))) = (button, binding) {
+                        self.buttons[button] = binding;
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl crate::os::Os {
+    /// Takes the settings kept in the state directory, if any were.
+    /// Whether there were.
+    pub fn read_settings(&mut self) -> bool {
+        let Some(bytes) = self.files.read_own(SETTINGS_FILE) else { return false };
+        self.controls.read_settings(&String::from_utf8_lossy(&bytes));
+        true
+    }
+
+    /// Writes the settings down in the state directory, for the next
+    /// session. As with the game's own files, a write that fails is lost.
+    pub(crate) fn keep_settings(&self) {
+        let _ = self.files.write_own(SETTINGS_FILE, self.controls.settings_text().as_bytes());
     }
 }
 
@@ -202,4 +308,68 @@ pub fn add_walking_keys(m: &mut Machine) -> Result<(), Stop> {
 pub(crate) fn camera_actions(m: &mut Machine) -> Result<(bool, bool), Stop> {
     let pad = m.game_half(PAD)?;
     Ok((pad & action::CAMERA_LEFT != 0, pad & action::CAMERA_RIGHT != 0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_settings_file_gives_back_what_was_written() {
+        let mut controls = Controls::default();
+        assert_eq!(
+            controls.settings_text(),
+            "mouse_sensitivity=4\nvertical_inverted=no\nleft_button=fire\nright_button=visor\n\
+             middle_button=spin\nfourth_button=nothing\ncamera=orbit\n"
+        );
+        controls.set_sensitivity(9);
+        controls.inverted = true;
+        controls.buttons[1] = Binding::Action(action::SPIN);
+        controls.buttons[3] = Binding::Action(action::FIRE);
+        controls.camera_orbits = false;
+        let text = controls.settings_text();
+        let mut read = Controls::default();
+        read.read_settings(&text);
+        assert_eq!((read.turn, read.inverted, read.camera_orbits), ([9 * SENSITIVITY_STEP; 2], true, false));
+        assert_eq!(read.buttons, controls.buttons);
+        assert_eq!(read.settings_text(), text);
+    }
+
+    #[test]
+    fn what_a_settings_file_does_not_say_stays_as_it_is() {
+        let mut controls = Controls::default();
+        controls.read_settings("");
+        assert_eq!(controls.settings_text(), Controls::default().settings_text());
+        // Unknown keys and values, and numbers out of range, are passed over.
+        controls.read_settings(
+            "# by hand\n mouse_sensitivity = 7 # faster\nvertical_inverted=maybe\ncamera=fixed\n\
+             right_button=jump\nfifth_button=fire\nmouse_sensitivity=11\nnonsense\n",
+        );
+        assert_eq!(controls.sensitivity(), 7);
+        let expected = Controls { turn: [7 * SENSITIVITY_STEP; 2], ..Controls::default() };
+        assert_eq!(controls.settings_text(), expected.settings_text());
+    }
+
+    #[test]
+    fn the_default_sensitivity_is_a_step() {
+        let controls = Controls::default();
+        assert_eq!(controls.turn, [224, 224]);
+        assert_eq!(controls.sensitivity(), DEFAULT_SENSITIVITY);
+    }
+
+    #[test]
+    fn the_settings_are_kept_in_the_state_directory() {
+        let directory = std::env::temp_dir().join(format!("andy-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let files = || crate::files::Files::new(None, Some(directory.clone()));
+        // No file: the defaults.
+        let mut os = crate::os::Os::new(files());
+        assert_eq!(os.controls.settings_text(), Controls::default().settings_text());
+        os.controls.set_sensitivity(2);
+        os.controls.camera_orbits = false;
+        os.keep_settings();
+        let again = crate::os::Os::new(files());
+        assert_eq!((again.controls.sensitivity(), again.controls.camera_orbits), (2, false));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 }
