@@ -59,6 +59,8 @@ pub struct Os {
     pub(crate) amstream: amstream::State,
     /// What the keyboard and mouse are doing; written by the embedder.
     pub input: dinput::Input,
+    /// The controls the project adds (ADR 0021).
+    pub controls: crate::controls::Controls,
     /// A recording of input being played back, if any.
     pub recording: Option<crate::input::Recording>,
     /// A recording of input being made, if any.

@@ -29,10 +29,12 @@ done
 unset TS2_LANGUAGE_DIR TS2_OTHER_DISCS
 
 # A recording and the seconds of the machine's clock it is run for.
-# A third field, `new`, starts it from a game never played (an empty state
-# directory) and not from what out/run holds: so were the recordings made
-# by `play --record --state DIR` on an empty directory.
-runs="level:260 pause:200 options:170 options-list:135 en-menu:150 robot:94:new stairs:90:new wall:100:new"
+# A third field says more: `new` starts the run from a game never played
+# (an empty state directory) and not from what out/run holds, as the
+# recordings made by `play --record --state DIR` on an empty directory
+# want; `new-orbit` moreover leaves the camera turned by the mouse on (the
+# other recordings are of the keyboard and the original's camera).
+runs="level:260 pause:200 options:170 options-list:135 en-menu:150 robot:94:new stairs:90:new wall:100:new orbit:64:new-orbit"
 
 mkdir -p out/check
 one() {
@@ -43,8 +45,11 @@ one() {
     rm -rf "$work"
     mkdir -p "$work"
     state=out/run
-    case $rest in *:new) state=$work/state; mkdir -p "$state" ;; esac
-    "$program" boot --limit 12000000000 --seconds "$seconds" --gpu --state "$state" \
+    camera="--without orbit-camera"
+    case $rest in *:new*) state=$work/state; mkdir -p "$state" ;; esac
+    case $rest in *-orbit) camera= ;; esac
+    # shellcheck disable=SC2086
+    "$program" boot --limit 12000000000 --seconds "$seconds" --gpu --state "$state" $camera \
         --input "out/input/$name.txt" --frames "$work/frames" --frame-step 100 \
         --sound "$work/sound.wav" > "$work/log.txt" 2>&1 || true
     {

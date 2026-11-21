@@ -42,22 +42,39 @@ const DIDFT_AXIS: u32 = 0x03;
 const DIDFT_BUTTON: u32 = 0x0C;
 const DIDFT_ANYINSTANCE: u32 = 0x00FF_FF00;
 const DIDC_ATTACHED: u32 = 1;
-const MOUSE_AXES: usize = 3;
-const MOUSE_BUTTONS: usize = 4;
+pub const MOUSE_AXES: usize = 3;
+pub const MOUSE_BUTTONS: usize = 4;
 
 /// What the input devices are doing right now.
 #[derive(Debug, Clone)]
 pub struct Input {
     /// Keys held down, by keyboard scan code (the `DIK_*` numbering).
     pub keys: [bool; 256],
-    /// Mouse movement along x, y and the wheel since the game last read it.
+    /// Mouse movement along x, y and the wheel that has arrived since the
+    /// game last read the keyboard: written by the embedder.
     pub mouse_motion: [i32; MOUSE_AXES],
+    /// The movement of the frame the game is making: what had arrived when
+    /// it read the keyboard. Input goes by that one clock (ADR 0017).
+    pub frame_motion: [i32; MOUSE_AXES],
     pub mouse_buttons: [bool; MOUSE_BUTTONS],
 }
 
 impl Default for Input {
     fn default() -> Self {
-        Input { keys: [false; 256], mouse_motion: [0; MOUSE_AXES], mouse_buttons: [false; MOUSE_BUTTONS] }
+        Input {
+            keys: [false; 256],
+            mouse_motion: [0; MOUSE_AXES],
+            frame_motion: [0; MOUSE_AXES],
+            mouse_buttons: [false; MOUSE_BUTTONS],
+        }
+    }
+}
+
+impl Input {
+    /// At a read of the keyboard: what the mouse has moved since the read
+    /// before becomes the movement of this frame.
+    pub(crate) fn take_frame_motion(&mut self) {
+        self.frame_motion = std::mem::take(&mut self.mouse_motion);
     }
 }
 
@@ -355,6 +372,7 @@ fn get_device_state(m: &mut Machine, a: &[u32]) -> u32 {
         if let Some(recording) = &mut m.os.recording {
             recording.apply(m.os.keyboard_reads, &mut m.os.input);
         }
+        m.os.input.take_frame_motion();
         if let Some(recorder) = &mut m.os.recorder {
             recorder.observe(m.os.keyboard_reads, &m.os.input);
         }
@@ -366,9 +384,9 @@ fn get_device_state(m: &mut Machine, a: &[u32]) -> u32 {
         match control {
             Control::Key(code) => state[at] = if input.keys[code] { 0x80 } else { 0 },
             Control::MouseButton(button) => state[at] = if input.mouse_buttons[button] { 0x80 } else { 0 },
-            // Reading a relative axis consumes the movement.
+            // Reading a relative axis consumes the frame's movement.
             Control::MouseAxis(axis) => state[at..at + 4]
-                .copy_from_slice(&std::mem::take(&mut input.mouse_motion[axis]).to_le_bytes()),
+                .copy_from_slice(&std::mem::take(&mut input.frame_motion[axis]).to_le_bytes()),
         }
     }
     if m.memory.load(out, &state).is_some() { DI_OK } else { DIERR_INVALIDPARAM }

@@ -8,7 +8,7 @@
 
 use andy_cpu::interp::Fault;
 
-use crate::mods::{MENU_ARROWS_BY_TEXT, ONE_TYPEFACE, SKIP_MODE_SELECT};
+use crate::mods::{MENU_ARROWS_BY_TEXT, MOUSE_CONTROLS, ONE_TYPEFACE, ORBIT_CAMERA, SKIP_MODE_SELECT};
 use crate::{Machine, Stop};
 
 /// A function of the game that a modification replaces with native code.
@@ -51,6 +51,26 @@ pub fn replacement_points() -> Vec<u32> {
 }
 
 pub static REPLACEMENTS: &[Replacement] = &[
+    Replacement {
+        modification: MOUSE_CONTROLS,
+        address: |_| crate::controls::CONTROLS_READ,
+        name: "the mouse among the controls",
+        callee_pops: 0,
+        resume: None,
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::controls::add_the_mouse,
+    },
+    Replacement {
+        modification: ORBIT_CAMERA,
+        address: |_| crate::camera::ANGLES_DECIDED,
+        name: "the camera's angles",
+        callee_pops: 0,
+        resume: Some(crate::camera::CAMERA_PLACED),
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::camera::orbit,
+    },
     Replacement {
         modification: SKIP_MODE_SELECT,
         address: |addresses| addresses.mode_select,
@@ -351,7 +371,7 @@ impl Machine {
         self.memory.read(address, 4).ok_or(Stop::Fault(Fault::Memory { address, write: false }))
     }
 
-    fn set_game_word(&mut self, address: u32, value: u32) -> Result<(), Stop> {
+    pub(crate) fn set_game_word(&mut self, address: u32, value: u32) -> Result<(), Stop> {
         self.memory.write(address, 4, value).ok_or(Stop::Fault(Fault::Memory { address, write: true }))
     }
 }

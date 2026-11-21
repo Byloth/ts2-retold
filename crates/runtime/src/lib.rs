@@ -14,6 +14,8 @@
 
 pub mod audio;
 pub mod blocks;
+pub mod camera;
+pub mod controls;
 pub mod files;
 pub mod game;
 pub mod input;

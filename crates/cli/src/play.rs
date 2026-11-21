@@ -17,10 +17,10 @@ use andy_gpu::{Bar, Gpu, Overlay, Presenter};
 use andy_runtime::{Machine, Stop};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
+use winit::window::{CursorGrabMode, CursorIcon, ResizeDirection, Window, WindowId};
 
 use crate::frame::{Button, Edge, Frame, Hit};
 use crate::gauge::{self, Reading};
@@ -202,6 +202,13 @@ struct Play {
     meter: Meter,
     /// Whether the gauge is shown (F9), and the reading it shows.
     gauge: Option<Reading>,
+    /// Whether the game takes the mouse at all (a modification that uses
+    /// it is on), and whether it has it now: the pointer is then hidden
+    /// and held, and its movement and buttons are the game's.
+    mouse_wanted: bool,
+    mouse_held: bool,
+    /// Movement not yet a whole count, sideways and down.
+    mouse_left_over: (f64, f64),
     /// When the machine's clock read `clock_start`.
     started: Instant,
     clock_start: u64,
@@ -285,6 +292,32 @@ impl Play {
     }
 
     /// What the pointer is over.
+    /// Gives the mouse to the game, or back to the desktop.
+    fn hold_mouse(&mut self, held: bool) {
+        if held == self.mouse_held {
+            return;
+        }
+        let Some(window) = &self.window else { return };
+        if held {
+            // Held where it is where the window system can, else kept
+            // inside the window.
+            let grabbed = window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
+            if grabbed.is_err() {
+                return;
+            }
+        } else {
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
+            let input = &mut self.machine.os.input;
+            input.mouse_buttons = Default::default();
+            input.mouse_motion = Default::default();
+        }
+        window.set_cursor_visible(!held);
+        self.mouse_held = held;
+        self.mouse_left_over = (0.0, 0.0);
+    }
+
     fn under_pointer(&self) -> Hit {
         match (&self.frame, self.pointer) {
             (Some(frame), Some((x, y))) => frame.hit(x, y),
@@ -444,6 +477,32 @@ impl ApplicationHandler for Play {
                 self.pointer = None;
                 self.pointer_moved();
             }
+            // While the game has the mouse, its buttons are the game's.
+            WindowEvent::MouseInput { state, button, .. } if self.mouse_held => {
+                let number = match button {
+                    MouseButton::Left => Some(0),
+                    MouseButton::Right => Some(1),
+                    MouseButton::Middle => Some(2),
+                    MouseButton::Back | MouseButton::Forward | MouseButton::Other(_) => Some(3),
+                };
+                if let Some(number) = number {
+                    self.machine.os.input.mouse_buttons[number] = state == ElementState::Pressed;
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } if self.mouse_held => {
+                // A notch of the wheel is 120, as Windows counts it.
+                let notches = match delta {
+                    MouseScrollDelta::LineDelta(_, lines) => lines as f64,
+                    MouseScrollDelta::PixelDelta(by) => by.y / 40.0,
+                };
+                self.machine.os.input.mouse_motion[2] += (notches * 120.0).round() as i32;
+            }
+            // A press on the picture gives the mouse to the game.
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. }
+                if self.mouse_wanted && self.under_pointer() == Hit::Content =>
+            {
+                self.hold_mouse(true);
+            }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 let hit = self.under_pointer();
                 match state {
@@ -463,6 +522,13 @@ impl ApplicationHandler for Play {
                 let PhysicalKey::Code(key) = event.physical_key else { return };
                 // F9 is the window's own: it shows and hides the gauge,
                 // and the game does not see it.
+                // F10 too: it gives the pointer back to the desktop.
+                if key == KeyCode::F10 {
+                    if event.state == ElementState::Pressed {
+                        self.hold_mouse(false);
+                    }
+                    return;
+                }
                 if key == KeyCode::F9 {
                     if event.state == ElementState::Pressed && !event.repeat {
                         self.gauge = if self.gauge.is_some() { None } else { Some(self.meter.reading) };
@@ -479,10 +545,24 @@ impl ApplicationHandler for Play {
             WindowEvent::Focused(focused) => {
                 if !focused {
                     self.machine.os.input.keys = [false; 256];
+                    self.hold_mouse(false);
                 }
                 self.change_frame(|frame, _| frame.active = focused);
             }
             _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        // The mouse's own movement, not the pointer's: it goes on when the
+        // pointer is held in place.
+        if let (true, DeviceEvent::MouseMotion { delta }) = (self.mouse_held, event) {
+            let (x, y) = (self.mouse_left_over.0 + delta.0, self.mouse_left_over.1 + delta.1);
+            let whole = (x.trunc(), y.trunc());
+            self.mouse_left_over = (x - whole.0, y - whole.1);
+            let motion = &mut self.machine.os.input.mouse_motion;
+            motion[0] += whole.0 as i32;
+            motion[1] += whole.1 as i32;
         }
     }
 
@@ -556,6 +636,10 @@ impl Play {
 /// Runs the game in a window until it stops or the window is closed.
 pub fn play(machine: Machine, seconds: Option<u64>, gauge: bool) -> Result<(Machine, Option<Stop>), String> {
     let event_loop = EventLoop::new().map_err(|error| format!("no window system: {error}"))?;
+    let mods = &machine.os.mods;
+    let mouse_wanted = [andy_runtime::mods::MOUSE_CONTROLS, andy_runtime::mods::ORBIT_CAMERA]
+        .iter()
+        .any(|id| mods.is_enabled(id));
     let mut play = Play {
         machine,
         window: None,
@@ -567,6 +651,9 @@ pub fn play(machine: Machine, seconds: Option<u64>, gauge: bool) -> Result<(Mach
         frames_shown: 0,
         meter: Meter { since: Instant::now(), frames: 0, busy: Duration::ZERO, reading: Reading::default() },
         gauge: gauge.then(Reading::default),
+        mouse_wanted,
+        mouse_held: false,
+        mouse_left_over: (0.0, 0.0),
         started: Instant::now(),
         clock_start: 0,
         until: seconds.map(|seconds| seconds * 1000),

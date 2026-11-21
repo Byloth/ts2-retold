@@ -1,30 +1,44 @@
-//! Recorded input: what the keyboard does, and when.
+//! Recorded input: what the keyboard and the mouse do, and when.
 //!
 //! Time in a recording is counted in **reads of the keyboard**. The game
 //! reads the keyboard's state once per frame, and nothing else it sees
 //! depends on when a key went down, so "at the n-th read the state changes
 //! like this" replays a session exactly, whatever the speed of the machine
-//! it is replayed on (ADR 0017).
+//! it is replayed on (ADR 0017). The mouse goes by the same clock: its
+//! buttons change at a read, and its movement is handed over read by read
+//! ([`Input::frame_motion`]).
 //!
-//! As text, one change per line: the read at which it happens (the first
-//! read is 1), `press` or `release`, and the key's DirectInput name without
-//! `DIK_`. `#` starts a comment.
+//! As text, one change per line, the read at which it happens first (the
+//! first read is 1); `#` starts a comment:
 //!
 //! ```text
-//! 3600 press SPACE
+//! 3600 press SPACE          a key, by its DirectInput name without DIK_
 //! 3605 release SPACE
+//! 3610 press MOUSE_RIGHT    a mouse button: MOUSE_LEFT, _RIGHT, _MIDDLE, _4
+//! 3611 move -12 3 0         the mouse's movement in that frame: x, y, wheel
 //! ```
 
 use crate::keys;
-use crate::win32::dinput::Input;
+use crate::win32::dinput::{Input, MOUSE_AXES, MOUSE_BUTTONS};
+
+/// The names of the mouse's buttons in a recording, in DirectInput's order.
+const BUTTON_NAMES: [&str; MOUSE_BUTTONS] = ["MOUSE_LEFT", "MOUSE_RIGHT", "MOUSE_MIDDLE", "MOUSE_4"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    /// A key, by its scan code, goes down or up.
+    Key { key: u8, down: bool },
+    /// A button of the mouse goes down or up.
+    Button { button: u8, down: bool },
+    /// The mouse's movement in the frame: x, y and the wheel.
+    Motion([i32; MOUSE_AXES]),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Event {
     /// The read of the keyboard from which the change is seen.
     pub read: u64,
-    /// The key's scan code.
-    pub key: u8,
-    pub down: bool,
+    pub change: Change,
 }
 
 /// A recording being played back.
@@ -52,35 +66,63 @@ impl Recording {
                 continue;
             }
             let wrong = |what: &str| format!("line {}: {what}: {line:?}", number + 1);
-            let [read, action, key] = line.split_whitespace().collect::<Vec<_>>()[..] else {
-                return Err(wrong("expected a read number, press or release, and a key"));
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let read = words[0]
+                .parse()
+                .ok()
+                .filter(|&read| read > 0)
+                .ok_or_else(|| wrong("not a read number"))?;
+            let change = match words[1..] {
+                ["move", x, y, wheel] => {
+                    let axis = |text: &str| text.parse().map_err(|_| wrong("not a movement"));
+                    Change::Motion([axis(x)?, axis(y)?, axis(wheel)?])
+                }
+                [action @ ("press" | "release"), name] => {
+                    let down = action == "press";
+                    let button = BUTTON_NAMES.iter().position(|button| button.eq_ignore_ascii_case(name));
+                    match button {
+                        Some(button) => Change::Button { button: button as u8, down },
+                        None => {
+                            let key = keys::code(name).ok_or_else(|| wrong("neither a key nor a button"))?;
+                            Change::Key { key, down }
+                        }
+                    }
+                }
+                _ => return Err(wrong("expected press or release and a name, or move and three numbers")),
             };
-            let read =
-                read.parse().ok().filter(|&read| read > 0).ok_or_else(|| wrong("not a read number"))?;
-            let down = match action {
-                "press" => true,
-                "release" => false,
-                _ => return Err(wrong("neither press nor release")),
-            };
-            let key = keys::code(key).ok_or_else(|| wrong("not a key name"))?;
-            events.push(Event { read, key, down });
+            events.push(Event { read, change });
         }
         Ok(Recording::new(events))
     }
 
     /// The text form of the recording.
     pub fn to_text(&self) -> String {
-        let line = |event: &Event| {
-            let action = if event.down { "press" } else { "release" };
-            format!("{} {action} {}\n", event.read, keys::name(event.key).unwrap_or("?"))
+        let action = |down: bool| if down { "press" } else { "release" };
+        let line = |event: &Event| match event.change {
+            Change::Key { key, down } => {
+                format!("{} {} {}\n", event.read, action(down), keys::name(key).unwrap_or("?"))
+            }
+            Change::Button { button, down } => {
+                format!("{} {} {}\n", event.read, action(down), BUTTON_NAMES[button as usize])
+            }
+            Change::Motion([x, y, wheel]) => format!("{} move {x} {y} {wheel}\n", event.read),
         };
         self.events.iter().map(line).collect()
     }
 
-    /// Brings the keyboard to its state at the given read.
+    /// Brings the keyboard and the mouse to their state at the given read.
+    /// Movement is added to what the mouse has moved since the read before.
     pub(crate) fn apply(&mut self, read: u64, input: &mut Input) {
         while let Some(event) = self.events.get(self.next).filter(|event| event.read <= read) {
-            input.keys[event.key as usize] = event.down;
+            match event.change {
+                Change::Key { key, down } => input.keys[key as usize] = down,
+                Change::Button { button, down } => input.mouse_buttons[button as usize] = down,
+                Change::Motion(motion) => {
+                    for (moved, by) in input.mouse_motion.iter_mut().zip(motion) {
+                        *moved += by;
+                    }
+                }
+            }
             self.next += 1;
         }
     }
@@ -91,30 +133,42 @@ impl Recording {
     }
 }
 
-/// A recording being made: what the game sees of the keyboard, read by
-/// read. Written where the game reads, and not where the keys arrive, a
-/// recording holds exactly what the game observed and nothing else.
+/// A recording being made: what the game sees of the keyboard and the
+/// mouse, read by read. Written where the game reads, and not where the
+/// keys arrive, a recording holds exactly what the game observed and
+/// nothing else.
 #[derive(Debug, Clone)]
 pub struct Recorder {
-    /// The keyboard as the game last read it.
-    seen: [bool; 256],
+    /// The keyboard and the buttons as the game last read them.
+    keys: [bool; 256],
+    buttons: [bool; MOUSE_BUTTONS],
     events: Vec<Event>,
 }
 
 impl Default for Recorder {
     fn default() -> Recorder {
-        Recorder { seen: [false; 256], events: Vec::new() }
+        Recorder { keys: [false; 256], buttons: [false; MOUSE_BUTTONS], events: Vec::new() }
     }
 }
 
 impl Recorder {
-    /// Notes how the keyboard at this read differs from the one before.
+    /// Notes how the input at this read differs from that of the read
+    /// before, and the movement of the frame.
     pub(crate) fn observe(&mut self, read: u64, input: &Input) {
-        for (key, (&down, seen)) in input.keys.iter().zip(&mut self.seen).enumerate() {
+        for (key, (&down, seen)) in input.keys.iter().zip(&mut self.keys).enumerate() {
             if down != *seen {
                 *seen = down;
-                self.events.push(Event { read, key: key as u8, down });
+                self.events.push(Event { read, change: Change::Key { key: key as u8, down } });
             }
+        }
+        for (button, (&down, seen)) in input.mouse_buttons.iter().zip(&mut self.buttons).enumerate() {
+            if down != *seen {
+                *seen = down;
+                self.events.push(Event { read, change: Change::Button { button: button as u8, down } });
+            }
+        }
+        if input.frame_motion != [0; MOUSE_AXES] {
+            self.events.push(Event { read, change: Change::Motion(input.frame_motion) });
         }
     }
 
@@ -135,15 +189,22 @@ mod tests {
         assert_eq!(
             recording.events,
             [
-                Event { read: 3600, key: 0x39, down: true },
-                Event { read: 3605, key: 0x39, down: false },
-                Event { read: 3605, key: 0xC8, down: true },
+                Event { read: 3600, change: Change::Key { key: 0x39, down: true } },
+                Event { read: 3605, change: Change::Key { key: 0x39, down: false } },
+                Event { read: 3605, change: Change::Key { key: 0xC8, down: true } },
             ]
         );
         assert_eq!(recording.to_text(), "3600 press SPACE\n3605 release SPACE\n3605 press UP\n");
         assert_eq!(Recording::parse(&recording.to_text()), Ok(recording));
-        for wrong in ["press SPACE", "0 press SPACE", "5 hold SPACE", "5 press SPACEBAR", "5 press SPACE now"]
-        {
+        for wrong in [
+            "press SPACE",
+            "0 press SPACE",
+            "5 hold SPACE",
+            "5 press SPACEBAR",
+            "5 press SPACE now",
+            "5 move 1 2",
+            "5 move a 2 0",
+        ] {
             assert!(Recording::parse(wrong).is_err(), "{wrong}");
         }
     }
@@ -165,6 +226,31 @@ mod tests {
         for read in 1..=6u64 {
             recording.apply(read, &mut input);
             assert_eq!(input.keys, seen[read as usize - 1], "read {read}");
+        }
+    }
+
+    #[test]
+    fn the_mouse_is_recorded_and_played_back_frame_by_frame() {
+        let mut recorder = Recorder::default();
+        let mut input = Input::default();
+        let mut seen = Vec::new();
+        for read in 1..=4u64 {
+            input.mouse_buttons[1] = read == 2 || read == 3;
+            // What arrived since the read before becomes the frame's.
+            input.mouse_motion = if read == 3 { [-12, 3, 0] } else { [0; 3] };
+            input.take_frame_motion();
+            recorder.observe(read, &input);
+            seen.push((input.mouse_buttons, input.frame_motion));
+        }
+        let mut recording = recorder.recording();
+        let text = "2 press MOUSE_RIGHT\n3 move -12 3 0\n4 release MOUSE_RIGHT\n";
+        assert_eq!(recording.to_text(), text);
+        assert_eq!(Recording::parse(text), Ok(recording.clone()));
+        let mut input = Input::default();
+        for read in 1..=4u64 {
+            recording.apply(read, &mut input);
+            input.take_frame_motion();
+            assert_eq!((input.mouse_buttons, input.frame_motion), seen[read as usize - 1], "read {read}");
         }
     }
 

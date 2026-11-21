@@ -34,6 +34,8 @@ pub const MENU_ARROWS_BY_TEXT: &str = "menu-arrows-by-text";
 pub const MENU_LOAD_SAVE_WORDING: &str = "menu-load-save-wording";
 pub const ONE_TYPEFACE: &str = "one-typeface";
 pub const MENU_LOAD_BEFORE_OPTIONS: &str = "menu-load-before-options";
+pub const MOUSE_CONTROLS: &str = "mouse-controls";
+pub const ORBIT_CAMERA: &str = "orbit-camera";
 
 pub static CATALOGUE: &[Modification] = &[
     Modification {
@@ -80,6 +82,30 @@ pub static CATALOGUE: &[Modification] = &[
         summary: "In the main menu the entry for loading and saving comes before the options (the \
                   original has the options second and loading third), in every language. Decided by the \
                   owner.",
+    },
+    Modification {
+        id: MOUSE_CONTROLS,
+        class: Class::Feature,
+        affects_simulation: false,
+        enabled_by_default: true,
+        summary: "The mouse's buttons are controls (ADR 0021): where the game has read its devices and made its \
+                  mask of actions, the actions bound to the buttons held are added. By default the left button \
+                  fires, the middle one spins, and the right one holds the visor view (first person) for as long \
+                  as it is held, where the key for it is a switch. The original takes no notice of the mouse; with \
+                  the mouse left alone nothing differs.",
+    },
+    Modification {
+        id: ORBIT_CAMERA,
+        class: Class::Gameplay,
+        affects_simulation: true,
+        enabled_by_default: true,
+        summary: "The camera goes around the character as the mouse moves, sideways and up and down, and stays \
+                  where it is put (ADR 0021). The original's camera decides its own angles (it turns behind the \
+                  character, swings away from walls, comes back to one elevation); that decision is replaced, and \
+                  the game's own code still places the camera from the angles, brings it nearer when something is \
+                  in the way and turns it to the character. The camera's two actions turn it as in the original's \
+                  \"passive\" camera. The directions the character walks in follow the camera, as in the original. \
+                  Cameras the levels script, the visor and the pause are the original's.",
     },
     Modification {
         id: LANGUAGE,
