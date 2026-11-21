@@ -59,6 +59,12 @@ pub struct Os {
     pub(crate) amstream: amstream::State,
     /// What the keyboard and mouse are doing; written by the embedder.
     pub input: dinput::Input,
+    /// How many times farther than the original things are drawn
+    /// (`draw-distance`).
+    pub draw_distance: u32,
+    /// The coins the original would have drawn in the last frame: those
+    /// that can be picked up (see `crate::distance`).
+    pub(crate) coins_within_reach: std::collections::HashSet<u32>,
     /// The controls the project adds (ADR 0021).
     pub controls: crate::controls::Controls,
     /// A recording of input being played back, if any.

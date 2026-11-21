@@ -66,6 +66,9 @@ USAGE:
     boot, bench and play take --scale N (1 to 8; 3 if not given): with the
     render-scale modification, triangles are drawn at N by N texels to a
     pixel of the game's picture.
+    boot, bench and play take --distance N (1 to 8; 3 if not given): with
+    the draw-distance modification, scenery and coins are drawn N times
+    farther than the original draws them.
     boot, bench and play take --state DIR: where the game's saves and
     settings are kept between runs (out/run if not given). A recording
     replays only from the state it was made from: an empty directory is
@@ -136,6 +139,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
     let mut record = None;
     let mut state = PathBuf::from("out/run");
     let mut scale = 3u32;
+    let mut distance = 3u32;
     let mut yuv = None;
     let mut pcm = None;
     let mut pictures = u64::MAX;
@@ -177,6 +181,13 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
                     .and_then(|n| n.parse().ok())
                     .filter(|scale| (1..=8).contains(scale))
                     .ok_or("--scale needs a number from 1 to 8")?;
+            }
+            "--distance" => {
+                distance = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .filter(|distance| (1..=8).contains(distance))
+                    .ok_or("--distance needs a number from 1 to 8")?;
             }
             "--state" => state = PathBuf::from(args.next().ok_or("--state needs a directory")?),
             "--frames" => frames = Some(PathBuf::from(args.next().ok_or("--frames needs a directory")?)),
@@ -405,6 +416,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
                 state,
                 orbit_camera_text,
                 render_scale,
+                draw_distance: distance,
                 page_wording,
                 frames: frames.map(|directory| (directory, frame_step)),
             },
@@ -421,6 +433,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
             os.command_line_arguments = game_args;
             os.mods = mods;
             os.controls.orbit_camera_text = orbit_camera_text.to_vec();
+            os.draw_distance = distance;
             os.controls.page_wording = page_wording;
             os.addresses = addresses;
             let mut machine = Machine::load(&image, os);
@@ -622,6 +635,8 @@ struct BootOptions {
     orbit_camera_text: &'static [u8],
     /// The grain triangles are drawn at (the `render-scale` modification).
     render_scale: u32,
+    /// How many times farther things are drawn (`draw-distance`).
+    draw_distance: u32,
     /// The wordings of the options' entry for the mouse and the camera.
     page_wording: andy_recomp::menu::MouseAndCameraWording,
     /// Where to write presented frames, and every how many.
@@ -669,6 +684,7 @@ fn boot(image: &Image, options: BootOptions) {
         state: write_dir,
         orbit_camera_text,
         render_scale,
+        draw_distance,
         page_wording,
     } = options;
     // The program reads the game directory and writes only to the state
@@ -691,6 +707,7 @@ fn boot(image: &Image, options: BootOptions) {
     os.command_line_arguments = game_args;
     os.mods = mods;
     os.controls.orbit_camera_text = orbit_camera_text.to_vec();
+    os.draw_distance = draw_distance;
     os.controls.page_wording = page_wording;
     os.addresses = addresses;
     let mut machine = Machine::load(image, os);

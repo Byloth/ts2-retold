@@ -113,3 +113,27 @@ the command in `CLAUDE.md`. Method: `crates/recomp/src/analysis.rs`.
   time step is at `0x52F2D4`.
 - `UNVERIFIED`: the states in which the camera is forced behind the
   character; what the visor's code does was read, not run.
+
+## Distances (reference build, first level; read for ADR 0022)
+
+- Scenery: `0x4CDD10(detail)` copies a row of the table at `0x508D28`
+  (three rows of six floats: far layer from, near layer to, two near
+  planes, distance all round, the far layer's inner radius) into
+  `0x508D14`, `0x508D18`, `0x508D08`, `0x508D10` and, through `0x4BC410`,
+  the squares at `0x5088B0` and `0x5088B4`. The detail is `[0x508D74]`,
+  1 unless changed (F5, F6, the graphics page). `0x4CDDD0` draws the two
+  layers.
+- Coins and pickup marks: entries of 16 bytes (place, a kind at +0x0C,
+  flags at +0x0D), listed at `[0x559D6C]`. The draw function `0x440F70`
+  tests each (`0x4413A4`: the squares of the two horizontal differences,
+  a sixteenth each, against the square of `[0x54BEF0]` = 0x680) and marks
+  those it draws with bit 0x80 of the flags; the pickup loop in
+  `0x4A0F80` (`0x4A11CC`) considers only those.
+- Enemies and characters: 64 slots of 0x9C bytes at `0x52C840`. The update
+  walk `0x4086F0` builds the list at `0x52F1D0` and `0x447BD0` sets bit 0
+  at +0x40 for those seen: room drawn, within four times the range at
+  +0x42 (1280, 1800 or 3800 by type), in view. `0x4CDC20` draws only
+  those; the walk keeps an object's script running while it is seen or
+  within its radius plus 3200.
+- The far plane is 48000; a linear fog from 24000 is set by `0x4B2CF0`
+  under conditions not met in the first level.

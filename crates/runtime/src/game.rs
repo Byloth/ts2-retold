@@ -9,7 +9,8 @@
 use andy_cpu::interp::Fault;
 
 use crate::mods::{
-    MENU_ARROWS_BY_TEXT, MOUSE_CONTROLS, ONE_TYPEFACE, ORBIT_CAMERA, SKIP_MODE_SELECT, WALKING_KEYS,
+    DRAW_DISTANCE, MENU_ARROWS_BY_TEXT, MOUSE_CONTROLS, ONE_TYPEFACE, ORBIT_CAMERA, SKIP_MODE_SELECT,
+    WALKING_KEYS,
 };
 use crate::{Machine, Stop};
 
@@ -53,6 +54,36 @@ pub fn replacement_points() -> Vec<u32> {
 }
 
 pub static REPLACEMENTS: &[Replacement] = &[
+    Replacement {
+        modification: DRAW_DISTANCE,
+        address: |_| crate::distance::SCENERY_LIMITS,
+        name: "the scenery's limits",
+        callee_pops: 0,
+        resume: None,
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::distance::set_scenery_limits,
+    },
+    Replacement {
+        modification: DRAW_DISTANCE,
+        address: |_| crate::distance::COIN_TESTED,
+        name: "a coin's distance when drawing",
+        callee_pops: 0,
+        resume: Some(crate::distance::COIN_DRAWN),
+        also_resumes: &[crate::distance::COIN_LEFT_OUT],
+        reference_only: true,
+        function: crate::distance::test_coin,
+    },
+    Replacement {
+        modification: DRAW_DISTANCE,
+        address: |_| crate::distance::COIN_PICKABLE,
+        name: "whether a coin can be picked up",
+        callee_pops: 0,
+        resume: Some(crate::distance::COIN_CONSIDERED),
+        also_resumes: &[crate::distance::COIN_PASSED_OVER],
+        reference_only: true,
+        function: crate::distance::coin_is_pickable,
+    },
     Replacement {
         modification: WALKING_KEYS,
         address: |_| crate::controls::CONTROLS_MADE,

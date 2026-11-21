@@ -38,6 +38,7 @@ pub const MOUSE_CONTROLS: &str = "mouse-controls";
 pub const ORBIT_CAMERA: &str = "orbit-camera";
 pub const WALKING_KEYS: &str = "walking-keys";
 pub const RENDER_SCALE: &str = "render-scale";
+pub const DRAW_DISTANCE: &str = "draw-distance";
 
 pub static CATALOGUE: &[Modification] = &[
     Modification {
@@ -111,6 +112,20 @@ pub static CATALOGUE: &[Modification] = &[
                   textures and everything the game draws in rectangles (menus' pictures, copies, fills) \
                   keep their own pixels. Where the game reads the picture back it gets its own size, \
                   each pixel the mean of its texels. The original draws at the size of the display mode.",
+    },
+    Modification {
+        id: DRAW_DISTANCE,
+        class: Class::Graphics,
+        affects_simulation: true,
+        enabled_by_default: true,
+        summary: "Scenery, the objects drawn with it, and coins are drawn from farther away (ADR 0022): \
+                  three times the original's distances unless --distance says otherwise, up to the \
+                  world's far plane. The original ends its detailed scenery 6500 units from the camera \
+                  (12000 at its own high detail) and its coins at about 6650. Only tests that decide \
+                  drawing are changed: a coin is still picked up only where the original would have \
+                  drawn it. Enemies are left as they are: whether one is drawn and whether it is awake \
+                  are one thing in the game. Drawing more is more of the game's code run in a frame, and the \
+                  machine's clock is its instructions: frames take longer on it, as on a slower computer.",
     },
     Modification {
         id: WALKING_KEYS,

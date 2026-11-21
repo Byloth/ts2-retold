@@ -50,7 +50,7 @@ one() {
     rm -f "$state/retold.ini"
     camera="--without orbit-camera --without walking-keys"
     # The outcomes are of the game's own picture, pixel for pixel.
-    grain="--without render-scale"
+    grain="--without render-scale --without draw-distance"
     case $rest in *:new*) rm -rf "$state"; mkdir -p "$state" ;; esac
     case $rest in *-orbit) camera= ;; esac
     # shellcheck disable=SC2086
