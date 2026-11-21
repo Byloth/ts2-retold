@@ -139,6 +139,10 @@ pub struct Machine {
     host_addresses: std::collections::HashMap<usize, u32>,
     /// Calls made to each host function, parallel to `host`.
     call_counts: Vec<u64>,
+    /// The time spent in host functions so far, in nanoseconds, if it is
+    /// being measured (`Some`): for telling the machine's own work from
+    /// the work done for it.
+    pub host_nanos: Option<u64>,
     /// Decoded instructions of the code section, filled on first execution.
     code_start: u32,
     decoded_index: Vec<u32>,
@@ -199,6 +203,7 @@ impl Machine {
             host: Vec::new(),
             host_addresses: std::collections::HashMap::new(),
             call_counts: Vec::new(),
+            host_nanos: None,
             code_start: code.va,
             decoded_index: vec![NOT_DECODED; code.virtual_size as usize],
             decoded: Vec::new(),
@@ -388,7 +393,12 @@ impl Machine {
         // A note belongs to the call that wrote it: the caller's is put
         // aside while this call, possibly made from inside a callback, runs.
         let outer_note = self.note.take();
-        let result = match (function.handler)(self, args) {
+        let timed = self.host_nanos.map(|_| std::time::Instant::now());
+        let outcome = (function.handler)(self, args);
+        if let (Some(started), Some(nanos)) = (timed, self.host_nanos.as_mut()) {
+            *nanos += started.elapsed().as_nanos() as u64;
+        }
+        let result = match outcome {
             Ok(result) => result,
             Err(stop) => {
                 if stop == Stop::WouldBlock {

@@ -58,6 +58,8 @@ USAGE:
                                     keyboard and the sound device;
                                     --seconds closes the window after N
                                     seconds of the machine's clock
+    andy bench [boot's options]     Run as boot does and report, for every
+                                    500 frames, how fast they were made
     andy atlas --out DIRECTORY      Put the one atlas of each typeface
                                     together from the discs at hand
                                     (TS2_LANGUAGE_DIR, TS2_OTHER_DISCS) and
@@ -318,7 +320,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 println!("\nfull analysis written to {}", path.display());
             }
         }
-        "boot" => boot(
+        "boot" | "bench" => boot(
             &image,
             BootOptions {
                 atlas: atlas.clone(),
@@ -326,6 +328,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 addresses,
                 game_dir: exe.parent().map(Path::to_path_buf),
                 trace,
+                bench: command == "bench",
                 limit,
                 seconds,
                 game_args,
@@ -380,6 +383,63 @@ fn run(args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// How many instructions the machine runs between two looks at the clock
+/// when it is measured, and how many frames a line of the report covers.
+const BENCH_SLICE: u64 = 1_000_000;
+const BENCH_FRAMES: u64 = 500;
+
+/// Runs the machine as fast as it goes and reports, for every stretch of
+/// frames, how fast they were made: frames a second of the computer's
+/// time, the instructions a frame took, and how much of the time went
+/// into host functions (drawing, sound, files) and not into running the
+/// game's code.
+fn measure(machine: &mut Machine, budget: u64) -> Stop {
+    machine.host_nanos = Some(0);
+    let end = machine.cpu.instructions.saturating_add(budget);
+    let started = std::time::Instant::now();
+    // At the start of the stretch: frames, instructions, time, host time.
+    let mut mark = (machine.os.ddraw.frames, machine.cpu.instructions, 0.0f64, 0u64);
+    println!("\n       frames   frames/s  ms/frame  instructions/frame  ns/instruction  in host functions");
+    let report = |machine: &Machine, mark: &mut (u64, u64, f64, u64)| {
+        let now = (
+            machine.os.ddraw.frames,
+            machine.cpu.instructions,
+            started.elapsed().as_secs_f64(),
+            machine.host_nanos.unwrap_or(0),
+        );
+        let (frames, instructions) = ((now.0 - mark.0) as f64, (now.1 - mark.1) as f64);
+        let (seconds, host) = (now.2 - mark.2, (now.3 - mark.3) as f64 / 1e9);
+        if frames > 0.0 && seconds > 0.0 {
+            println!(
+                "{:>6}-{:<6} {:>9.0} {:>9.2} {:>19.0} {:>15.1} {:>17.0}%",
+                mark.0,
+                now.0,
+                frames / seconds,
+                1000.0 * seconds / frames,
+                instructions / frames,
+                1e9 * (seconds - host).max(0.0) / instructions.max(1.0),
+                100.0 * host / seconds
+            );
+        }
+        *mark = now;
+    };
+    let stop = loop {
+        let left = end.saturating_sub(machine.cpu.instructions);
+        if left == 0 {
+            break Stop::Budget;
+        }
+        match machine.run(left.min(BENCH_SLICE)) {
+            Stop::Budget => {}
+            stop => break stop,
+        }
+        if machine.os.ddraw.frames - mark.0 >= BENCH_FRAMES {
+            report(machine, &mut mark);
+        }
+    };
+    report(machine, &mut mark);
+    stop
+}
+
 struct BootOptions {
     /// The typefaces' one atlas, put into the texture files as they are read.
     atlas: Option<std::rc::Rc<atlas::Atlases>>,
@@ -387,6 +447,9 @@ struct BootOptions {
     addresses: andy_runtime::game::Addresses,
     game_dir: Option<PathBuf>,
     trace: bool,
+    /// Whether the run is measured: how fast frames are made, stretch by
+    /// stretch.
+    bench: bool,
     limit: u64,
     /// How far the machine's clock may go.
     seconds: Option<u64>,
@@ -429,6 +492,7 @@ fn boot(image: &Image, options: BootOptions) {
         addresses,
         game_dir,
         trace,
+        bench,
         limit,
         seconds,
         game_args,
@@ -522,7 +586,8 @@ fn boot(image: &Image, options: BootOptions) {
     let budget = clock_limit.map_or(limit, |clock| {
         limit.min(clock.saturating_sub(machine.clock()) * andy_runtime::INSTRUCTIONS_PER_MS)
     });
-    let stop = match machine.run(budget) {
+    let stop = if bench { measure(&mut machine, budget) } else { machine.run(budget) };
+    let stop = match stop {
         Stop::Budget if budget < limit => Stop::Idle,
         stop => stop,
     };

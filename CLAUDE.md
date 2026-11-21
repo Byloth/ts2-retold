@@ -147,6 +147,8 @@ cargo run --release --bin andy -- atlas --out out/lang/atlas.png
 cargo run --release --bin andy -- boot ref/game-it/toy2.exe --limit 9000000000 --seconds 230 --gpu --input out/input/it-level.txt --frames out/frames-it --frame-step 100
 # The addresses of one language's build in another's, and the texts that change
 cargo run --release --bin andy -- pair ref/game/toy2.exe ref/game-it/toy2.exe --json out/lang/texts.json
+# How fast frames are made, stretch by stretch (boot's options)
+cargo run --release --bin andy -- bench --limit 9000000000 --seconds 240 --gpu --input out/input/level.txt
 # What the game plays, as a WAVE file (the same for the same run)
 cargo run --release --bin andy -- boot --limit 6000000000 --seconds 300 --input out/input/level.txt --sound out/sound/level.wav
 ```
