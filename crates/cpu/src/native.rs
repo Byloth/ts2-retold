@@ -88,6 +88,7 @@ pub fn rdtsc(cpu: &mut Cpu, ahead: u64) {
 }
 
 /// Reads a number from memory in one of the formats the x87 unit loads.
+#[inline]
 pub fn fload(memory: &mut Memory, address: u32, format: FMem) -> Option<f64> {
     Some(match format {
         FMem::F32 => f32::from_bits(memory.read(address, 4)?) as f64,
@@ -105,6 +106,7 @@ pub fn fload(memory: &mut Memory, address: u32, format: FMem) -> Option<f64> {
 
 /// Writes a number to memory in one of the formats the x87 unit stores,
 /// rounded as the unit's control word says.
+#[inline]
 pub fn fstore(cpu: &Cpu, memory: &mut Memory, address: u32, format: FMem, value: f64) -> Option<()> {
     let control = cpu.fpu.control;
     match format {

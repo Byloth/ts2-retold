@@ -99,23 +99,47 @@ impl Memory {
     #[inline]
     pub fn read(&mut self, address: u32, len: u32) -> Option<u32> {
         let offset = address as usize & (PAGE_SIZE - 1);
-        if offset + len as usize <= PAGE_SIZE {
-            let page = self.page(address >> PAGE_BITS)?;
+        // The usual case: within one page that exists.
+        if offset + len as usize <= PAGE_SIZE
+            && let Some(page) = &self.pages[(address >> PAGE_BITS) as usize]
+        {
             let mut bytes = [0u8; 4];
             bytes[..len as usize].copy_from_slice(&page[offset..offset + len as usize]);
-            Some(u32::from_le_bytes(bytes))
-        } else {
-            let mut value = 0;
-            for i in 0..len {
-                value |= (self.read_u8(address.wrapping_add(i))? as u32) << (8 * i);
-            }
-            Some(value)
+            return Some(u32::from_le_bytes(bytes));
         }
+        self.read_slowly(address, len)
+    }
+
+    /// A read across two pages, or of a page that does not exist yet.
+    #[cold]
+    fn read_slowly(&mut self, address: u32, len: u32) -> Option<u32> {
+        let mut value = 0;
+        for i in 0..len {
+            value |= (self.read_u8(address.wrapping_add(i))? as u32) << (8 * i);
+        }
+        Some(value)
     }
 
     /// Writes the low `len` (1, 2 or 4) bytes of `value`.
     #[inline]
     pub fn write(&mut self, address: u32, len: u32, value: u32) -> Option<()> {
+        let offset = address as usize & (PAGE_SIZE - 1);
+        // The usual case: within one page that exists, and no log kept.
+        if offset + len as usize <= PAGE_SIZE
+            && self.write_log.is_none()
+            && self.undo_log.is_none()
+            && let Some(page) = &mut self.pages[(address >> PAGE_BITS) as usize]
+        {
+            page[offset..offset + len as usize].copy_from_slice(&value.to_le_bytes()[..len as usize]);
+            return Some(());
+        }
+        self.write_slowly(address, len, value)
+    }
+
+    /// A write across two pages, to a page that does not exist yet, or
+    /// with a log kept.
+    #[cold]
+    fn write_slowly(&mut self, address: u32, len: u32, value: u32) -> Option<()> {
         // Check both ends first so that a faulting write changes nothing.
         self.page(address >> PAGE_BITS)?;
         self.page(address.wrapping_add(len - 1) >> PAGE_BITS)?;

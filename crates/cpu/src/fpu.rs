@@ -113,10 +113,12 @@ impl Default for Fpu {
 }
 
 impl Fpu {
+    #[inline]
     fn slot(&self, i: u32) -> usize {
         (self.top as usize + i as usize) & 7
     }
 
+    #[inline]
     pub fn st(&mut self, i: u32) -> f64 {
         let slot = self.slot(i);
         if self.valid & (1 << slot) == 0 {
@@ -127,12 +129,14 @@ impl Fpu {
         self.regs[slot]
     }
 
+    #[inline]
     pub fn set_st(&mut self, i: u32, value: f64) {
         let slot = self.slot(i);
         self.regs[slot] = value;
         self.valid |= 1 << slot;
     }
 
+    #[inline]
     pub fn push(&mut self, value: f64) {
         self.top = (self.top + 7) & 7;
         let slot = self.top as usize;
@@ -143,6 +147,7 @@ impl Fpu {
         self.valid |= 1 << slot;
     }
 
+    #[inline]
     pub fn pop(&mut self) {
         self.valid &= !(1 << self.top);
         self.top = (self.top + 1) & 7;
@@ -152,6 +157,7 @@ impl Fpu {
         self.valid.count_ones()
     }
 
+    #[inline]
     pub fn status(&self) -> u16 {
         (self.c[0] as u16) << 8
             | (self.c[1] as u16) << 9
@@ -164,12 +170,14 @@ impl Fpu {
         *self = Fpu { inexact_model: self.inexact_model, ..Fpu::default() };
     }
 
+    #[inline]
     pub fn rounding(&self) -> Rounding {
         Rounding::from_control(self.control)
     }
 
     /// Narrows a result, already rounded to 53 bits in the current mode, to
     /// the precision selected in the control word.
+    #[inline]
     fn narrow(&mut self, value: f64) -> f64 {
         match (self.control >> 8) & 3 {
             0 => round_to_24_bits(value, self.rounding()),
@@ -190,6 +198,7 @@ impl Fpu {
         }
     }
 
+    #[inline]
     pub fn binary(&mut self, op: FBin, a: f64, b: f64) -> f64 {
         let mode = self.rounding();
         match op {
@@ -201,17 +210,28 @@ impl Fpu {
                 let difference = add_rounded(a, -b, mode);
                 self.narrow(difference)
             }
+            // The error of the nearest result is only wanted for a directed
+            // rounding, and costs a fused multiply-add: it is not worked
+            // out when rounding to nearest, the mode programs run in.
             FBin::Mul => {
                 let nearest = a * b;
-                let product = direct(nearest, a.mul_add(b, -nearest), mode);
+                let product = if mode == Rounding::Nearest {
+                    nearest
+                } else {
+                    direct(nearest, a.mul_add(b, -nearest), mode)
+                };
                 self.narrow(product)
             }
             FBin::Div => {
                 let nearest = a / b;
-                // a - nearest * b has the sign of (a / b - nearest) times the sign of b.
-                let residual = (-nearest).mul_add(b, a);
-                let error = if b.is_sign_negative() { -residual } else { residual };
-                let quotient = direct(nearest, error, mode);
+                let quotient = if mode == Rounding::Nearest {
+                    nearest
+                } else {
+                    // a - nearest * b has the sign of (a / b - nearest) times the sign of b.
+                    let residual = (-nearest).mul_add(b, a);
+                    let error = if b.is_sign_negative() { -residual } else { residual };
+                    direct(nearest, error, mode)
+                };
                 self.narrow(quotient)
             }
             FBin::Atan2 => self.narrow_approximate(a.atan2(b)),
@@ -229,9 +249,13 @@ impl Fpu {
             FUn::Abs => a.abs(),
             FUn::Neg => -a,
             FUn::Sqrt => {
-                let nearest = a.sqrt();
-                // a - nearest^2 has the sign of (sqrt(a) - nearest).
-                let root = direct(nearest, (-nearest).mul_add(nearest, a), self.rounding());
+                let (nearest, mode) = (a.sqrt(), self.rounding());
+                let root = if mode == Rounding::Nearest {
+                    nearest
+                } else {
+                    // a - nearest^2 has the sign of (sqrt(a) - nearest).
+                    direct(nearest, (-nearest).mul_add(nearest, a), mode)
+                };
                 self.narrow(root)
             }
             FUn::Sin => self.narrow_approximate(a.sin()),
@@ -243,6 +267,7 @@ impl Fpu {
     }
 
     /// `fcom`: C3 C2 C0 = 000 (a > b), 001 (a < b), 100 (equal), 111 (unordered).
+    #[inline]
     pub fn compare(&mut self, a: f64, b: f64) {
         let (c3, c2, c0) = match a.partial_cmp(&b) {
             Some(std::cmp::Ordering::Greater) => (false, false, false),

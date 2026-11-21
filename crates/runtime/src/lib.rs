@@ -151,6 +151,8 @@ pub struct Machine {
     /// being measured (`Some`): for telling the machine's own work from
     /// the work done for it.
     pub host_nanos: Option<u64>,
+    /// The same for each host function, while it is measured.
+    host_times: Vec<u64>,
     /// Decoded instructions of the code section, filled on first execution.
     code_start: u32,
     decoded_index: Vec<u32>,
@@ -221,6 +223,7 @@ impl Machine {
             host_addresses: std::collections::HashMap::new(),
             call_counts: Vec::new(),
             host_nanos: None,
+            host_times: Vec::new(),
             code_start: code.va,
             decoded_index: vec![NOT_DECODED; code.virtual_size as usize],
             decoded: Vec::new(),
@@ -285,6 +288,19 @@ impl Machine {
     }
 
     /// Host functions called so far, with their call counts.
+    /// The time spent in each host function while it was measured
+    /// ([`Machine::host_nanos`]), in nanoseconds, with its name. A function
+    /// that calls back into the game is charged the game's time too.
+    pub fn host_times(&self) -> Vec<(&'static str, u64)> {
+        let named = self.host_times.iter().enumerate().filter(|&(_, &nanos)| nanos > 0);
+        named
+            .filter_map(|(index, &nanos)| match self.host.get(index) {
+                Some(HostEntry::Function(function)) => Some((function.name, nanos)),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn call_counts(&self) -> Vec<(&'static str, u64)> {
         let mut counts = std::collections::BTreeMap::<&'static str, u64>::new();
         for (entry, &count) in self.host.iter().zip(&self.call_counts) {
@@ -420,7 +436,12 @@ impl Machine {
         let timed = self.host_nanos.map(|_| std::time::Instant::now());
         let outcome = (function.handler)(self, args);
         if let (Some(started), Some(nanos)) = (timed, self.host_nanos.as_mut()) {
-            *nanos += started.elapsed().as_nanos() as u64;
+            let spent = started.elapsed().as_nanos() as u64;
+            *nanos += spent;
+            if self.host_times.len() <= index {
+                self.host_times.resize(index + 1, 0);
+            }
+            self.host_times[index] += spent;
         }
         let result = match outcome {
             Ok(result) => result,
@@ -495,15 +516,29 @@ impl Machine {
             // A block, if one begins here and the thread's time is not up
             // before its end: then the interpreter goes instruction by
             // instruction, so that threads change where they always do.
-            if let Some(block) = self.block_at(eip).filter(|_| self.breakpoint.is_none())
+            if let Some(mut block) = self.block_at(eip).filter(|_| self.breakpoint.is_none())
                 && self.cpu.instructions + block.instructions as u64 <= self.threads.slice_end
             {
                 if self.check_blocks {
                     self.run_block_checked(block)?;
+                    self.block_instructions += block.instructions as u64;
                 } else {
-                    (block.run)(&mut self.cpu, &mut self.memory).map_err(Stop::Fault)?;
+                    // Block after block, for as long as one begins where
+                    // the last ended and the thread's time allows it.
+                    loop {
+                        (block.run)(&mut self.cpu, &mut self.memory).map_err(Stop::Fault)?;
+                        self.block_instructions += block.instructions as u64;
+                        match self.block_at(self.cpu.eip) {
+                            Some(next)
+                                if self.cpu.instructions + next.instructions as u64
+                                    <= self.threads.slice_end =>
+                            {
+                                block = next;
+                            }
+                            _ => break,
+                        }
+                    }
                 }
-                self.block_instructions += block.instructions as u64;
                 if self.cpu.fpu.inexact_model && self.first_inexact.is_none() {
                     self.first_inexact = Some(eip);
                 }

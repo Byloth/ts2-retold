@@ -473,6 +473,15 @@ fn measure(machine: &mut Machine, budget: u64) -> Stop {
         }
     };
     report(machine, &mut mark);
+    // Where the time in host functions went.
+    let mut times = machine.host_times();
+    times.sort_by_key(|&(_, nanos)| std::cmp::Reverse(nanos));
+    let counts: std::collections::HashMap<&str, u64> = machine.call_counts().into_iter().collect();
+    println!("\n   seconds        calls  ns a call  host function");
+    for (name, nanos) in times.iter().take(14) {
+        let calls = counts.get(name).copied().unwrap_or(0).max(1);
+        println!("{:>10.3} {calls:>12} {:>10.0}  {name}", *nanos as f64 / 1e9, *nanos as f64 / calls as f64);
+    }
     stop
 }
 

@@ -215,7 +215,7 @@ impl Blocks {
                  andy-cpu = {{ path = \"{repository}/crates/cpu\" }}\n\
                  andy-runtime = {{ path = \"{repository}/crates/runtime\" }}\n\n\
                  [workspace]\n\n\
-                 [profile.release]\ndebug = false\nincremental = false\n\n\
+                 [profile.release]\ndebug = false\nincremental = false\nlto = \"thin\"\n\n\
                  [profile.release.package.andy-game]\nopt-level = 2\ncodegen-units = 256\n"
             ),
         ));

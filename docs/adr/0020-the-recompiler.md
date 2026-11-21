@@ -93,3 +93,38 @@ that must replay the same whatever runs the code (ADR 0017).
   recordings is part of testing such a change.
 - Windows: the written Rust has nothing of Linux in it. What `andy-game`
   lacks for Windows is the runtime's own (a sound device, see ADR 0019).
+
+## First work on speed (2026-11-22)
+
+Measured in the first level, frames 7,541 to 8,042 of the recording
+`level.txt`, without the graphics adapter (`andy bench`):
+
+| | frames a second | ns an instruction | in host functions |
+|---|---|---|---|
+| interpreter | 85 | 14.3 | 20% |
+| blocks, as first written | 177 | 5.0 | 42% |
+| blocks, after the changes below | 293 | 1.8 | 66% |
+
+What changed, none of it in what is computed:
+
+- **The x87 model worked out, for every multiplication, division and
+  square root, the error of the result by a fused multiply-add**, which
+  it needs only for the directed rounding modes and which, on a
+  processor built for without that instruction, is a slow library
+  routine. It is now worked out only in those modes. This sped the
+  interpreter up too.
+- **Memory**: a read or write inside one page that exists is one look-up
+  and a copy; the rest (two pages, a page not yet there, a log kept) is
+  a routine apart.
+- **The machine's loop** runs block after block without going round
+  itself for as long as a block begins where the last ended.
+- The small routines of the x87 model are open to inlining, and the
+  written crate is built with thin link-time optimisation.
+
+With the graphics card (an RTX 4070 Ti reached through OpenGL on
+Direct3D 12 under WSL) the same frames are made at 151 a second: 1.5 ms
+of a frame's 6.6 run the game's code, and 5.1 are host functions, almost
+all drawing: `Flip` 0.56 ms a frame, 7 µs for each of some 270 draw
+calls, the clears. **The drawing path is now what limits the speed**,
+not the game's code (`docs/BACKLOG.md`, "one render pass per frame").
+
