@@ -174,8 +174,20 @@ out of here into the roadmap or an ADR when work on them starts.
   opened 2 seconds later, in none of 2. So under WSLg, the development
   environment only, `andy play` is without sound for about every second
   start ("dropped for being late" then counts nearly the whole run), until
-  WSLg is fixed. A well run still drops 2,341 ms, the same every time:
-  `UNVERIFIED` where (not looked into).
+  WSLg is fixed.
+- **The first 2.3 seconds of a run reach the sound device late, at once**
+  (found 2026-11-22; they are silence, and the 2,341 ms a well run
+  reports as dropped are these). The mixer is driven by what the program
+  does about sound and by the scheduler's changes of thread; while the
+  game loads, alone and without a sound, nothing drives it, and the first
+  mix delivers all the time since the start. The fix is one line: mix
+  whenever `Machine::run` returns, so that a device that plays as time
+  passes is fed as time passes. **Tried and taken back, for the owner to
+  decide**: with it the stream plays from the first moment, and WSLg's
+  fault above then stalls the sound at every start (4 of 4) instead of
+  about every second one; the late first delivery was what, by accident,
+  let some starts through. On a system without that fault the fix is
+  simply right.
 - **Input** (ADR 0017) is the keyboard, from a recording or from the
   window; mouse and joystick have no events.
 - **A pending flip holds back only the next flip.** On real drivers a lock
