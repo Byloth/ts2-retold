@@ -54,9 +54,9 @@ pub static CATALOGUE: &[Modification] = &[
         class: Class::Feature,
         affects_simulation: false,
         enabled_by_default: true,
-        summary: "The main menu's entry for loading and saving reads \"load / save\" (in Italian \
-                  \"carica / salva\", in French \"charger / sauvegarder\", in Spanish \"cargar / \
-                  guardar\"), where the original has \"load game\" and the other languages \
+        summary: "The main menu's entry for loading and saving reads \"load/save\" (in Italian \
+                  \"carica/salva\", in French \"charger/sauvegarder\", in Spanish \"cargar/guardar\"), \
+                  where the original has \"load game\" and the other languages \
                   \"carica-salva opzioni\", \"charger-sauvegarder\", \"cargar-guardar\". Needs one-typeface for the stroke. Decided by the owner.",
     },
     Modification {

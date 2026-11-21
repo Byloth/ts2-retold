@@ -188,9 +188,10 @@ out of here into the roadmap or an ADR when work on them starts.
   - no disc's executable draws `Ø` (the Spanish and French pages seem to
     have its picture): its place in the atlas is empty, `UNVERIFIED`
     whether any text needs it;
-  - a letter with an accent was seen to be drawn as each build draws it
-    (same cells, the accent 4 higher) by the recorded calls, not yet on a
-    screen: no recording reaches a text of the large typeface with one;
+  - a letter with an accent is on screen in one place so far, the
+    Spanish main menu ("reproductor vídeos"); the others are known by the
+    recorded calls only (same cells as each build draws, the accent 4
+    higher);
   - the atlas is made at every start; a built game would make it once.
   Still to do besides:
   - the comparison with each language's own game for every other screen:

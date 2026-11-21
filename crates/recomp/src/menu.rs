@@ -42,10 +42,10 @@ pub fn load_before_options(image: &mut Image) -> Result<(), String> {
 /// Decided by the owner: the stroke says both, and the typeface has it.
 pub fn load_save_wording(language: Option<&str>) -> &'static [u8] {
     match language {
-        Some(crate::builds::ITALIAN) => b"carica / salva",
-        Some(crate::builds::FRENCH) => b"charger / sauvegarder",
-        Some(crate::builds::SPANISH) => b"cargar / guardar",
-        _ => b"load / save",
+        Some(crate::builds::ITALIAN) => b"carica/salva",
+        Some(crate::builds::FRENCH) => b"charger/sauvegarder",
+        Some(crate::builds::SPANISH) => b"cargar/guardar",
+        _ => b"load/save",
     }
 }
 
@@ -93,7 +93,7 @@ mod tests {
         // The third entry worded anew, then moved to the second place.
         word_load_and_save(&mut image, load_save_wording(None)).unwrap();
         let worded = image.read_u32(THIRD_TEXT).unwrap();
-        assert_eq!(image.c_string(worded).as_deref(), Some("load / save"));
+        assert_eq!(image.c_string(worded).as_deref(), Some("load/save"));
         load_before_options(&mut image).unwrap();
         assert_eq!((image.read_u32(SECOND_ANSWER), image.read_u32(THIRD_ANSWER)), (Some(4), Some(3)));
         assert_eq!(
