@@ -63,6 +63,9 @@ USAGE:
                                     seconds of the machine's clock;
                                     --record writes what the game saw of
                                     the keyboard, for boot's --input
+    boot, bench and play take --scale N (1 to 8; 3 if not given): with the
+    render-scale modification, triangles are drawn at N by N texels to a
+    pixel of the game's picture.
     boot, bench and play take --state DIR: where the game's saves and
     settings are kept between runs (out/run if not given). A recording
     replays only from the state it was made from: an empty directory is
@@ -132,6 +135,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
     let mut input = None;
     let mut record = None;
     let mut state = PathBuf::from("out/run");
+    let mut scale = 3u32;
     let mut yuv = None;
     let mut pcm = None;
     let mut pictures = u64::MAX;
@@ -167,6 +171,13 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
             "--interpret" => interpret = true,
             "--input" => input = Some(PathBuf::from(args.next().ok_or("--input needs a file")?)),
             "--record" => record = Some(PathBuf::from(args.next().ok_or("--record needs a file")?)),
+            "--scale" => {
+                scale = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .filter(|scale| (1..=8).contains(scale))
+                    .ok_or("--scale needs a number from 1 to 8")?;
+            }
             "--state" => state = PathBuf::from(args.next().ok_or("--state needs a directory")?),
             "--frames" => frames = Some(PathBuf::from(args.next().ok_or("--frames needs a directory")?)),
             "--yuv" => yuv = Some(PathBuf::from(args.next().ok_or("--yuv needs a path")?)),
@@ -292,6 +303,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
         _ => None,
     };
     let orbit_camera_text = andy_recomp::menu::orbit_camera_wording(language);
+    let render_scale = if mods.is_enabled(andy_runtime::mods::RENDER_SCALE) { scale } else { 1 };
     if one_typeface && mods.is_enabled(andy_runtime::mods::MENU_LOAD_SAVE_WORDING) {
         let wording = andy_recomp::menu::load_save_wording(language);
         andy_recomp::menu::word_load_and_save(&mut image, wording)?;
@@ -391,6 +403,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
                 input,
                 state,
                 orbit_camera_text,
+                render_scale,
                 frames: frames.map(|directory| (directory, frame_step)),
             },
         ),
@@ -415,7 +428,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
             if record.is_some() {
                 machine.os.recorder = Some(Default::default());
             }
-            let (machine, stop) = play::play(machine, seconds, gauge)?;
+            let (machine, stop) = play::play(machine, seconds, gauge, render_scale)?;
             if let (Some(path), Some(recorder)) = (&record, &machine.os.recorder) {
                 if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                     fs::create_dir_all(parent)
@@ -604,6 +617,8 @@ struct BootOptions {
     state: PathBuf,
     /// The pause menu's name for the camera the mouse turns.
     orbit_camera_text: &'static [u8],
+    /// The grain triangles are drawn at (the `render-scale` modification).
+    render_scale: u32,
     /// Where to write presented frames, and every how many.
     frames: Option<(PathBuf, u64)>,
 }
@@ -648,6 +663,7 @@ fn boot(image: &Image, options: BootOptions) {
         input,
         state: write_dir,
         orbit_camera_text,
+        render_scale,
     } = options;
     // The program reads the game directory and writes only to the state
     // directory.
@@ -699,8 +715,9 @@ fn boot(image: &Image, options: BootOptions) {
     }
     if gpu {
         match andy_gpu::Gpu::new() {
-            Ok(gpu) => {
+            Ok(mut gpu) => {
                 println!("graphics adapter       {}", gpu.adapter_name());
+                gpu.set_render_scale(render_scale);
                 machine.video = Box::new(gpu);
             }
             Err(error) => {

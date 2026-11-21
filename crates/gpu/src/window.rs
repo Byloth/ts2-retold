@@ -11,6 +11,7 @@ pub struct Presenter {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    smooth: wgpu::Sampler,
     /// A black pixel, drawn large behind the game's picture.
     black: wgpu::BindGroup,
     surround: Option<Surround>,
@@ -219,8 +220,17 @@ impl Presenter {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        // A picture drawn at a finer grain than its pixels is shown
+        // smoothed: its texels are not the game's pixels.
+        let smooth = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("show smoothed"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let black = picture(gpu, &layout, &sampler, 1, 1, &[0, 0, 0, 0xFF]);
         Presenter {
+            smooth,
             surface,
             configuration,
             pipeline,
@@ -290,7 +300,8 @@ impl Presenter {
         let room_height = window_height.saturating_sub(top + border) as f32;
         let shown = surface.map(|surface| {
             let shown = gpu.surface(surface);
-            (group(gpu, &self.layout, &self.sampler, &shown.view), shown.width as f32, shown.height as f32)
+            let sampler = if shown.scale > 1 { &self.smooth } else { &self.sampler };
+            (group(gpu, &self.layout, sampler, &shown.view), shown.width as f32, shown.height as f32)
         });
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

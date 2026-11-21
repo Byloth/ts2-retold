@@ -121,3 +121,39 @@ coordinate on an edge, the texel is the one exact arithmetic gives.
   an exact edge. They kept texture coordinates in fixed point, so their
   choice was steady; whether it was this one has no source at hand, and
   wants a picture of the original game on such a card.
+
+## Addendum (2026-11-21): triangles at a finer grain (`render-scale`)
+
+The owner found the picture stepped, and its edges jumping as the view
+moves: the game draws at 640 by 480 and the window enlarges the finished
+picture. With `render-scale` the backend draws triangles at N by N texels
+to each pixel of their target (`Gpu::set_render_scale`; `--scale N`, 3 if
+not given: 1920 by 1440).
+
+- **A surface becomes finer the first time triangles are drawn on it**,
+  and the depth surface beside it with it: its texture is replaced by one
+  N times as wide and high, with what it held, each pixel a square of
+  texels. Nothing else about the surface changes: its size, and every
+  rectangle the program names, stay in its own pixels.
+- **Rectangles stay in pixels.** Fills, copies and transfers are scaled to
+  the texture they act on: a copy from a surface in pixels onto a finer one
+  enlarges without smoothing (the menus' pictures keep their pixels), one
+  from a finer surface takes one texel for each pixel, a transfer to memory
+  (a lock) gives each pixel the mean of its texels, or its first texel for
+  depth, and a transfer from memory writes each pixel as a square.
+- **The runtime knows nothing of it**: vertices arrive in the clip square
+  as before, and only the viewport is scaled.
+- The window shows a finer picture smoothed (the original grain is shown
+  with its pixels as pixels, as before).
+- Measured in the first level on the RTX 4070 Ti through WSL: 363 frames a
+  second at the original grain, 375 at three by three — no cost that can
+  be told from noise. The simulation is the same to the instruction.
+- `tools/check.sh` replays at the original grain: its outcomes are of the
+  game's own picture.
+
+Not done: multisampling (the finer grain is the anti-aliasing: at three by
+three and a window up to 1440 lines every pixel shown comes from its own
+texels or more); a grain chosen by the window's size; a picture shown at
+less than half its grain would want more than one smoothed sample.
+`UNVERIFIED` on the owner's display: seen so far only as frames read back
+at 640 by 480, where edges come out averaged.

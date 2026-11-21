@@ -51,11 +51,8 @@ const ENTRY_HEIGHTS: [u32; 3] = [0x60, 0x68, 0x70];
 /// has three.
 pub fn count_camera_entries(m: &mut Machine) -> Result<(), Stop> {
     let page = m.cpu.regs[5];
-    m.cpu.regs[1] = if page == CAMERA_PAGE {
-        3
-    } else {
-        m.memory.read(MENU_ENTRIES.wrapping_add(page), 1).unwrap_or(0)
-    };
+    m.cpu.regs[1] =
+        if page == CAMERA_PAGE { 3 } else { m.memory.read(MENU_ENTRIES.wrapping_add(page), 1).unwrap_or(0) };
     m.cpu.instructions += 2;
     Ok(())
 }
@@ -223,7 +220,8 @@ pub fn orbit(m: &mut Machine) -> Result<(), Stop> {
     let (left, right) = camera_actions(m)?;
     let keys = KEY_TURN * step * (left as i32 - right as i32);
     let yaw = (m.game_half(camera + YAW)? as i32 + turned[0] + keys) & 0xFFF;
-    let elevation = (m.game_half(camera + ELEVATION)? as u16 as i16 as i32 + turned[1]).clamp(LOWEST, HIGHEST);
+    let elevation =
+        (m.game_half(camera + ELEVATION)? as u16 as i16 as i32 + turned[1]).clamp(LOWEST, HIGHEST);
     m.set_game_half(camera + YAW, yaw as u32)?;
     m.set_game_half(camera + ELEVATION, elevation as u32 & 0xFFFF)?;
 
@@ -244,11 +242,8 @@ pub fn orbit(m: &mut Machine) -> Result<(), Stop> {
     let wanted = m.game_word(DISTANCE_WANTED)? as i32;
     let level = (sine(m, elevation + 0x400)? * wanted) >> 14;
     let rise = (sine(m, elevation - 0x800)? * wanted) >> 9;
-    let movement = [
-        -((sine(m, yaw)? * level) >> 9),
-        looked_at - y + rise,
-        -((sine(m, yaw + 0x400)? * level) >> 9),
-    ];
+    let movement =
+        [-((sine(m, yaw)? * level) >> 9), looked_at - y + rise, -((sine(m, yaw + 0x400)? * level) >> 9)];
     let vectors = esp - 0x40;
     let (start, moved) = (vectors, vectors + 12);
     for (at, value) in [x, (y - 0x1F00) as u32, z].into_iter().enumerate() {

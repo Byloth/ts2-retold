@@ -205,6 +205,8 @@ struct Play {
     /// Whether the game takes the mouse at all (a modification that uses
     /// it is on), and whether it has it now: the pointer is then hidden
     /// and held, and its movement and buttons are the game's.
+    /// The grain triangles are drawn at.
+    render_scale: u32,
     mouse_wanted: bool,
     mouse_held: bool,
     /// The joypad found when the game started, if any.
@@ -430,8 +432,9 @@ impl ApplicationHandler for Play {
                 Ok((window, gpu, presenter))
             });
         match opened {
-            Ok((window, gpu, presenter)) => {
+            Ok((window, mut gpu, presenter)) => {
                 println!("graphics adapter       {}", gpu.adapter_name());
+                gpu.set_render_scale(self.render_scale);
                 self.machine.video = Box::new(gpu);
                 let size = window.inner_size();
                 let mut frame = Frame::new(TITLE, size.width, size.height, window.scale_factor());
@@ -639,7 +642,12 @@ impl Play {
 }
 
 /// Runs the game in a window until it stops or the window is closed.
-pub fn play(machine: Machine, seconds: Option<u64>, gauge: bool) -> Result<(Machine, Option<Stop>), String> {
+pub fn play(
+    machine: Machine,
+    seconds: Option<u64>,
+    gauge: bool,
+    render_scale: u32,
+) -> Result<(Machine, Option<Stop>), String> {
     let event_loop = EventLoop::new().map_err(|error| format!("no window system: {error}"))?;
     let mods = &machine.os.mods;
     let mouse_wanted = [andy_runtime::mods::MOUSE_CONTROLS, andy_runtime::mods::ORBIT_CAMERA]
@@ -668,6 +676,7 @@ pub fn play(machine: Machine, seconds: Option<u64>, gauge: bool) -> Result<(Mach
         frames_shown: 0,
         meter: Meter { since: Instant::now(), frames: 0, busy: Duration::ZERO, reading: Reading::default() },
         gauge: gauge.then(Reading::default),
+        render_scale,
         mouse_wanted,
         mouse_held: false,
         pads,

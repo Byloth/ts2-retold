@@ -46,10 +46,12 @@ one() {
     mkdir -p "$work"
     state=out/run
     camera="--without orbit-camera --without walking-keys"
+    # The outcomes are of the game's own picture, pixel for pixel.
+    grain="--without render-scale"
     case $rest in *:new*) state=$work/state; mkdir -p "$state" ;; esac
     case $rest in *-orbit) camera= ;; esac
     # shellcheck disable=SC2086
-    "$program" boot --limit 12000000000 --seconds "$seconds" --gpu --state "$state" $camera \
+    "$program" boot --limit 12000000000 --seconds "$seconds" --gpu --state "$state" $camera $grain \
         --input "out/input/$name.txt" --frames "$work/frames" --frame-step 100 \
         --sound "$work/sound.wav" > "$work/log.txt" 2>&1 || true
     {

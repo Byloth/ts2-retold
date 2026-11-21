@@ -34,15 +34,27 @@ const AXIS_NAMES: [&str; PAD_AXES] = ["X", "Y", "Z", "RX", "RY", "RZ"];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Change {
     /// A key, by its scan code, goes down or up.
-    Key { key: u8, down: bool },
+    Key {
+        key: u8,
+        down: bool,
+    },
     /// A button of the mouse goes down or up.
-    Button { button: u8, down: bool },
+    Button {
+        button: u8,
+        down: bool,
+    },
     /// The mouse's movement in the frame: x, y and the wheel.
     Motion([i32; MOUSE_AXES]),
     /// A joypad is plugged in, at rest, or pulled out.
     Plugged(bool),
-    PadAxis { axis: u8, value: i16 },
-    PadButton { button: u8, down: bool },
+    PadAxis {
+        axis: u8,
+        value: i16,
+    },
+    PadButton {
+        button: u8,
+        down: bool,
+    },
     PadHat(Option<u8>),
 }
 

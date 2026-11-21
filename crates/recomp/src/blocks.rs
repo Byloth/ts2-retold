@@ -246,11 +246,7 @@ impl Blocks {
             // Only the names its blocks use: a written module compiles
             // without a warning.
             let used = |names: &[&'static str]| -> Vec<&'static str> {
-                names
-                    .iter()
-                    .copied()
-                    .filter(|name| body.contains(&format!("{name}::")))
-                    .collect()
+                names.iter().copied().filter(|name| body.contains(&format!("{name}::"))).collect()
             };
             let mut module = String::new();
             let fpu = used(&["FBin", "FConst", "FMem", "FUn"]);

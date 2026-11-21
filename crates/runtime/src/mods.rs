@@ -37,6 +37,7 @@ pub const MENU_LOAD_BEFORE_OPTIONS: &str = "menu-load-before-options";
 pub const MOUSE_CONTROLS: &str = "mouse-controls";
 pub const ORBIT_CAMERA: &str = "orbit-camera";
 pub const WALKING_KEYS: &str = "walking-keys";
+pub const RENDER_SCALE: &str = "render-scale";
 
 pub static CATALOGUE: &[Modification] = &[
     Modification {
@@ -94,6 +95,18 @@ pub static CATALOGUE: &[Modification] = &[
                   fires, the middle one spins, and the right one holds the visor view (first person) for as long \
                   as it is held, where the key for it is a switch. The original takes no notice of the mouse; with \
                   the mouse left alone nothing differs.",
+    },
+    Modification {
+        id: RENDER_SCALE,
+        class: Class::Graphics,
+        affects_simulation: false,
+        enabled_by_default: true,
+        summary: "Triangles are drawn at a finer grain than the game's picture (ADR 0014): three by three \
+                  texels to each of its pixels unless --scale says otherwise, so 1920 by 1440 for the \
+                  game's 640 by 480. Edges lose their steps and no longer jump as the view moves; \
+                  textures and everything the game draws in rectangles (menus' pictures, copies, fills) \
+                  keep their own pixels. Where the game reads the picture back it gets its own size, \
+                  each pixel the mean of its texels. The original draws at the size of the display mode.",
     },
     Modification {
         id: WALKING_KEYS,

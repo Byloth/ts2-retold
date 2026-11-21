@@ -54,6 +54,16 @@ struct Surface {
     width: u32,
     height: u32,
     format: PixelFormat,
+    /// How many texels of the texture a pixel of the surface is, each
+    /// way: more than one once triangles are drawn on it at a finer grain
+    /// (`Gpu::set_render_scale`). The surface's own size and every
+    /// rectangle the program names stay in its pixels.
+    scale: u32,
+}
+
+/// A rectangle of a surface in the texels of its texture.
+fn scaled(area: Rect, scale: u32) -> Rect {
+    Rect { x: area.x * scale, y: area.y * scale, width: area.width * scale, height: area.height * scale }
 }
 
 impl Surface {
@@ -375,6 +385,9 @@ pub struct Gpu {
     used: Used,
     /// The surface last presented.
     pub presented: Option<SurfaceId>,
+    /// The grain triangles are drawn at: texels to a pixel, each way
+    /// ([`Gpu::set_render_scale`]).
+    render_scale: u32,
     pub statistics: Statistics,
 }
 
@@ -524,6 +537,7 @@ impl Gpu {
             finished: Vec::new(),
             used: Used::default(),
             presented: None,
+            render_scale: 1,
             statistics: Statistics::default(),
         }
     }
@@ -574,6 +588,108 @@ impl Gpu {
         offset as u32
     }
 
+    /// Triangles are drawn at `scale` texels to a pixel of their target,
+    /// each way: the same picture at a finer grain. A surface becomes
+    /// finer the first time triangles are drawn on it (it and the depth
+    /// surface beside it); what the program does with rectangles of it
+    /// (fills, copies, locks) goes on in its own pixels. To be set before
+    /// anything is drawn.
+    pub fn set_render_scale(&mut self, scale: u32) {
+        self.render_scale = scale.max(1);
+    }
+
+    /// How fine a surface's texture is: texels to a pixel, each way.
+    pub fn surface_scale(&self, id: SurfaceId) -> u32 {
+        self.surface(id).scale
+    }
+
+    fn surface_texture(&self, width: u32, height: u32, format: PixelFormat) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("surface"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: texture_format(format),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    /// Gives a surface a texture at the grain triangles are drawn at, with
+    /// what it holds, each pixel now a square of texels.
+    fn make_fine(&mut self, id: SurfaceId) {
+        let scale = self.render_scale;
+        if self.surface(id).scale == scale {
+            return;
+        }
+        self.flush();
+        let (width, height, format) = {
+            let surface = self.surface(id);
+            (surface.width, surface.height, surface.format)
+        };
+        let whole = Rect::whole(width, height);
+        // What it holds is read as it is and written back into the finer
+        // texture: once in a surface's life.
+        let texels = self.read_texels(id, whole);
+        let texture = self.surface_texture(width * scale, height * scale, format);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.texture_groups.retain(|key, _| key.is_none_or(|(surface, _)| surface != id));
+        self.surfaces[id.0 as usize] = Some(Surface { texture, view, width, height, format, scale });
+        self.write_texels(id, whole, &texels);
+    }
+
+    /// Writes rows of texels, as the texture holds them, into a rectangle
+    /// of a surface given in its pixels.
+    fn write_texels(&mut self, id: SurfaceId, area: Rect, texels: &[u8]) {
+        let surface = self.surface(id);
+        let (scale, size) = (surface.scale as usize, surface.texel_size() as usize);
+        // On a finer texture every pixel is a square of texels.
+        let fine;
+        let texels = if scale == 1 {
+            texels
+        } else {
+            let row = area.width as usize * size;
+            let mut wide = Vec::with_capacity(texels.len() * scale * scale);
+            for texels in texels.chunks(row) {
+                let start = wide.len();
+                for texel in texels.chunks(size) {
+                    for _ in 0..scale {
+                        wide.extend_from_slice(texel);
+                    }
+                }
+                for _ in 1..scale {
+                    wide.extend_from_within(start..start + row * scale);
+                }
+            }
+            fine = wide;
+            &fine
+        };
+        let area = scaled(area, surface.scale);
+        if surface.format == PixelFormat::Depth16 && !self.depth_copies {
+            return self.depth_from_numbers(id, area, texels);
+        }
+        let surface = self.surface(id);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &surface.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: area.x, y: area.y, z: 0 },
+                aspect: surface.aspect(),
+            },
+            texels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(area.width * surface.texel_size()),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d { width: area.width, height: area.height, depth_or_array_layers: 1 },
+        );
+    }
+
     fn surface(&self, id: SurfaceId) -> &Surface {
         self.surfaces[id.0 as usize].as_ref().expect("the surface exists")
     }
@@ -588,8 +704,44 @@ impl Gpu {
         self.read_texels(id, area)
     }
 
-    /// Reads a rectangle of a surface's texture: rows of texels without padding.
+    /// Reads a rectangle of a surface, given in its pixels: rows of texels
+    /// without padding, one to a pixel. Of a finer texture a pixel is the
+    /// mean of its square of texels if it is a colour, and the square's
+    /// first texel otherwise (a depth, an index).
     fn read_texels(&mut self, id: SurfaceId, area: Rect) -> Vec<u8> {
+        let surface = self.surface(id);
+        let (scale, size, color) =
+            (surface.scale as usize, surface.texel_size() as usize, surface.texture_format() == COLOR_FORMAT);
+        let fine = self.read_fine_texels(id, scaled(area, scale as u32));
+        if scale == 1 {
+            return fine;
+        }
+        let row = area.width as usize * scale * size;
+        let mut texels = Vec::with_capacity(fine.len() / (scale * scale));
+        for y in 0..area.height as usize {
+            for x in 0..area.width as usize {
+                let first = y * scale * row + x * scale * size;
+                if !color {
+                    texels.extend_from_slice(&fine[first..first + size]);
+                    continue;
+                }
+                for channel in 0..size {
+                    let mut sum = 0u32;
+                    for v in 0..scale {
+                        for u in 0..scale {
+                            sum += fine[first + v * row + u * size + channel] as u32;
+                        }
+                    }
+                    let count = (scale * scale) as u32;
+                    texels.push(((sum + count / 2) / count) as u8);
+                }
+            }
+        }
+        texels
+    }
+
+    /// Reads a rectangle of a surface's texture, given in its texels.
+    fn read_fine_texels(&mut self, id: SurfaceId, area: Rect) -> Vec<u8> {
         let surface = self.surface(id);
         if surface.format == PixelFormat::Depth16 && !self.depth_copies {
             let numbers = self.numbers_from_depth(id, area);
@@ -1155,21 +1307,9 @@ impl Gpu {
 
 impl Video for Gpu {
     fn create_surface(&mut self, width: u32, height: u32, format: PixelFormat) -> SurfaceId {
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("surface"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: texture_format(format),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        let texture = self.surface_texture(width, height, format);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let surface = Some(Surface { texture, view, width, height, format });
+        let surface = Some(Surface { texture, view, width, height, format, scale: 1 });
         match self.surfaces.iter().position(Option::is_none) {
             Some(index) => {
                 self.surfaces[index] = surface;
@@ -1215,24 +1355,7 @@ impl Video for Gpu {
                 _ => texels.extend_from_slice(&row[..row_bytes]),
             }
         }
-        if surface.format == PixelFormat::Depth16 && !self.depth_copies {
-            return self.depth_from_numbers(id, area, &texels);
-        }
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &surface.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: area.x, y: area.y, z: 0 },
-                aspect: surface.aspect(),
-            },
-            &texels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(area.width * surface.texel_size()),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d { width: area.width, height: area.height, depth_or_array_layers: 1 },
-        );
+        self.write_texels(id, area, &texels);
     }
 
     fn download(&mut self, id: SurfaceId, area: Rect, pitch: usize, pixels: &mut [u8]) {
@@ -1268,6 +1391,7 @@ impl Video for Gpu {
             format => (RectPipeline::Fill(surface.texture_format()), shader_color(format, value)),
         };
         let uniforms = RectUniforms { value: color, source: [0; 4], destination: [0; 4], keyed: [0; 4] };
+        let area = scaled(area, surface.scale);
         self.draw_rect(pipeline, id, area, uniforms, None);
     }
 
@@ -1292,6 +1416,8 @@ impl Video for Gpu {
             assert_eq!(low, high, "colour key ranges are not implemented");
             shader_color(from_surface.format, low)
         });
+        // From here on in the texels of the two textures.
+        let (from, to) = (scaled(from, from_surface.scale), scaled(to, to_surface.scale));
         let uniforms = RectUniforms {
             value: key.unwrap_or([0.0; 4]),
             source: [from.x, from.y, from.width, from.height],
@@ -1305,8 +1431,8 @@ impl Video for Gpu {
             let copy = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("copy of the source"),
                 size: wgpu::Extent3d {
-                    width: from_surface.width,
-                    height: from_surface.height,
+                    width: from_surface.width * from_surface.scale,
+                    height: from_surface.height * from_surface.scale,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -1332,6 +1458,14 @@ impl Video for Gpu {
     }
 
     fn draw(&mut self, draw: &Draw) {
+        // Triangles are drawn at the finer grain, on a target and a depth
+        // surface of that grain.
+        if self.render_scale != 1 {
+            self.make_fine(draw.target);
+            if let Some(depth) = draw.depth {
+                self.make_fine(depth);
+            }
+        }
         let attachments = (draw.target, draw.depth);
         // One render pass has one set of attachments and no more vertices
         // than an index can reach from its batch's first.
@@ -1375,7 +1509,7 @@ impl Video for Gpu {
         };
         let command = Command {
             pipeline: PipelineKey { depth_attached: draw.depth.is_some(), depth, blend, cull },
-            viewport,
+            viewport: scaled(viewport, target.scale),
             texture: texture.map(|sampling| {
                 let key = SamplerKey {
                     magnify: sampling.magnify,
@@ -1613,6 +1747,53 @@ mod tests {
             assert_eq!(pixel, if inside { 0xFF10_2030 } else { 0xFF00_0000 }, "pixel {n}");
         }
         assert_eq!(gpu.statistics, Statistics { passes: 1, batches: 1, triangles: 2, frames_presented: 0 });
+    }
+
+    #[test]
+    fn at_a_finer_grain_edges_are_shared_out_and_rectangles_stay_in_pixels() {
+        let mut gpu = gpu();
+        gpu.set_render_scale(2);
+        let target = gpu.create_surface(8, 8, PixelFormat::Xrgb8888);
+        gpu.fill(target, Rect::whole(8, 8), 0);
+        // On pixel boundaries a rectangle of triangles is what it was; an
+        // edge through the middle of a column of pixels gives them half.
+        draw_quad(&mut gpu, target, None, opaque(), quad(1.5, 0.5, 6.0, 3.5, 0.5, 0xFF10_2030));
+        assert_eq!(gpu.surface_scale(target), 2);
+        let image = pixels(&mut gpu, target);
+        for (n, &pixel) in image.iter().enumerate() {
+            let (x, y) = (n % 8, n / 8);
+            let wanted = match (x, (1..4).contains(&y)) {
+                (2..=5, true) => 0xFF10_2030,
+                (6, true) => 0xFF08_1018,
+                _ => 0xFF00_0000,
+            };
+            assert_eq!(pixel, wanted, "pixel {n}");
+        }
+        // Fills, copies and transfers go by the surface's own pixels.
+        gpu.fill(target, Rect { x: 0, y: 6, width: 2, height: 1 }, 0x00AA_BBCC);
+        gpu.upload(target, Rect { x: 7, y: 7, width: 1, height: 1 }, 4, &[0x11, 0x22, 0x33, 0]);
+        let other = gpu.create_surface(8, 8, PixelFormat::Xrgb8888);
+        gpu.copy(target, Rect::whole(8, 8), other, Rect::whole(8, 8), None);
+        gpu.copy(
+            target,
+            Rect { x: 0, y: 6, width: 2, height: 1 },
+            target,
+            Rect { x: 4, y: 6, width: 2, height: 1 },
+            None,
+        );
+        assert_eq!(gpu.surface_scale(other), 1);
+        let (fine, coarse) = (pixels(&mut gpu, target), pixels(&mut gpu, other));
+        assert_eq!(
+            (fine[48], fine[49], fine[50], fine[52], fine[53]),
+            (0xFFAA_BBCC, 0xFFAA_BBCC, 0xFF00_0000, 0xFFAA_BBCC, 0xFFAA_BBCC)
+        );
+        assert_eq!(
+            (fine[63], coarse[63], coarse[48], coarse[10]),
+            (0xFF33_2211, 0xFF33_2211, 0xFFAA_BBCC, 0xFF10_2030)
+        );
+        let mut back = [0u8; 4];
+        gpu.download(target, Rect { x: 7, y: 7, width: 1, height: 1 }, 4, &mut back);
+        assert_eq!(back, [0x11, 0x22, 0x33, 0]);
     }
 
     #[test]

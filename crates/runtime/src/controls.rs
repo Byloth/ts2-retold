@@ -181,7 +181,8 @@ pub fn add_walking_keys(m: &mut Machine) -> Result<(), Stop> {
     if added != 0 {
         let actions = m.game_half(ACTIONS)?;
         m.set_game_half(ACTIONS, actions | added)?;
-        for (at, (forth, back)) in WALK.into_iter().zip([(action::RIGHT, action::LEFT), (action::UP, action::DOWN)])
+        for (at, (forth, back)) in
+            WALK.into_iter().zip([(action::RIGHT, action::LEFT), (action::UP, action::DOWN)])
         {
             if added & forth != 0 {
                 m.set_game_word(at, WHOLE_PUSH)?;
