@@ -9,19 +9,14 @@
 //! long enough to cover the unevenness of the machine's turns, short
 //! enough that sound is not late.
 //!
-//! A device can also stop taking sound altogether. WSLg's does, for every
-//! program at once, when a window appears on the screen while sound is
-//! playing (`docs/BACKLOG.md`), and stays so until the sound has paused.
-//! So the speaker watches what the device takes ([`Watch`]), and when it
-//! has all but stopped, pauses the stream and starts it again.
+//! The speaker is opened once the window is on the screen
+//! (`crate::play`): what makes the sound exists before the sound does.
 //!
 //! The device is reached through the PulseAudio server (which PipeWire
 //! and WSLg also provide), spoken to directly: no system library is needed.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use andy_runtime::audio::{Audio, Frame, OUTPUT_RATE};
 
@@ -33,43 +28,6 @@ const TARGET: usize = OUTPUT_RATE as usize * 60 / 1000;
 const LIMIT: usize = OUTPUT_RATE as usize * 200 / 1000;
 /// How far the pace of feeding may differ from one frame for one frame.
 const BEND: f64 = 0.005;
-
-/// How long the device is watched before it is judged, in milliseconds,
-/// and the part of that time's sound it must have taken to pass.
-const WATCH_MS: u64 = 500;
-const WATCH_SHARE: u64 = 4;
-/// How long after the stream was started again the device is left alone.
-const GRACE_MS: u64 = 2000;
-
-/// The watch on what the sound device takes.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct Watch {
-    /// When the stretch being watched began, and the frames the device
-    /// had taken by then.
-    since_ms: u64,
-    taken: u64,
-}
-
-impl Watch {
-    /// Told the time and the frames the device has taken so far, says
-    /// whether the device has stalled: over a whole stretch it took less
-    /// than a quarter of the sound of that time.
-    pub fn stalled(&mut self, now_ms: u64, taken: u64) -> bool {
-        let elapsed = now_ms.saturating_sub(self.since_ms);
-        if elapsed < WATCH_MS {
-            return false;
-        }
-        let due = elapsed * OUTPUT_RATE as u64 / 1000;
-        let stalled = (taken - self.taken) * WATCH_SHARE < due;
-        *self = Watch { since_ms: now_ms, taken };
-        stalled
-    }
-
-    /// Begins a new stretch `grace_ms` from now.
-    pub fn restart(&mut self, now_ms: u64, grace_ms: u64, taken: u64) {
-        *self = Watch { since_ms: now_ms + grace_ms, taken };
-    }
-}
 
 /// The queue between the machine and the sound device.
 #[derive(Debug, Default)]
@@ -137,12 +95,8 @@ impl Feed {
 pub struct Speaker {
     feed: Arc<Mutex<Feed>>,
     losses: Losses,
-    opened: Instant,
-    watch: Watch,
-    /// Whether the stream is being paused and started again just now.
-    restarting: Arc<AtomicBool>,
-    stream: pulseaudio::PlaybackStream,
-    // The connection lives as long as the speaker.
+    // The stream and the connection live as long as the speaker.
+    _stream: pulseaudio::PlaybackStream,
     _client: pulseaudio::Client,
 }
 
@@ -151,7 +105,6 @@ pub struct Speaker {
 #[derive(Clone)]
 pub struct Losses {
     feed: Arc<Mutex<Feed>>,
-    stalls: Arc<AtomicU64>,
 }
 
 impl Losses {
@@ -159,11 +112,6 @@ impl Losses {
     /// being late, so far.
     pub fn count(&self) -> (u64, u64) {
         self.feed.lock().map_or((0, 0), |feed| (feed.starved, feed.dropped))
-    }
-
-    /// How many times the device stalled and the stream was started again.
-    pub fn stalls(&self) -> u64 {
-        self.stalls.load(Ordering::Relaxed)
     }
 }
 
@@ -204,15 +152,7 @@ impl Speaker {
         };
         let stream = pollster::block_on(client.create_playback_stream(params, callback.as_playback_source()))
             .map_err(|error| format!("no sound stream: {error}"))?;
-        Ok(Speaker {
-            losses: Losses { feed: feed.clone(), stalls: Arc::default() },
-            feed,
-            opened: Instant::now(),
-            watch: Watch::default(),
-            restarting: Arc::default(),
-            stream,
-            _client: client,
-        })
+        Ok(Speaker { losses: Losses { feed: feed.clone() }, feed, _stream: stream, _client: client })
     }
 
     pub fn losses(&self) -> Losses {
@@ -222,26 +162,8 @@ impl Speaker {
 
 impl Audio for Speaker {
     fn play(&mut self, frames: &[Frame]) {
-        let Ok(mut feed) = self.feed.lock() else { return };
-        feed.push(frames);
-        let (now, taken) = (self.opened.elapsed().as_millis() as u64, feed.taken);
-        drop(feed);
-        if self.restarting.load(Ordering::Relaxed) {
-            // Judged again some time after the stream has started again.
-            self.watch.restart(now, GRACE_MS, taken);
-        } else if self.watch.stalled(now, taken) {
-            self.restarting.store(true, Ordering::Relaxed);
-            self.losses.stalls.fetch_add(1, Ordering::Relaxed);
-            // A stalled server is slow to answer: it is not waited for here.
-            let (stream, restarting) = (self.stream.clone(), self.restarting.clone());
-            std::thread::spawn(move || {
-                // If the server cannot be told, the stream is as it was.
-                let _ = pollster::block_on(async {
-                    stream.cork().await?;
-                    stream.uncork().await
-                });
-                restarting.store(false, Ordering::Relaxed);
-            });
+        if let Ok(mut feed) = self.feed.lock() {
+            feed.push(frames);
         }
     }
 }
@@ -322,24 +244,6 @@ mod tests {
         }
         let (starved, dropped) = losses.count();
         assert!(starved < OUTPUT_RATE as u64 / 5 && dropped == 0, "starved {starved}, dropped {dropped}");
-    }
-
-    #[test]
-    fn a_device_that_takes_too_little_has_stalled() {
-        let mut watch = Watch::default();
-        // Not judged before a whole stretch has passed.
-        assert!(!watch.stalled(499, 0));
-        // Half a second in which it took a tenth of a second's sound.
-        assert!(watch.stalled(500, OUTPUT_RATE as u64 / 10));
-        // A stretch in which it took all of it, in whatever pieces.
-        assert!(!watch.stalled(700, OUTPUT_RATE as u64 / 10 + 5000));
-        assert!(!watch.stalled(1000, OUTPUT_RATE as u64 * 6 / 10));
-        // Nothing at all in the next.
-        assert!(watch.stalled(1500, OUTPUT_RATE as u64 * 6 / 10));
-        // After a restart it is left alone for a while.
-        watch.restart(1500, 2000, 0);
-        assert!(!watch.stalled(3900, 0));
-        assert!(watch.stalled(4000, 0));
     }
 
     #[test]

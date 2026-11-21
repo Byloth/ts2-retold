@@ -134,9 +134,18 @@ out of here into the roadmap or an ADR when work on them starts.
   The cause inside WSLg is not known: its sink (`module-rdp-sink`, kept in
   `ref/wslg`) talks to the RDP side over a socket with blocking reads and
   resets its latency only when it goes idle, which fits, but that is a
-  reading of the source, not a finding. To be reported to WSLg. The game
-  starts its sound before its window, so on WSLg it stalls once at every
-  start; the speaker's watch (ADR 0019) brings it back within seconds.
+  reading of the source, not a finding. To be reported to WSLg.
+  The window is opened first and the sound device after it (decided by
+  the owner, 2026-11-21: what plays the sound exists before the sound),
+  and nothing watches for the stall or works around it. That order does
+  not spare WSLg's fault: WSLg puts the window on the Windows desktop some
+  time after every event the program gets (focus and the first redraw come
+  within 30 ms), and a stream opened then still stalled in 5 starts of 9;
+  opened 2 seconds later, in none of 2. So under WSLg, the development
+  environment only, `andy play` is without sound for about every second
+  start ("dropped for being late" then counts nearly the whole run), until
+  WSLg is fixed. A well run still drops 2,341 ms, the same every time:
+  `UNVERIFIED` where (not looked into).
 - **Input** (ADR 0017) is the keyboard, from a recording or from the
   window; mouse and joystick have no events.
 - **A pending flip holds back only the next flip.** On real drivers a lock

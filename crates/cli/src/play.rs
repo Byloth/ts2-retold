@@ -168,12 +168,28 @@ struct Play {
     clock_start: u64,
     /// The clock value at which the window closes by itself.
     until: Option<u64>,
+    /// What the sound device lost, if there is one.
+    losses: Option<crate::speaker::Losses>,
     /// Why the machine stopped, once it has.
     stopped: Option<Stop>,
     error: Option<String>,
 }
 
 impl Play {
+    /// Opens the sound device, once. Without one the game is silent.
+    fn open_sound(&mut self) {
+        if self.losses.is_some() || self.machine.audio.is_some() {
+            return;
+        }
+        match crate::speaker::Speaker::open() {
+            Ok(speaker) => {
+                self.losses = Some(speaker.losses());
+                self.machine.audio = Some(Box::new(speaker));
+            }
+            Err(error) => println!("no sound: {error}"),
+        }
+    }
+
     fn gpu(&mut self) -> &mut Gpu {
         self.machine.video.as_any_mut().downcast_mut().expect("the window's backend is the GPU one")
     }
@@ -334,6 +350,9 @@ impl ApplicationHandler for Play {
                 (self.window, self.presenter) = (Some(window), Some(presenter));
                 // The window has a picture from the start.
                 self.show();
+                // And only now is there sound: what plays it is on the
+                // screen first.
+                self.open_sound();
                 (self.started, self.clock_start) = (Instant::now(), self.machine.clock());
             }
             Err(error) => {
@@ -450,19 +469,7 @@ impl ApplicationHandler for Play {
 }
 
 /// Runs the game in a window until it stops or the window is closed.
-pub fn play(mut machine: Machine, seconds: Option<u64>) -> Result<(Machine, Option<Stop>), String> {
-    // Without a sound device the game is played silent.
-    let losses = match crate::speaker::Speaker::open() {
-        Ok(speaker) => {
-            let losses = speaker.losses();
-            machine.audio = Some(Box::new(speaker));
-            Some(losses)
-        }
-        Err(error) => {
-            println!("no sound: {error}");
-            None
-        }
-    };
+pub fn play(machine: Machine, seconds: Option<u64>) -> Result<(Machine, Option<Stop>), String> {
     let event_loop = EventLoop::new().map_err(|error| format!("no window system: {error}"))?;
     let mut play = Play {
         machine,
@@ -476,21 +483,20 @@ pub fn play(mut machine: Machine, seconds: Option<u64>) -> Result<(Machine, Opti
         started: Instant::now(),
         clock_start: 0,
         until: seconds.map(|seconds| seconds * 1000),
+        losses: None,
         stopped: None,
         error: None,
     };
     event_loop.run_app(&mut play).map_err(|error| error.to_string())?;
     // The sound device is let go before the machine is handed back.
     play.machine.audio = None;
-    if let Some(losses) = losses {
+    if let Some(losses) = play.losses.take() {
         let (starved, dropped) = losses.count();
         let rate = andy_runtime::audio::OUTPUT_RATE as u64;
         println!(
-            "sound                  {} ms of silence for lack of sound, {} ms dropped for being late, \
-             the device stalled {} times",
+            "sound                  {} ms of silence for lack of sound, {} ms dropped for being late",
             starved * 1000 / rate,
-            dropped * 1000 / rate,
-            losses.stalls()
+            dropped * 1000 / rate
         );
     }
     match play.error {

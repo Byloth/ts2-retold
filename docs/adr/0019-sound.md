@@ -60,11 +60,11 @@ answer in emulators (dynamic rate control). A dry queue gives silence
 until it has filled again; more than 200 ms queued is dropped down to the
 target, as sound that would come late.
 
-**A device that stops taking sound** is noticed (less than a quarter of
-the due sound taken over half a second) and its stream is paused and
-started again. This exists because of a fault of WSLg, described in
-`docs/BACKLOG.md` with a minimal program (`tools/wslg-audio-stall`); the
-watch itself assumes nothing about WSLg.
+**The window first, then the sound** (the owner, 2026-11-21): the sound
+device is opened once the window has its first picture. A device that
+stops taking sound is not watched for: an earlier watch that paused and
+restarted the stream existed only for a fault of WSLg
+(`docs/BACKLOG.md`, `tools/wslg-audio-stall`) and was removed.
 
 ## Consequences
 
