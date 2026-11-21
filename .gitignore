@@ -55,3 +55,6 @@ __pycache__/
 
 # --- Reference material read as specification, never copied ---
 /ref/
+
+# Working copies of agents
+.claude/worktrees/
