@@ -155,3 +155,61 @@ What the look at the glyph functions already showed: the Italian ones
 draw an accented letter as the letter and, above it, an accent that is a
 glyph of its own in the same sheet, and set the letters 7 pixels apart
 where the English ones use 8, which is how the longer texts fit.
+
+## A language is data (2026-11-21, decided by the owner)
+
+The hybrid above was made for Italian by taking the Italian executable's
+own functions wherever they differ for the language. The owner looked at
+the result (a main menu entry reading "load-save options" beside one
+called "options") and set the direction: **no code of its own for any
+language**, which is what the original developers did and what gave each
+language its own quirks; a language is to be **data only**, handled by
+one mechanism, and French and Spanish are to be handled together with
+Italian so that nothing is made for one language.
+
+What the three discs show (French and Spanish laid out in the git-ignored
+`ref/disc-fr` and `ref/disc-es`):
+
+- they share one later revision of the game (the engine and sound fixes
+  are the same in all three);
+- each has code of its own in some fifteen functions, and they differ
+  from one another there: the four that draw glyphs differ in where a
+  line begins (`0xAF - 4n` in Italian, `0xAA - 4n` in Spanish,
+  `(0x28 - n) * 4` in French), in which glyph is which accent (each
+  language's typeface texture is laid out differently), and the menus in
+  how they split a text that does not fit over two lines;
+- the texts and the files transplant by the one mechanism already built:
+  345 places for French, 333 for Spanish, with nothing written for them.
+
+So a language is:
+
+1. **its texts**, by place, from that language's executable through the
+   pairing; with a short list of corrections the project words itself
+   (`language::corrections`), each with its reason;
+2. **its files**: speech, movies, textures;
+3. **its typefaces as tables**: for each character, which glyph or glyphs
+   to draw and how far to move on. Not read by hand out of each build's
+   functions: to be had by running those functions, in the interpreter,
+   on every character and recording what they draw.
+
+and the code is one: the reference build's menus and screens for every
+language, and **one way of drawing text** in place of the reference's
+text functions, which takes the tables of 3 and fits a text into the
+room the reference's screen gives it. With English tables it must draw
+what the reference draws, pixel for pixel. Pictures of a language will
+then no longer be those of that language's release where the release
+had its own layout; they are checked against the reference's layout
+instead.
+
+Changes to the menus the owner asked for, for every language, are
+modifications of that one code (ADR 0004): the entry for loading and
+saving before the options in the main menu.
+
+State: 1 and 2 are done for Italian, French and Spanish (the
+modification `language`, the disc in `TS2_LANGUAGE_DIR` says which). 3
+and the one way of drawing text are not: Italian borrows its executable's
+functions meanwhile (`ITALIAN_FUNCTIONS`, to be removed), French and
+Spanish show letters with accents, and some without, as wrong glyphs.
+The large typeface of the menus has no stroke and no hyphen in any
+language's texture (the Italian game shows a gap for its hyphen), so the
+corrected Italian entry reads "carica salva".

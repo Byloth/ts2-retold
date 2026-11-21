@@ -160,13 +160,30 @@ out of here into the roadmap or an ADR when work on them starts.
 
 - A verified dump of a pressed disc as a second witness for the reference
   copy in `ref/disc` (ADR 0003).
-- **Italian** (ADR 0016), the modification `language-italian`: a hybrid on
-  the reference build, made by transplanting from the Italian executable
-  through an address map between the two builds (`andy pair`). Done: the
-  texts, place by place (330 places); the 19 functions that differ
-  because of the language, with four small tables (17 more functions
-  differ as a later revision and stay the reference's); speech, movies
-  and all textures read from the Italian disc.
+- **Languages** (ADR 0016), the modification `language`: Italian, French
+  and Spanish on the reference build, each as data taken from the user's
+  disc of that language through an address map between the two builds
+  (`andy pair`). The owner's direction: a language is data only, one
+  mechanism for all, no code of a language's own. Done for the three:
+  the texts, place by place (330, 345 and 333 places) with corrections
+  worded by the project; speech, movies and all textures read from the
+  language's disc. **Next, in this order:**
+  1. the typefaces as tables, had by running each build's own text
+     functions in the interpreter on every character and recording what
+     they draw;
+  2. one way of drawing text, native, in place of the reference's text
+     functions, driven by those tables, fitting a text into its room;
+     with English tables the same pictures as the reference;
+  3. then the Italian executable's functions go (`ITALIAN_FUNCTIONS`,
+     `ITALIAN_TABLES`, `ITALIAN_COUNTERPARTS` and the transplanting of
+     functions with them, unless something else needs it);
+  4. the main menu with loading and saving before the options, for every
+     language, as a modification of the reference's menu;
+  5. texts that a language's build split over two lines are two texts
+     there and one in the reference: to be joined as data.
+  Until 2, French and Spanish show accents and some plain letters as
+  wrong glyphs (their textures are laid out for their own code), and
+  Italian is right only by the borrowed functions:
   **Checked against the Italian game itself**, which `andy boot` runs as
   it is (`andy boot ref/game-it/toy2.exe`, with `TS2_GAME_DIR` set to the
   reference): with the same recorded input, of 76 pictures taken every

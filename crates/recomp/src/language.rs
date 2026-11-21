@@ -81,6 +81,26 @@ pub const CODE_SECTION: &str = ".graft";
 /// How far after the texts' section the functions' section begins.
 const CODE_SECTION_AFTER: u32 = 0x10_0000;
 
+/// Texts of a language that the project words otherwise than that
+/// language's build does: the text's address in that build, and the
+/// project's own wording (Latin-1, as the game's texts are). Decided by
+/// the owner, for the reasons given with each.
+pub fn corrections(build: &str) -> &'static [(u32, &'static [u8])] {
+    match build {
+        // The main menu's entry for loading and saving reads "load-save
+        // options" in Italian alone (French and Spanish say "load-save"),
+        // beside an entry that is called "options". The typeface of the
+        // menu has no hyphen and no stroke: the Italian game shows a gap.
+        crate::builds::ITALIAN => &[(0x004F_8930, b"carica salva")],
+        _ => &[],
+    }
+}
+
+/// **Not how languages are to be done** (ADR 0016: a language is data,
+/// and no language has code of its own). Kept until one way of drawing
+/// text serves every language, so that Italian shows its accents
+/// meanwhile; French and Spanish have no such list on purpose.
+///
 /// The functions the Italian build has in another form because of the
 /// language: where each begins in the reference build (0 for a function
 /// the reference build does not have) and in the Italian one
@@ -208,6 +228,9 @@ pub struct Hybrid<'a> {
     /// Addresses taken from their neighbours for lack of a pair of their
     /// own: the other build's and the reference's.
     pub inferred: Vec<(u32, u32)>,
+    /// Texts worded otherwise than the other build words them: the
+    /// text's address there and the wording ([`corrections`]).
+    pub corrections: &'static [(u32, &'static [u8])],
     /// What of the other build's data was put beside the texts: tables
     /// ([`Hybrid::tables`]) and variables only the other build has. The
     /// other build's address, the new one and the size.
@@ -233,6 +256,7 @@ impl<'a> Hybrid<'a> {
             code: Vec::new(),
             code_sites: Vec::new(),
             inferred: Vec::new(),
+            corrections: &[],
             added: Vec::new(),
             functions: Vec::new(),
         }
@@ -243,9 +267,10 @@ impl<'a> Hybrid<'a> {
     fn place_text(&mut self, to: u32) -> u32 {
         let start = start_of_text(self.other, to);
         let (section_va, other, texts) = (self.section_va, self.other, &mut self.texts);
+        let corrected = self.corrections.iter().find(|&&(at, _)| at == start).map(|&(_, wording)| wording);
         let at = *self.placed.entry(start).or_insert_with(|| {
             let at = section_va + texts.len() as u32;
-            texts.extend_from_slice(text(other, start).unwrap_or_default());
+            texts.extend_from_slice(corrected.or(text(other, start)).unwrap_or_default());
             texts.push(0);
             texts.resize(texts.len().next_multiple_of(4), 0);
             at
@@ -636,6 +661,13 @@ mod tests {
         assert_eq!(text(&reference, reference.read_u32(CODE + 1).unwrap()), Some(&b"start game"[..]));
         let kept = transplant_texts(&reference, &other, &pairing, &[DATA]);
         assert_eq!(kept.moved.len(), 1);
+        // A text the project words otherwise.
+        let mut corrected = Hybrid::new(&reference, &other, &pairing);
+        corrected.corrections = &[(DATA, b"via")];
+        corrected.texts(&[]);
+        let image = corrected.finish().image;
+        assert_eq!(text(&image, image.read_u32(CODE + 1).unwrap()), Some(&b"via"[..]));
+        assert_eq!(text(&image, image.read_u32(CODE + 6).unwrap()), Some(&b"indietro"[..]));
     }
 
     #[test]

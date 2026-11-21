@@ -17,8 +17,11 @@ pub struct Build {
 
 /// The reference build, which everything else is tied to.
 pub const REFERENCE: &str = "pc-1999-10-29";
-/// The Italian build, the source of the Italian language (ADR 0016).
+/// The builds of other languages, the sources of those languages
+/// (ADR 0016).
 pub const ITALIAN: &str = "pc-2000-02-16-it";
+pub const FRENCH: &str = "pc-2000-01-24-fr";
+pub const SPANISH: &str = "pc-2000-02-09-es";
 
 pub const KNOWN_BUILDS: &[Build] = &[
     Build {
@@ -30,8 +33,19 @@ pub const KNOWN_BUILDS: &[Build] = &[
     Build {
         id: ITALIAN,
         sha256: "e46abf778d2c532883000d313c1ca383130389ba704266c5190ced7f2cfbfeb5",
-        description: "PC, linked 2000-02-16, Italian text; not run itself, its language is brought to the \
-                      reference build",
+        description: "PC, linked 2000-02-16, Italian text; a source of language for the reference build",
+        confirmed_retail: false,
+    },
+    Build {
+        id: FRENCH,
+        sha256: "72f9647e601cb39fb450bac7a00375302d63e0ba51fbf0794551b806b3d11ced",
+        description: "PC, linked 2000-01-24, French text; a source of language for the reference build",
+        confirmed_retail: false,
+    },
+    Build {
+        id: SPANISH,
+        sha256: "19e5b251aad700aefedc9da25ba169b54d6fcc8fd59daad6c19d3398cf343d6b",
+        description: "PC, linked 2000-02-09, Spanish text; a source of language for the reference build",
         confirmed_retail: false,
     },
 ];

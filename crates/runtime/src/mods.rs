@@ -29,22 +29,22 @@ pub struct Modification {
 
 pub const SKIP_MODE_SELECT: &str = "skip-mode-select";
 
-pub const LANGUAGE_ITALIAN: &str = "language-italian";
+pub const LANGUAGE: &str = "language";
 
 pub static CATALOGUE: &[Modification] = &[
     Modification {
-        id: LANGUAGE_ITALIAN,
+        id: LANGUAGE,
         class: Class::Feature,
         affects_simulation: false,
         enabled_by_default: false,
-        summary: "The game in Italian (ADR 0016), from the user's own Italian disc (TS2_ITALIAN_DIR): the \
-                  places of the executable that refer to a text refer to the text the Italian executable \
-                  has in the same place; the functions the Italian executable has in another form because of \
-                  the language (text drawing, menus, the level map, loading and saving) are its own, \
-                  placed beside the reference image; speech, movies, screens and the textures with the \
-                  typefaces are read from the Italian disc. Level data and all other code stay the \
-                  reference's. INCOMPLETE: compared with the Italian game itself only from the start to \
-                  the first level, where title, menu and loading screen are the same picture for picture.",
+        summary: "The game in another language (ADR 0016), from the user's own disc of that language \
+                  (TS2_LANGUAGE_DIR): Italian, French or Spanish, told by the disc. A language is data: \
+                  the places of the executable that refer to a text refer to the text that language's \
+                  executable has in the same place, with a short list of corrections; speech, movies and \
+                  textures are read from that disc. Level data and code stay the reference's. \
+                  INCOMPLETE: the reference's code cannot draw letters with accents; until one way of \
+                  drawing text serves every language, Italian alone borrows the Italian executable's own \
+                  functions for it (to be removed), and French and Spanish show accents wrongly.",
     },
     Modification {
         id: SKIP_MODE_SELECT,

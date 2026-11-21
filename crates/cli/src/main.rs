@@ -205,13 +205,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
         None => println!("build     UNKNOWN - addresses and patches are not valid for this file"),
     }
 
-    if mods.is_enabled(andy_runtime::mods::LANGUAGE_ITALIAN) {
-        image = italian(&bytes, image)?;
+    if mods.is_enabled(andy_runtime::mods::LANGUAGE) {
+        image = in_another_language(&bytes, image)?;
     }
     // Another build of the game than the reference has the things the
     // runtime knows at other addresses.
     let addresses = match builds::identify(&bytes).map(|build| build.id) {
-        Some(builds::ITALIAN) => addresses_in(&image)?,
+        Some(builds::ITALIAN | builds::FRENCH | builds::SPANISH) => addresses_in(&image)?,
         _ => andy_runtime::game::Addresses::REFERENCE,
     };
 
@@ -253,7 +253,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "play" => {
             // The program reads the game directory and writes only to `out/run`.
             let mut files = Files::new(exe.parent().map(Path::to_path_buf), Some(PathBuf::from("out/run")));
-            if let Some(dir) = italian_dir(&mods) {
+            if let Some(dir) = language_dir(&mods) {
                 files.set_language_dir(dir);
             }
             let mut os = Os::new(files);
@@ -353,7 +353,7 @@ fn boot(image: &Image, options: BootOptions) {
     let log_path = write_dir.join("toy2.log");
     let _ = fs::remove_file(&log_path);
     let mut files = Files::new(game_dir, Some(write_dir));
-    if let Some(dir) = italian_dir(&mods) {
+    if let Some(dir) = language_dir(&mods) {
         files.set_language_dir(dir);
     }
     let mut os = Os::new(files);
@@ -613,34 +613,42 @@ fn addresses_in(other: &Image) -> Result<andy_runtime::game::Addresses, String> 
         .ok_or_else(|| "an address the runtime knows was not found in this build".into())
 }
 
-/// The Italian game's directory, if the game is to be in Italian.
-fn italian_dir(mods: &Modifications) -> Option<PathBuf> {
-    let dir =
-        env::var_os("TS2_ITALIAN_DIR").filter(|_| mods.is_enabled(andy_runtime::mods::LANGUAGE_ITALIAN))?;
+/// The directory of the game in the other language, if the game is to
+/// be in one.
+fn language_dir(mods: &Modifications) -> Option<PathBuf> {
+    let dir = env::var_os("TS2_LANGUAGE_DIR").filter(|_| mods.is_enabled(andy_runtime::mods::LANGUAGE))?;
     Some(PathBuf::from(dir))
 }
 
-/// The reference image with the Italian language, taken from the user's
-/// Italian disc (ADR 0016).
-fn italian(reference_bytes: &[u8], reference: Image) -> Result<Image, String> {
+/// The reference image in another language, taken from the user's disc
+/// of that language (ADR 0016). Which language it is, the disc says.
+fn in_another_language(reference_bytes: &[u8], reference: Image) -> Result<Image, String> {
     if builds::identify(reference_bytes).map(|build| build.id) != Some(builds::REFERENCE) {
-        return Err("the Italian language can only be brought to the reference build".into());
+        return Err("another language can only be brought to the reference build".into());
     }
-    let dir =
-        env::var_os("TS2_ITALIAN_DIR").ok_or("language-italian needs TS2_ITALIAN_DIR, the Italian game")?;
+    let dir = env::var_os("TS2_LANGUAGE_DIR")
+        .ok_or("language needs TS2_LANGUAGE_DIR, the game in that language")?;
     let path = Path::new(&dir).join("toy2.exe");
     let bytes = fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    if builds::identify(&bytes).map(|build| build.id) != Some(builds::ITALIAN) {
-        return Err(format!("{} is not the Italian build this was made for", path.display()));
-    }
+    let build = builds::identify(&bytes)
+        .map(|build| build.id)
+        .filter(|id| [builds::ITALIAN, builds::FRENCH, builds::SPANISH].contains(id))
+        .ok_or_else(|| format!("{} is not a build of the game whose language is known", path.display()))?;
     let other = Image::parse(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
     let pairing = andy_recomp::pairing::pair(&reference, &other);
     let mut hybrid = andy_recomp::language::Hybrid::new(&reference, &other, &pairing);
+    hybrid.corrections = andy_recomp::language::corrections(build);
     hybrid.texts(&[]);
+    if build != builds::ITALIAN {
+        let transplant = hybrid.finish();
+        println!("language  {build}: {} places refer to its texts", transplant.moved.len());
+        return Ok(transplant.image);
+    }
+    // Italian alone, for the time being: its own functions for drawing
+    // text and what goes with them (see `ITALIAN_FUNCTIONS`).
     hybrid.tables(andy_recomp::language::ITALIAN_TABLES);
     let tables = hybrid.added.len();
-    // The Italian functions, each as long as to the next function there.
-    let analysis = analysis::analyze(&other).ok_or("the Italian executable has no code")?;
+    let analysis = analysis::analyze(&other).ok_or("the executable has no code")?;
     let function_starts = |analysis: &analysis::Analysis| {
         let mut starts: Vec<u32> = analysis.functions.iter().map(|function| function.start).collect();
         starts.sort_unstable();
@@ -668,12 +676,12 @@ fn italian(reference_bytes: &[u8], reference: Image) -> Result<Image, String> {
     let counterparts = andy_recomp::language::ITALIAN_COUNTERPARTS;
     hybrid.graft(&grafts, counterparts, &analysis.instruction_starts).map_err(|problems| {
         let problems: Vec<String> = problems.iter().map(|problem| format!("{problem:x?}")).collect();
-        format!("the Italian functions cannot be taken over: {}", problems.join(", "))
+        format!("the language's functions cannot be taken over: {}", problems.join(", "))
     })?;
     let (inferred, added) = (hybrid.inferred.clone(), hybrid.added.clone());
     let transplant = hybrid.finish();
     println!(
-        "italian   {} places refer to Italian texts, {} functions are the Italian ones",
+        "language  {build}: {} places refer to its texts, {} functions are its own (for the time being)",
         transplant.moved.len(),
         grafts.len()
     );

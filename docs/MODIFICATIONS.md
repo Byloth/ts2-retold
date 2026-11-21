@@ -6,7 +6,7 @@ list. With every entry off the port behaves like the original.
 
 | Identifier | Class | Affects simulation | On by default | What it does |
 |---|---|---|---|---|
-| `language-italian` | feature | no | no | The game in Italian (ADR 0016), from the user's own Italian disc (`TS2_ITALIAN_DIR`). Texts: the places of the executable that refer to a text refer to the text the Italian executable has in the same place. Functions: the 19 the Italian executable has in another form because of the language (text drawing, menus, level map, loading and saving, pause) are its own, placed beside the reference image, with four small tables that go with them (the records of three sheets of sprites, which have more pictures). Files: speech, movies and all textures (every texture file holds the typefaces) are read from the Italian disc. Level data and all other code stay the reference's. **Incomplete**: compared with the Italian game itself only from the start to the first level. |
+| `language` | feature | no | no | The game in another language (ADR 0016), from the user's own disc of that language (`TS2_LANGUAGE_DIR`): Italian, French or Spanish, told by the disc. A language is data: the places of the executable that refer to a text refer to the text that language's executable has in the same place, with a short list of corrections the project words itself; speech, movies and textures are read from that disc. Level data and code stay the reference's. **Incomplete**: the reference's code cannot draw letters with accents. Until one way of drawing text serves every language, Italian alone borrows 19 functions and four tables of the Italian executable (to be removed), and French and Spanish show accents, and some plain letters, as wrong glyphs. |
 | `skip-mode-select` | feature | no | yes | The start-up "Screen Mode Select" window does not exist: the game's routine for it is replaced by one that makes the choice the original proposes when nothing was saved (the first hardware 3D device and the first mode at least 480 lines high: 640×480 at 16 bits, full screen). Choices saved in `toy2.cfg` are ignored, since they index lists that differ from one machine to another. |
 
 ## How modifications attach
@@ -25,14 +25,15 @@ With the modification off the original routine runs and its window would
 have to be shown, which needs GDI text (`docs/BACKLOG.md`); until then the
 machine stops at the first text output.
 
-`language-italian` does not replace functions with native ones: it changes
+`language` does not replace functions with native ones: it changes
 the image before it is loaded (`crates/recomp/src/language.rs`) and says
 which files are read from the Italian disc (`crates/runtime/src/files.rs`).
 The addresses of the reference executable are paired with those of the
 Italian one through their code (`crates/recomp/src/pairing.rs`). Each
 place that refers to a text is made to refer to the Italian text of the
-paired place. Each function listed as language (`ITALIAN_FUNCTIONS`) is
-copied from the Italian executable into a section after the image, every
+paired place. For Italian alone, and only until text is drawn one way
+for every language (ADR 0016), each function listed as language
+(`ITALIAN_FUNCTIONS`) is copied from the Italian executable into a section after the image, every
 address in it translated through the pairing and every call led to the
 reference's function (or to another copied one); the reference's function
 begins with a jump to it. Tables of the Italian build that go with its
