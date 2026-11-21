@@ -263,9 +263,14 @@ out of here into the roadmap or an ADR when work on them starts.
     right edge: it is drawn from a fixed place.
   Known about the layout, where the reference's suits English only:
   - in the Italian screen of the graphics settings two hints of two
-    lines each stand on one another: the Italian build draws their four
-    lines at four heights, the reference its two texts at two, and a
-    text of two lines is put around its one height;
+    lines each stand on one another: the reference draws its two texts
+    at the heights 178 and 186, the Italian build its four lines at 170,
+    178, 186 and 194, and here a text of two lines is put around its one
+    height (174 and 182, 182 and 190). No rule from one height gives the
+    Italian build's four: in the options it puts the added line above
+    (180, then the reference's 190). What would: reading, where the
+    texts are joined, the heights the other build draws its lines at
+    from its code, and carrying them with the text;
   - the pause menu's dark box is as wide as the English texts: the
     Spanish ones run past it;
   - a text of two lines stands around the height of the reference's one
