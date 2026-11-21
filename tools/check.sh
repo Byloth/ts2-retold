@@ -24,6 +24,9 @@ for argument in "$@"; do
     esac
 done
 : "${TS2_GAME_DIR:?set TS2_GAME_DIR to the reference copy of the game}"
+# The outcomes are those of the reference copy alone: another language or
+# other discs' signs in the atlas change what is run.
+unset TS2_LANGUAGE_DIR TS2_OTHER_DISCS
 
 # A recording and the seconds of the machine's clock it is run for.
 runs="level:260 pause:200 options:170 options-list:135 en-menu:150"

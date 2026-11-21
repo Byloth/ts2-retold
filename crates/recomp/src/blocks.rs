@@ -231,24 +231,40 @@ impl Blocks {
         );
         let mut live = self.live.iter();
         for (number, chunk) in chunks.iter().enumerate() {
-            let mut module = String::from(
-                "use andy_cpu::fpu::{FBin, FConst, FMem, FUn};\n\
-                 use andy_cpu::interp::{Cpu, Fault};\n\
-                 use andy_cpu::memory::Memory;\n\
-                 use andy_cpu::native;\n\
-                 use andy_cpu::sem::Size;\n\n",
-            );
+            let mut body = String::new();
             for block in *chunk {
                 let live = *live.next().expect("a block has its flags");
                 let name = format!("b{:x}", block.address);
-                module.push_str(&block.rust(&name, live));
-                module.push('\n');
+                body.push_str(&block.rust(&name, live));
+                body.push('\n');
                 let _ = writeln!(
                     main,
                     "        Block {{ address: {:#x}, instructions: {}, live: {live:#x}, run: m{number:03}::{name} }},",
                     block.address, block.instructions
                 );
             }
+            // Only the names its blocks use: a written module compiles
+            // without a warning.
+            let used = |names: &[&'static str]| -> Vec<&'static str> {
+                names
+                    .iter()
+                    .copied()
+                    .filter(|name| body.contains(&format!("{name}::")))
+                    .collect()
+            };
+            let mut module = String::new();
+            let fpu = used(&["FBin", "FConst", "FMem", "FUn"]);
+            if !fpu.is_empty() {
+                let _ = writeln!(module, "use andy_cpu::fpu::{{{}}};", fpu.join(", "));
+            }
+            module.push_str("use andy_cpu::interp::{Cpu, Fault};\nuse andy_cpu::memory::Memory;\n");
+            for (name, path) in [("native", "andy_cpu::native"), ("Size", "andy_cpu::sem::Size")] {
+                if !used(&[name]).is_empty() {
+                    let _ = writeln!(module, "use {path};");
+                }
+            }
+            module.push('\n');
+            module.push_str(&body);
             files.push((format!("src/m{number:03}.rs"), module));
         }
         main.push_str(

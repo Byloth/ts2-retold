@@ -14,8 +14,17 @@
 # game's code as Rust, the program built from it) stays under out\, which
 # git ignores and which must never be published.
 #
-# Needs Rust (https://rustup.rs). With the GNU toolchain no other compiler
-# is needed:  rustup default stable-x86_64-pc-windows-gnu
+# Needs Rust (https://rustup.rs) and a linker, which depends on the
+# toolchain:
+#   stable-x86_64-pc-windows-gnu      brings its own, but uses an
+#                                     x86_64-w64-mingw32-gcc found in PATH
+#                                     instead, and fails if that one is
+#                                     llvm-mingw (no libgcc);
+#   stable-x86_64-pc-windows-gnullvm  for llvm-mingw in PATH (the one this
+#                                     script has been run with);
+#   stable-x86_64-pc-windows-msvc     needs the Visual Studio build tools
+#                                     (never tried here).
+# To choose one for this directory only:  rustup override set <toolchain>
 
 param(
     [Parameter(Mandatory = $true)][string]$GameDir,
