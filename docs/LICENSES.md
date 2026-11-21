@@ -18,6 +18,7 @@ Every dependency or tool is listed here **before** it is adopted
 | `pollster` 1 | MIT OR Apache-2.0 | waiting for the graphics device to open, on native targets, and for the sound server's answers |
 | `pulseaudio` 0.3 | MIT | the sound device of `andy play` (command-line tool only): the PulseAudio server's protocol in Rust, no system library; its tree (`mio`, `futures`, `bitflags`, `byteorder`, `enum-primitive-derive`, `num-traits`, `thiserror`, `log` and theirs) is MIT, MIT OR Apache-2.0 or Unlicense OR MIT |
 | `cpal` 0.15 | Apache-2.0 | the sound device of `andy play` where there is no PulseAudio server (Windows: WASAPI); a dependency of those targets only, not built on Linux. Its tree there (`windows`, `windows-core`, `dasp_sample` and theirs) is MIT OR Apache-2.0 |
+| `gilrs` 0.11 | Apache-2.0 OR MIT | a real joypad for `andy play` (ADR 0021), on Windows only (Windows Gaming Input); on Linux it wants the system's libudev headers and is not built. Its tree there (`gilrs-core`, `fnv`, `uuid`, `vec_map`, `log`, `windows` and theirs) is MIT OR Apache-2.0 |
 | `png` 0.17 | MIT OR Apache-2.0 | `andy boot --surfaces`: writing surfaces as images for inspection (command-line tool only) |
 
 Transitive dependencies: all `MIT`, `MIT OR Apache-2.0` or `Unlicense OR MIT`,

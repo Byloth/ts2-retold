@@ -4,6 +4,7 @@ mod atlas;
 mod capture;
 mod frame;
 mod gauge;
+mod pad;
 mod play;
 mod speaker;
 mod wav;

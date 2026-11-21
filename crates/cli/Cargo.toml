@@ -37,3 +37,8 @@ pulseaudio = "0.3"
 
 [target.'cfg(not(unix))'.dependencies]
 cpal = "0.15"
+
+# A real joypad (ADR 0021). On Linux the crate wants the system's libudev
+# headers, which this project does not ask to be installed.
+[target.'cfg(windows)'.dependencies]
+gilrs = "0.11"

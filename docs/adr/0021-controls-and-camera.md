@@ -91,10 +91,10 @@ What the game does was read from its code first (`docs/CODE-DISCOVERY.md`,
   the controls screen, a third camera in the pause menu beside "active" and
   "passive", sensitivity and inverted axes; kept in the project's settings
   file (ADR 0016), not in the game's saved block.
-- The joypad in the window: reading a real one (the `gilrs` crate, on
-  Windows; on Linux it wants the system's libudev headers, which are not
-  installed here) and plugging it into `Input::pad`. So far a pad exists
-  only in recordings.
+- The joypad on Linux: the `gilrs` crate wants the system's libudev
+  headers there, which this project does not ask to be installed. On
+  Windows the window reads the first pad found when the game starts
+  (`crates/cli/src/pad.rs`) — written and type-checked, never run.
 
 ## Consequences and what is not verified
 

@@ -207,6 +207,8 @@ struct Play {
     /// and held, and its movement and buttons are the game's.
     mouse_wanted: bool,
     mouse_held: bool,
+    /// The joypad found when the game started, if any.
+    pads: Option<crate::pad::Pads>,
     /// Movement not yet a whole count, sideways and down.
     mouse_left_over: (f64, f64),
     /// When the machine's clock read `clock_start`.
@@ -608,6 +610,9 @@ impl Play {
                 return;
             }
             self.machine.clock_limit = Some(self.clock_start + now);
+            if let Some(pads) = &mut self.pads {
+                self.machine.os.input.pad = Some(pads.read());
+            }
             let running = Instant::now();
             let stop = self.machine.run(STRETCH);
             self.meter.busy += running.elapsed();
@@ -640,6 +645,18 @@ pub fn play(machine: Machine, seconds: Option<u64>, gauge: bool) -> Result<(Mach
     let mouse_wanted = [andy_runtime::mods::MOUSE_CONTROLS, andy_runtime::mods::ORBIT_CAMERA]
         .iter()
         .any(|id| mods.is_enabled(id));
+    // The game looks for joysticks once, at its start: a pad plugged in
+    // now is its joystick for the session.
+    let mut machine = machine;
+    let mut pads = crate::pad::Pads::open();
+    if let Some(pads) = &mut pads {
+        println!("joypad                 {}", pads.name());
+        machine.os.input.pad = Some(pads.read());
+    }
+    // A recording starts from the input there is before the game does.
+    if machine.os.recorder.is_some() {
+        machine.os.recorder = Some(andy_runtime::input::Recorder::starting_with(&machine.os.input));
+    }
     let mut play = Play {
         machine,
         window: None,
@@ -653,6 +670,7 @@ pub fn play(machine: Machine, seconds: Option<u64>, gauge: bool) -> Result<(Mach
         gauge: gauge.then(Reading::default),
         mouse_wanted,
         mouse_held: false,
+        pads,
         mouse_left_over: (0.0, 0.0),
         started: Instant::now(),
         clock_start: 0,
