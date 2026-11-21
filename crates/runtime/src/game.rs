@@ -63,6 +63,24 @@ pub static REPLACEMENTS: &[Replacement] = &[
         reference_only: true,
         function: crate::typeface::draw_large_centred,
     },
+    Replacement {
+        modification: ONE_TYPEFACE,
+        address: |_| 0x0049_B2A0,
+        name: "text in the small typeface, centred",
+        callee_pops: 0,
+        resume: None,
+        reference_only: true,
+        function: crate::typeface::draw_small_centred,
+    },
+    Replacement {
+        modification: ONE_TYPEFACE,
+        address: |_| 0x0049_B3B0,
+        name: "text in the small typeface, at a place",
+        callee_pops: 0,
+        resume: None,
+        reference_only: true,
+        function: crate::typeface::draw_small_at,
+    },
 ];
 
 // The main menu (the function at 0x437C40) draws, every frame, two arrows

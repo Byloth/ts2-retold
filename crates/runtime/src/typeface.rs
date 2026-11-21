@@ -5,37 +5,54 @@
 //! have their own, each different. Here is one table from character to
 //! glyph and one way of laying a text out, in place of those functions.
 //!
-//! So far: the large typeface of the menus. Its table and its one atlas
-//! are in `andy_recomp::typeface`; the atlas is put together from the
-//! discs at hand when the game is started, and written into the texture
-//! files as they are read.
+//! So far: the large typeface of the menus and the small one. Their
+//! tables and atlases are in `andy_recomp::typeface`; the atlases are put
+//! together from the discs at hand when the game is started, and written
+//! into the texture files as they are read.
 //!
 //! A text may hold line breaks; and one that is too wide for its room is
 //! set closer.
 
-use andy_recomp::typeface::{ACCENT_RISE, glyph};
+use andy_recomp::typeface::{Face, LARGE, SMALL};
 
 use crate::game::{DRAW_SPRITE, SCREEN_MIDDLE};
 use crate::{Machine, Stop};
 
-/// The sheet of sprites of the large typeface.
-const LARGE_SHEET: u32 = 0x32;
-/// How far apart the reference sets its letters, and its lines (the
-/// entries of its menus are this far apart).
+/// How far apart the reference sets the letters of the large typeface,
+/// and its lines (the entries of its menus are this far apart).
 pub const LARGE_STEP: i32 = 12;
 const LARGE_LINE: i32 = 20;
 /// The widest a line of the large typeface may be: what leaves room on a
 /// screen 320 wide for the arrows a menu draws beside it.
 pub const LARGE_WIDEST: i32 = 240;
+/// The same for the small typeface at its usual size: its letters, its
+/// lines (the height its cells are drawn at) and the screen's width.
+const SMALL_STEP: i32 = 8;
+const SMALL_LINE: i32 = 12;
+const SMALL_WIDEST: i32 = 320;
+/// The size a sprite is drawn at for half its picture's pixels: the
+/// typefaces' usual size.
+const USUAL_SIZE: i32 = 0x800;
+/// The game's function that draws one of four pictures of a sheet as an
+/// icon (x, y, sheet, picture), the sheet of the buttons' icons, and the
+/// picture drawn for each of the characters 1 to 4 in a centred text of
+/// the small typeface.
+const DRAW_ICON: u32 = 0x0049_4820;
+const BUTTONS_SHEET: u32 = 0x44;
+const BUTTONS: [u32; 4] = [2, 3, 1, 0];
 
-/// A line of the large typeface, centred: where its first letter goes and
-/// how far its letters are apart, in 256ths. Twelve apart as the reference
-/// has them, or closer if the line would be wider than there is room.
-pub fn large_line(letters: usize) -> (i32, i32) {
+/// A centred line: where its first letter goes and how far its letters
+/// are apart, in 256ths. As far apart as the reference has them, or
+/// closer if the line would be wider than there is room.
+fn centred_line(letters: usize, usual_step: i32, widest: i32) -> (i32, i32) {
     let letters = letters as i32;
-    let step =
-        if letters * LARGE_STEP > LARGE_WIDEST { 256 * LARGE_WIDEST / letters } else { 256 * LARGE_STEP };
+    let step = if letters * usual_step > widest { 256 * widest / letters } else { 256 * usual_step };
     (SCREEN_MIDDLE - letters * step / 512, step)
+}
+
+/// A line of the large typeface, centred.
+pub fn large_line(letters: usize) -> (i32, i32) {
+    centred_line(letters, LARGE_STEP, LARGE_WIDEST)
 }
 
 /// Half the width of the widest line of a text in the large typeface.
@@ -59,40 +76,128 @@ pub fn text_at(m: &mut Machine, mut at: u32) -> Vec<u8> {
     text
 }
 
-/// In place of the reference's function at 0x49B580: a text in the large
-/// typeface, centred on the screen at a height, in a shade. Its
-/// arguments: the height, the text, the shade (0x80 for the usual one).
-///
-/// Several lines stand around that height, 20 apart.
-pub fn draw_large_centred(m: &mut Machine) -> Result<(), Stop> {
-    let esp = m.cpu.regs[4];
-    let read = |m: &mut Machine, at: u32| m.game_word(at);
-    let (y, text, shade) = (read(m, esp + 4)? as i32, read(m, esp + 8)?, read(m, esp + 12)?);
-    let text = text_at(m, text);
-    // What the reference passes on for the two kinds of shade.
-    let look: [u32; 4] = if shade == 0x80 {
-        [0x80, 0x80, 0x80, 0xFF]
-    } else {
-        [0xFF, 0xFF, 0xFF, (shade << 9).wrapping_add(0x60)]
-    };
+/// How a text is drawn.
+struct Setting<'a> {
+    face: &'a Face,
+    /// What the sprite function is given after the picture: three
+    /// colours and an opacity.
+    look: [u32; 4],
+    /// The size the sprites are drawn at.
+    size: i32,
+    /// How far apart the lines are.
+    line: i32,
+    /// Whether the characters 1 to 4 are the buttons' icons.
+    buttons: bool,
+}
+
+/// Draws a text, line by line, around the height `y`: the block of its
+/// lines stands where the one line would have. `place` says, for a line
+/// of so many letters, where its first goes and how far apart they are
+/// (in 256ths).
+fn draw(
+    m: &mut Machine,
+    setting: &Setting,
+    text: &[u8],
+    y: i32,
+    place: impl Fn(usize) -> (i32, i32),
+) -> Result<(), Stop> {
     let lines: Vec<&[u8]> = text.split(|&byte| byte == b'\n').collect();
-    let top = y - LARGE_LINE * (lines.len() as i32 - 1) / 2;
+    let top = y - setting.line * (lines.len() as i32 - 1) / 2;
+    let size = setting.size as u32;
     for (number, line) in lines.iter().enumerate() {
-        let (first, step) = large_line(line.len());
-        for (place, &character) in line.iter().enumerate() {
-            let Some(glyph) = glyph(character) else { continue };
-            let x = first + place as i32 * step / 256;
-            let line_y = top + LARGE_LINE * number as i32;
+        let (first, step) = place(line.len());
+        let line_y = top + setting.line * number as i32;
+        for (at, &character) in line.iter().enumerate() {
+            let x = first + at as i32 * step / 256;
+            if setting.buttons && (b'1'..=b'4').contains(&character) {
+                let picture = BUTTONS[(character - b'1') as usize];
+                let arguments = [(x - 4) as u32, (line_y - 3) as u32, BUTTONS_SHEET, picture];
+                m.call_guest_c(DRAW_ICON, &arguments)?;
+                continue;
+            }
+            let Some(glyph) = setting.face.glyph(character) else { continue };
             // The letter, and its accent over it.
-            let accent = glyph.accent.map(|accent| (accent.cell(), line_y - ACCENT_RISE));
+            let rise = setting.face.accent_rise * setting.size / USUAL_SIZE;
+            let accent = glyph.accent.map(|accent| (accent, line_y - rise));
             for (cell, y) in [(glyph.cell, line_y)].into_iter().chain(accent) {
+                let [c1, c2, c3, opacity] = setting.look;
                 let arguments =
-                    [x as u32, y as u32, LARGE_SHEET, cell, look[0], look[1], look[2], look[3], 0x800, 0x800];
+                    [x as u32, y as u32, setting.face.sheet, cell, c1, c2, c3, opacity, size, size];
                 m.call_guest_c(DRAW_SPRITE, &arguments)?;
             }
         }
     }
     Ok(())
+}
+
+/// The arguments of the function being replaced, as signed numbers.
+fn arguments<const N: usize>(m: &mut Machine) -> Result<[i32; N], Stop> {
+    let esp = m.cpu.regs[4];
+    let mut arguments = [0; N];
+    for (number, argument) in arguments.iter_mut().enumerate() {
+        *argument = m.game_word(esp + 4 + 4 * number as u32)? as i32;
+    }
+    Ok(arguments)
+}
+
+/// In place of the reference's function at 0x49B580: a text in the large
+/// typeface, centred on the screen at a height, in a shade. Its
+/// arguments: the height, the text, the shade (0x80 for the usual one).
+pub fn draw_large_centred(m: &mut Machine) -> Result<(), Stop> {
+    let [y, text, shade] = arguments(m)?;
+    let text = text_at(m, text as u32);
+    // What the reference passes on for the two kinds of shade.
+    let look = if shade == 0x80 {
+        [0x80, 0x80, 0x80, 0xFF]
+    } else {
+        [0xFF, 0xFF, 0xFF, ((shade as u32) << 9).wrapping_add(0x60)]
+    };
+    let setting = Setting { face: &LARGE, look, size: USUAL_SIZE, line: LARGE_LINE, buttons: false };
+    draw(m, &setting, &text, y, large_line)
+}
+
+/// What the reference's functions for the small typeface pass on: plain,
+/// or see-through if the argument they call a flag is set.
+fn small_look(flag: i32) -> [u32; 4] {
+    [0x80, 0x80, 0x80, if flag != 0 { 0 } else { 0xFF }]
+}
+
+/// In place of the reference's function at 0x49B2A0: a text in the small
+/// typeface, centred on the screen at a height. Its arguments: the
+/// height, the text, the flag. The characters 1 to 4 are the buttons'
+/// icons.
+pub fn draw_small_centred(m: &mut Machine) -> Result<(), Stop> {
+    let [y, text, flag] = arguments(m)?;
+    let text = text_at(m, text as u32);
+    let setting =
+        Setting { face: &SMALL, look: small_look(flag), size: USUAL_SIZE, line: SMALL_LINE, buttons: true };
+    draw(m, &setting, &text, y, |letters| centred_line(letters, SMALL_STEP, SMALL_WIDEST))
+}
+
+/// Where a line of the small typeface begins and how far apart its
+/// letters are (in 256ths), for the reference's function at 0x49B3B0:
+/// from `x` rightwards (mode 0), ending at `x` (mode 2) or centred on it
+/// (any other), at a size. The reference's own arithmetic, which rounds
+/// towards zero.
+pub fn small_line_at(letters: usize, x: i32, mode: i32, size: i32) -> (i32, i32) {
+    let width = (letters as i32).wrapping_mul(size).wrapping_mul(16);
+    let first = match mode {
+        0 => x,
+        2 => x + -width / 4096,
+        _ => x + -width / 8192,
+    };
+    (first, 256 * (size.wrapping_mul(16) / 4096))
+}
+
+/// In place of the reference's function at 0x49B3B0: a text in the small
+/// typeface at a place. Its arguments: x, y, the text, the flag, the
+/// mode (see [`small_line_at`]) and the size.
+pub fn draw_small_at(m: &mut Machine) -> Result<(), Stop> {
+    let [x, y, text, flag, mode, size] = arguments(m)?;
+    let text = text_at(m, text as u32);
+    let line = SMALL_LINE * size / USUAL_SIZE;
+    let setting = Setting { face: &SMALL, look: small_look(flag), size, line, buttons: false };
+    draw(m, &setting, &text, y, |letters| small_line_at(letters, x, mode, size))
 }
 
 #[cfg(test)]
@@ -111,5 +216,19 @@ mod tests {
         assert_eq!(first + 23 * step / 256, 270);
         assert_eq!(large_half_width(b"start game"), 60);
         assert_eq!(large_half_width(b"a\nstart game\nab"), 60);
+    }
+
+    #[test]
+    fn the_small_typeface_is_placed_as_the_reference_places_it() {
+        // Centred on the screen: (40 - letters) * 4, eight apart.
+        assert_eq!(centred_line(10, SMALL_STEP, SMALL_WIDEST), (120, 256 * 8));
+        assert_eq!(centred_line(40, SMALL_STEP, SMALL_WIDEST), (0, 256 * 8));
+        // At a place, at the usual size: from it, up to it, around it.
+        assert_eq!(small_line_at(5, 100, 0, 0x800), (100, 256 * 8));
+        assert_eq!(small_line_at(5, 100, 2, 0x800), (60, 256 * 8));
+        assert_eq!(small_line_at(5, 100, 1, 0x800), (80, 256 * 8));
+        // At another size the reference rounds towards zero.
+        assert_eq!(small_line_at(3, 100, 1, 0x700), (100 - 10, 256 * 7));
+        assert_eq!(small_line_at(3, 100, 2, 0x700), (100 - 21, 256 * 7));
     }
 }

@@ -1,30 +1,33 @@
-//! The one atlas of the large typeface, and the one table from character
+//! The game's typefaces, each with one atlas and one table from character
 //! to glyph (ADR 0016).
 //!
-//! The large typeface is a page of 64 cells of 32 by 32 pixels. On every
-//! language's disc the first 48 cells are the same picture: the letters,
-//! the digits and twelve signs. The last 16 hold what each language added,
-//! each in its own places and sometimes drawn a little differently: the
-//! accents, drawn over a letter, and a few signs of their own.
+//! A typeface is a page of 256 by 256 pixels cut into cells. On every
+//! language's disc the first cells hold the same things: the letters, the
+//! digits and some signs (the same pictures in the large typeface; in the
+//! small one some discs have the digits and a letter drawn anew). After
+//! them each disc has what its language added, in its own places and
+//! sometimes drawn a little differently: the accents, drawn over a
+//! letter, and signs of its own.
 //!
-//! Here every sign has one place. The atlas is put together, when the game
-//! is built, from the pages of all the discs at hand; a sign that no disc
-//! at hand has stays empty. The table says, for every character of
+//! Here every sign has one place. The atlas is put together, when the
+//! game is built, from the pages of all the discs at hand: the common
+//! cells are the reference disc's, each other sign is taken from the
+//! first disc that has it, and one that no disc at hand has stays empty. The table says, for every character of
 //! Latin-1, which cell to draw, and which accent over it: it is the same
 //! for every language, so any text can use any sign.
+//!
+//! What each disc's page holds is written here ([`PAGES`]), page by page,
+//! from looking at them. It cannot be asked of the discs' executables:
+//! the French one draws its accents from the wrong cells of its own page.
 
-/// The cells of a page, across and down, and a cell's side in pixels.
-pub const CELLS_ACROSS: usize = 8;
-pub const CELLS: usize = 64;
-pub const CELL: usize = 32;
-/// The cells that are the same on every disc.
-pub const COMMON_CELLS: usize = 48;
+use crate::pe::{Image, Section};
 
-/// What a cell beyond the common ones holds. Their order is their place in
-/// the atlas: the first is cell 48.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// The side of a page, in pixels.
+pub const PAGE: usize = 256;
+
+/// What a cell beyond the common ones can hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sign {
-    /// The two arrows every disc has in its cells 48 and 49.
     ArrowRight,
     ArrowLeft,
     Grave,
@@ -32,6 +35,7 @@ pub enum Sign {
     Circumflex,
     Diaeresis,
     Tilde,
+    /// The ring over a letter, and the sign of degrees.
     Ring,
     Hyphen,
     InvertedQuestion,
@@ -40,73 +44,53 @@ pub enum Sign {
     Ae,
     Oe,
     CCedilla,
+    Pipe,
+    Section,
+    Asterisk,
+    Apostrophe,
+    Equals,
+    Dollar,
+    Exclamation,
+    LessThan,
 }
 
-/// The places of the signs in the atlas, from cell 48 on: two rows of
-/// eight. A sprite is drawn from the very edge of its cell, and the
-/// picture repeats, so a cell whose bottom row of pixels is used shows as
-/// a line over the cell under it (under the last row is the first: the
-/// letters A to H). The cedilla reaches the bottom of its cell: it stands
-/// in the upper row, over the one place left empty. [`bleeding`] checks
-/// that no disc's pictures break this.
-pub const PLACES: [Option<Sign>; 16] = [
-    Some(Sign::ArrowRight),
-    Some(Sign::ArrowLeft),
-    Some(Sign::CCedilla),
-    Some(Sign::InvertedQuestion),
-    Some(Sign::InvertedExclamation),
-    Some(Sign::OSlash),
-    Some(Sign::Ae),
-    Some(Sign::Oe),
-    Some(Sign::Grave),
-    Some(Sign::Acute),
-    None,
-    Some(Sign::Circumflex),
-    Some(Sign::Diaeresis),
-    Some(Sign::Tilde),
-    Some(Sign::Ring),
-    Some(Sign::Hyphen),
-];
+use Sign::*;
 
 impl Sign {
-    /// The sign's cell in the atlas.
-    pub fn cell(self) -> u32 {
-        let place = PLACES.iter().position(|&place| place == Some(self)).expect("every sign has a place");
-        (COMMON_CELLS + place) as u32
-    }
-
     /// Whether it is drawn over a letter.
     pub fn is_accent(self) -> bool {
-        matches!(
-            self,
-            Sign::Grave | Sign::Acute | Sign::Circumflex | Sign::Diaeresis | Sign::Tilde | Sign::Ring
-        )
+        matches!(self, Grave | Acute | Circumflex | Diaeresis | Tilde | Ring)
     }
 }
-
-/// How much higher than its letter an accent is drawn, in the game's
-/// screen units: what the builds that have accents do.
-pub const ACCENT_RISE: i32 = 4;
 
 /// What is drawn for a character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Glyph {
     pub cell: u32,
-    /// The accent drawn over it, [`ACCENT_RISE`] higher.
-    pub accent: Option<Sign>,
+    /// The cell of the accent drawn over it, the typeface's rise higher.
+    pub accent: Option<u32>,
 }
 
-/// The sign a character is, if it is one of the signs beyond the common
-/// cells and stands alone.
+/// The sign a character is, if it stands alone and is not a letter or a
+/// digit.
 pub fn sign_of(character: u8) -> Option<Sign> {
     Some(match character {
-        b'-' => Sign::Hyphen,
-        0xBF => Sign::InvertedQuestion,
-        0xA1 => Sign::InvertedExclamation,
-        0xD8 | 0xF8 => Sign::OSlash,
-        0xC6 | 0xE6 => Sign::Ae,
-        0x8C | 0x9C => Sign::Oe,
-        0xC7 | 0xE7 => Sign::CCedilla,
+        b'-' => Hyphen,
+        b'|' => Pipe,
+        b'*' => Asterisk,
+        b'\'' => Apostrophe,
+        b'=' => Equals,
+        b'$' => Dollar,
+        b'!' => Exclamation,
+        b'<' => LessThan,
+        0xA1 => InvertedExclamation,
+        0xA7 => Section,
+        0xB0 => Ring,
+        0xBF => InvertedQuestion,
+        0xD8 | 0xF8 => OSlash,
+        0xC6 | 0xE6 => Ae,
+        0x8C | 0x9C => Oe,
+        0xC7 | 0xE7 => CCedilla,
         _ => return None,
     })
 }
@@ -126,175 +110,521 @@ pub fn accented(character: u8) -> Option<(u8, Sign)> {
         _ => return None,
     };
     let accent = match small {
-        0xE0 | 0xE8 | 0xEC | 0xF2 | 0xF9 => Sign::Grave,
-        0xE1 | 0xE9 | 0xED | 0xF3 | 0xFA | 0xFD => Sign::Acute,
-        0xE2 | 0xEA | 0xEE | 0xF4 | 0xFB => Sign::Circumflex,
-        0xE4 | 0xEB | 0xEF | 0xF6 | 0xFC | 0xFF => Sign::Diaeresis,
-        0xE3 | 0xF1 | 0xF5 => Sign::Tilde,
-        _ => Sign::Ring,
+        0xE0 | 0xE8 | 0xEC | 0xF2 | 0xF9 => Grave,
+        0xE1 | 0xE9 | 0xED | 0xF3 | 0xFA | 0xFD => Acute,
+        0xE2 | 0xEA | 0xEE | 0xF4 | 0xFB => Circumflex,
+        0xE4 | 0xEB | 0xEF | 0xF6 | 0xFC | 0xFF => Diaeresis,
+        0xE3 | 0xF1 | 0xF5 => Tilde,
+        _ => Ring,
     };
     Some((letters[(small - first) as usize], accent))
 }
 
-/// What is drawn for a character (Latin-1). `None` for a space and for
-/// what the typeface has nothing for.
-pub fn glyph(character: u8) -> Option<Glyph> {
-    let plain = |cell: u8| Some(Glyph { cell: cell as u32, accent: None });
-    match character {
-        b'a'..=b'z' => plain(character - b'a'),
-        b'A'..=b'Z' => plain(character - b'A'),
-        b'0'..=b'9' => plain(26 + character - b'0'),
-        b'.' => plain(36),
-        b',' => plain(37),
-        b';' => plain(38),
-        b':' => plain(39),
-        b'\\' => plain(40),
-        b'/' => plain(41),
-        b'!' => plain(43),
-        b'?' => plain(44),
-        b'(' => plain(45),
-        b')' => plain(46),
-        // The reference's own function draws this cell for an apostrophe.
-        b'\'' => plain(47),
-        _ => match (sign_of(character), accented(character)) {
-            (Some(sign), _) => Some(Glyph { cell: sign.cell(), accent: None }),
-            (None, Some((letter, accent))) => {
-                Some(Glyph { cell: (letter - b'a') as u32, accent: Some(accent) })
-            }
-            (None, None) => None,
-        },
-    }
-}
-
-/// A page of the typeface: its cells, each as its pixels (blue, green,
-/// red, rows from the top).
+/// A page of a typeface cut into its cells, each as its pixels (blue,
+/// green, red, rows from the top).
 pub type Cells = Vec<Vec<u8>>;
 
-/// Cuts a page of 256 by 256 pixels into its cells.
-pub fn cells(pixels: &[u8]) -> Cells {
-    let side = CELLS_ACROSS * CELL;
-    assert_eq!(pixels.len(), 3 * side * side, "a page is 256 by 256 pixels");
-    (0..CELLS)
-        .map(|cell| {
-            let (across, down) = (cell % CELLS_ACROSS, cell / CELLS_ACROSS);
-            (0..CELL)
-                .flat_map(|row| {
-                    let at = 3 * ((down * CELL + row) * side + across * CELL);
-                    pixels[at..at + 3 * CELL].iter().copied()
-                })
-                .collect()
-        })
-        .collect()
+/// A typeface.
+pub struct Face {
+    pub name: &'static str,
+    /// The sheet of sprites the game draws it from, and the number of the
+    /// texture that sheet is on.
+    pub sheet: u32,
+    pub texture: u8,
+    /// A cell's width and height in pixels.
+    pub cell: (usize, usize),
+    /// How many cells, from the first, hold the same things on every disc.
+    pub common: usize,
+    /// The places of the signs in the atlas, after the common cells.
+    ///
+    /// A sprite is drawn from the very edge of its cell, and the picture
+    /// repeats, so a cell whose bottom row of pixels is used shows as a
+    /// line over the cell under it. The places are chosen so that under
+    /// such a sign is an empty cell; [`Face::bleeding`] checks that no
+    /// disc's pictures break this.
+    pub places: &'static [Option<Sign>],
+    /// How much higher than its letter an accent is drawn, in the game's
+    /// screen units (half the picture's pixels): what the builds that
+    /// have accents do.
+    pub accent_rise: i32,
+    /// Where the reference build holds the address of the sheet's record,
+    /// and that record's address.
+    record_site: u32,
+    record: u32,
+    /// The name of the section the atlas's record is put in.
+    section: &'static str,
+    /// The cell of a character among the common ones.
+    plain: fn(u8) -> Option<u32>,
 }
 
-/// Puts cells together into a page.
-pub fn page(cells: &Cells) -> Vec<u8> {
-    let side = CELLS_ACROSS * CELL;
-    let mut pixels = vec![0u8; 3 * side * side];
-    for (cell, picture) in cells.iter().enumerate() {
-        let (across, down) = (cell % CELLS_ACROSS, cell / CELLS_ACROSS);
-        for row in 0..CELL {
-            let at = 3 * ((down * CELL + row) * side + across * CELL);
-            pixels[at..at + 3 * CELL].copy_from_slice(&picture[3 * CELL * row..][..3 * CELL]);
-        }
-    }
-    pixels
+/// The large typeface of the menus: 64 cells of 32 by 32, 48 of them
+/// common.
+pub static LARGE: Face = Face {
+    name: "large",
+    sheet: 0x32,
+    texture: 0x1F,
+    cell: (32, 32),
+    common: 48,
+    // The cedilla reaches the bottom of its cell: it stands in the upper
+    // row, over the one place left empty. So does the O with a stroke,
+    // for which no empty place is left: the atlas has it a pixel higher
+    // in its cell ([`Face::atlas`]).
+    places: &[
+        Some(ArrowRight),
+        Some(ArrowLeft),
+        Some(CCedilla),
+        Some(InvertedQuestion),
+        Some(InvertedExclamation),
+        Some(OSlash),
+        Some(Ae),
+        Some(Oe),
+        Some(Grave),
+        Some(Acute),
+        None,
+        Some(Circumflex),
+        Some(Diaeresis),
+        Some(Tilde),
+        Some(Ring),
+        Some(Hyphen),
+    ],
+    accent_rise: 4,
+    record_site: 0x004F_6B48,
+    record: 0x0050_0CC8,
+    section: ".tlarge",
+    plain: |character| {
+        Some(match character {
+            b'a'..=b'z' => character - b'a',
+            b'A'..=b'Z' => character - b'A',
+            b'0'..=b'9' => 26 + character - b'0',
+            b'.' => 36,
+            b',' => 37,
+            b';' => 38,
+            b':' => 39,
+            b'\\' => 40,
+            b'/' => 41,
+            b'!' => 43,
+            b'?' => 44,
+            b'(' => 45,
+            b')' => 46,
+            // The reference's own function draws this cell for an apostrophe.
+            b'\'' => 47,
+            _ => return None,
+        } as u32)
+    },
+};
+
+/// The small typeface: cells of 16 by 24, 48 of them common. Its common
+/// cells end with three arrows, and the reference draws the four arrows
+/// for the capital letters A to D (the names of the arrow keys are
+/// written so); that is kept, as the game's own way of writing them.
+pub static SMALL: Face = Face {
+    name: "small",
+    sheet: 0x43,
+    texture: 10,
+    cell: (16, 24),
+    common: 48,
+    // The first sixteen as the Spanish page has them; the cedilla and
+    // the asterisk reach the bottom of their cells, and under them
+    // nothing stands.
+    places: &[
+        Some(ArrowRight),
+        Some(Hyphen),
+        Some(Diaeresis),
+        Some(Circumflex),
+        Some(Grave),
+        Some(Acute),
+        Some(Tilde),
+        Some(InvertedQuestion),
+        Some(InvertedExclamation),
+        Some(OSlash),
+        Some(Ae),
+        Some(Oe),
+        Some(CCedilla),
+        Some(Ring),
+        Some(Pipe),
+        Some(Section),
+        Some(Asterisk),
+        Some(Apostrophe),
+        Some(Equals),
+        Some(Dollar),
+        Some(Exclamation),
+        Some(LessThan),
+    ],
+    accent_rise: 3,
+    record_site: 0x004F_6B8C,
+    record: 0x0050_0C30,
+    section: ".tsmall",
+    plain: |character| {
+        Some(match character {
+            b'a'..=b'z' => character - b'a',
+            // Up, down, left, right.
+            b'A'..=b'D' => 45 + character - b'A',
+            b'E'..=b'Z' => character - b'A',
+            b',' => 26,
+            b'.' => 27,
+            b'/' => 28,
+            b'\\' => 29,
+            b'?' => 30,
+            b':' => 31,
+            b';' => 32,
+            b'(' => 33,
+            b')' => 34,
+            b'1'..=b'9' => 35 + character - b'1',
+            b'0' => 44,
+            _ => return None,
+        } as u32)
+    },
+};
+
+pub static FACES: [&Face; 2] = [&LARGE, &SMALL];
+
+/// A page of a typeface as one of the discs has it: the picture, known by
+/// the SHA-256 of its pixels, and the signs in its cells after the common
+/// ones, as seen by looking at it.
+pub struct KnownPage {
+    pub face: &'static Face,
+    pub sha256: &'static str,
+    pub signs: &'static [Option<Sign>],
+    /// How much higher than its letter that disc's build draws an accent.
+    pub accent_rise: i32,
 }
 
-/// Whether a picture of 256 by 256 is a page of the large typeface: its
-/// common cells are those of the reference's page.
-pub fn is_page(pixels: &[u8], reference: &Cells) -> bool {
-    pixels.len() == 3 * (CELLS_ACROSS * CELL).pow(2)
-        && cells(pixels)[..COMMON_CELLS] == reference[..COMMON_CELLS]
+const LARGE_ITALIAN: [Option<Sign>; 15] = [
+    Some(ArrowRight),
+    Some(ArrowLeft),
+    Some(Diaeresis),
+    Some(Circumflex),
+    Some(Grave),
+    Some(Acute),
+    Some(Tilde),
+    Some(Ring),
+    Some(InvertedQuestion),
+    Some(InvertedExclamation),
+    Some(OSlash),
+    Some(Ae),
+    Some(Oe),
+    Some(CCedilla),
+    // The Spanish page has it; the Italian one has an empty cell, and
+    // the Italian game shows a gap for its hyphens.
+    Some(Hyphen),
+];
+
+const SMALL_SPANISH: [Option<Sign>; 17] = [
+    Some(ArrowRight),
+    Some(Hyphen),
+    Some(Diaeresis),
+    Some(Circumflex),
+    Some(Grave),
+    Some(Acute),
+    Some(Tilde),
+    Some(InvertedQuestion),
+    Some(InvertedExclamation),
+    Some(OSlash),
+    Some(Ae),
+    Some(Oe),
+    Some(CCedilla),
+    Some(Ring),
+    Some(Pipe),
+    Some(Section),
+    // The Spanish page alone.
+    Some(Asterisk),
+];
+
+/// The pages of the four discs known (ADR 0016).
+pub static PAGES: &[KnownPage] = &[
+    KnownPage {
+        face: &LARGE,
+        sha256: "c3f8fe383678515fa93aac25529737384f8c413e0b17ef643403ee562831a31b",
+        signs: &[Some(ArrowRight), Some(ArrowLeft)],
+        accent_rise: 4,
+    },
+    // The Spanish page, which the Italian disc has too in three files.
+    KnownPage {
+        face: &LARGE,
+        sha256: "8bbc63537cc3df63b8495f34129ca9872d821da1c22c7468ccd30c6a8aa040c4",
+        signs: &LARGE_ITALIAN,
+        accent_rise: 4,
+    },
+    KnownPage {
+        face: &LARGE,
+        sha256: "27005709e92fa38a025f76c46e336e9021d506788c2d372388916c31b4c20d8b",
+        signs: LARGE_ITALIAN.split_at(14).0,
+        accent_rise: 4,
+    },
+    // The French page.
+    KnownPage {
+        face: &LARGE,
+        sha256: "79f15c339454fae9b716151d45a1e8add022412c656b99588ab5cf6766bf9005",
+        signs: &[
+            Some(ArrowRight),
+            Some(ArrowLeft),
+            Some(Diaeresis),
+            Some(Circumflex),
+            Some(Grave),
+            Some(Acute),
+            Some(Tilde),
+            Some(Hyphen),
+            Some(InvertedQuestion),
+            Some(CCedilla),
+            Some(Ring),
+            Some(Ae),
+        ],
+        accent_rise: 4,
+    },
+    KnownPage {
+        face: &SMALL,
+        sha256: "39bc7bac5d8939e273dde54c99ee258094fa6d166eaa7c5b82bf3875ac97262c",
+        signs: &[Some(ArrowRight)],
+        accent_rise: 3,
+    },
+    KnownPage {
+        face: &SMALL,
+        sha256: "a45986823e51f14ab6ae1f1f0f24927df63b5b8b364486e1b2832fb131eea1ef",
+        signs: &SMALL_SPANISH,
+        accent_rise: 3,
+    },
+    // The Italian page: the Spanish one without the asterisk.
+    KnownPage {
+        face: &SMALL,
+        sha256: "1d1b97fe8d86251b62c4e6c448d62a5efb7cda300041adb2586de87db4729329",
+        signs: SMALL_SPANISH.split_at(16).0,
+        accent_rise: 3,
+    },
+    // The French page. Its accents stand a pixel lower in their cells,
+    // and the French build draws them a unit higher. (That build takes
+    // them from the wrong cells: it draws a circumflex for a grave.)
+    // Whether the cell after the ring is the ligature of A and E or of O
+    // and E is UNVERIFIED: the French build draws it for the former.
+    KnownPage {
+        face: &SMALL,
+        sha256: "c024eac77cd32a6634eb9a33dadda35b00ae5f90e217463579a0d55f4547e405",
+        signs: &[
+            Some(ArrowRight),
+            Some(Hyphen),
+            Some(Apostrophe),
+            Some(Diaeresis),
+            Some(Circumflex),
+            Some(Acute),
+            Some(Grave),
+            Some(Tilde),
+            Some(InvertedQuestion),
+            Some(Ring),
+            Some(Ae),
+            Some(Equals),
+            Some(Dollar),
+            Some(Asterisk),
+            Some(OSlash),
+            Some(Exclamation),
+            Some(LessThan),
+        ],
+        accent_rise: 4,
+    },
+];
+
+/// The known page with these pixels' SHA-256, if it is one.
+pub fn known_page(sha256: &str) -> Option<&'static KnownPage> {
+    PAGES.iter().find(|page| page.sha256 == sha256)
 }
 
-/// A disc's page with what its build draws from it: for each sign, the
-/// cell of this page that holds it.
+/// A disc's page, cut into cells, with what is known of it.
 pub struct Source {
     pub cells: Cells,
-    pub signs: Vec<(Sign, usize)>,
+    pub page: &'static KnownPage,
 }
 
-/// The atlas: the reference's common cells, then every sign in its place,
-/// each taken from the first source that has it; a sign none has is an
-/// empty cell (the reference's last one, which is empty on every disc).
-/// Also says which signs are there.
-pub fn atlas(reference: &Cells, sources: &[Source]) -> (Cells, Vec<Sign>) {
-    let empty = reference[CELLS - 1].clone();
-    let mut atlas: Cells = reference[..COMMON_CELLS].to_vec();
-    let mut present = Vec::new();
-    for place in PLACES {
-        let found = place.and_then(|sign| {
-            let cell = sources.iter().find_map(|source| {
-                source.signs.iter().find(|&&(held, _)| held == sign).map(|&(_, cell)| &source.cells[cell])
-            })?;
+impl Face {
+    /// The cells of a page, across and in all.
+    pub fn across(&self) -> usize {
+        PAGE / self.cell.0
+    }
+
+    pub fn cells(&self) -> usize {
+        self.across() * (PAGE / self.cell.1)
+    }
+
+    /// The sign's cell in the atlas, if the typeface has a place for it.
+    pub fn cell_of(&self, sign: Sign) -> Option<u32> {
+        let place = self.places.iter().position(|&place| place == Some(sign))?;
+        Some((self.common + place) as u32)
+    }
+
+    /// What is drawn for a character (Latin-1). `None` for a space and
+    /// for what the typeface has nothing for.
+    pub fn glyph(&self, character: u8) -> Option<Glyph> {
+        if let Some(cell) = (self.plain)(character) {
+            return Some(Glyph { cell, accent: None });
+        }
+        if let Some(sign) = sign_of(character) {
+            return self.cell_of(sign).map(|cell| Glyph { cell, accent: None });
+        }
+        let (letter, accent) = accented(character)?;
+        Some(Glyph { cell: (letter - b'a') as u32, accent: self.cell_of(accent) })
+    }
+
+    fn corner(&self, cell: usize) -> (usize, usize) {
+        ((cell % self.across()) * self.cell.0, (cell / self.across()) * self.cell.1)
+    }
+
+    /// Cuts a page into its cells.
+    pub fn cut(&self, pixels: &[u8]) -> Cells {
+        assert_eq!(pixels.len(), 3 * PAGE * PAGE, "a page is 256 by 256 pixels");
+        (0..self.cells())
+            .map(|cell| {
+                let (x, y) = self.corner(cell);
+                (0..self.cell.1)
+                    .flat_map(|row| {
+                        let at = 3 * ((y + row) * PAGE + x);
+                        pixels[at..at + 3 * self.cell.0].iter().copied()
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Puts cells together into a page; what is left of the page, to the
+    /// right of the cells and under them, has the colour of nothing.
+    pub fn page(&self, cells: &Cells) -> Vec<u8> {
+        let background = &cells[0][..3];
+        let mut pixels: Vec<u8> = background.iter().copied().cycle().take(3 * PAGE * PAGE).collect();
+        for (cell, picture) in cells.iter().enumerate() {
+            let (x, y) = self.corner(cell);
+            for row in 0..self.cell.1 {
+                let at = 3 * ((y + row) * PAGE + x);
+                pixels[at..at + 3 * self.cell.0]
+                    .copy_from_slice(&picture[3 * self.cell.0 * row..][..3 * self.cell.0]);
+            }
+        }
+        pixels
+    }
+
+    /// The atlas: the first source's common cells, then every sign in its
+    /// place, each taken from the first source that has it; a sign none
+    /// has is an empty cell. Also says which signs are there.
+    ///
+    /// An accent from a page whose build draws it higher or lower than
+    /// this typeface does is moved in its cell by as much (a screen unit
+    /// is two pixels of the page), so that it stands where that build
+    /// has it.
+    pub fn atlas(&self, sources: &[Source]) -> Result<(Cells, Vec<Sign>), String> {
+        let first = sources.first().ok_or("no page of the typeface")?;
+        // The colour of nothing: the first pixel of a cell, which no
+        // glyph reaches.
+        let background = first.cells[0][..3].to_vec();
+        let empty: Vec<u8> = background.iter().copied().cycle().take(3 * self.cell.0 * self.cell.1).collect();
+        let mut atlas: Cells = first.cells[..self.common].to_vec();
+        let mut present = Vec::new();
+        for &place in self.places {
+            let found = place.and_then(|sign| {
+                sources.iter().find_map(|source| {
+                    let at = source.page.signs.iter().position(|&held| held == Some(sign))?;
+                    Some((sign, &source.cells[self.common + at], source.page.accent_rise))
+                })
+            });
+            let Some((sign, cell, rise)) = found else {
+                atlas.push(empty.clone());
+                continue;
+            };
+            let up = if sign.is_accent() { 2 * (rise - self.accent_rise) } else { 0 };
+            atlas.push(self.raised(cell, up, &background).ok_or_else(|| {
+                format!("the {} typeface's {sign:?} cannot be moved by {up} in its cell", self.name)
+            })?);
             present.push(sign);
-            Some(cell.clone())
+        }
+        // A sign that would show as a line over the cell under it, and
+        // has no empty cell to stand over, is moved up in its cell until
+        // its bottom row is free: by a pixel of the page, half a screen
+        // unit, in every case seen.
+        for cell in self.bleeding(&atlas) {
+            let lifted = (1..=2).find_map(|up| {
+                let lifted = self.raised(&atlas[cell], up, &background)?;
+                let bottom = &lifted[3 * self.cell.0 * (self.cell.1 - 1)..];
+                bottom.chunks(3).all(|pixel| pixel == &background[..]).then_some(lifted)
+            });
+            atlas[cell] = lifted.ok_or_else(|| {
+                format!(
+                    "in the {} typeface's atlas, cell {cell} would show as a line over the cell under it",
+                    self.name
+                )
+            })?;
+        }
+        Ok((atlas, present))
+    }
+
+    /// A cell's picture moved up by some rows (down, if negative); `None`
+    /// if a row that is not empty would leave the cell.
+    fn raised(&self, cell: &[u8], up: i32, background: &[u8]) -> Option<Vec<u8>> {
+        let (row_bytes, rows) = (3 * self.cell.0, self.cell.1 as i32);
+        let is_empty = |row: i32| {
+            cell[row as usize * row_bytes..][..row_bytes].chunks(3).all(|pixel| pixel == background)
+        };
+        if (0..rows).any(|row| !(0..rows).contains(&(row - up)) && !is_empty(row)) {
+            return None;
+        }
+        let mut moved = Vec::with_capacity(cell.len());
+        for row in 0..rows {
+            let from = row + up;
+            if (0..rows).contains(&from) {
+                moved.extend_from_slice(&cell[from as usize * row_bytes..][..row_bytes]);
+            } else {
+                moved.extend(background.iter().copied().cycle().take(row_bytes));
+            }
+        }
+        Some(moved)
+    }
+
+    /// The cells after the common ones whose bottom row of pixels is used
+    /// while the cell under them (the first row's, under the last) is
+    /// not empty: each would show as a line over that cell's sprite.
+    pub fn bleeding(&self, atlas: &Cells) -> Vec<usize> {
+        let background = &atlas[0][..3];
+        let is_empty =
+            |cell: usize| atlas.get(cell).is_none_or(|cell| cell.chunks(3).all(|pixel| pixel == background));
+        (self.common..atlas.len())
+            .filter(|&cell| {
+                let last_row = &atlas[cell][3 * self.cell.0 * (self.cell.1 - 1)..];
+                let under = (cell + self.across()) % self.cells();
+                last_row.chunks(3).any(|pixel| pixel != background) && !is_empty(under)
+            })
+            .collect()
+    }
+
+    /// The record of the typeface's sheet of sprites for the atlas: eight
+    /// bytes as the reference's begin (the texture's number, the cell's
+    /// width and height), then where each cell of the page is.
+    pub fn sheet_record(&self) -> Vec<u8> {
+        let mut record = vec![self.texture, 0, self.cell.0 as u8, self.cell.1 as u8, 0, 0, 0, 0];
+        for cell in 0..self.cells() {
+            let (x, y) = self.corner(cell);
+            record.extend([x as u8, y as u8]);
+        }
+        record
+    }
+
+    /// Gives the reference build's image the record of the atlas, with
+    /// all the page's cells, in place of its own.
+    pub fn install_sheet_record(&self, image: &mut Image) -> Result<(), String> {
+        if image.read_u32(self.record_site) != Some(self.record) {
+            return Err(format!(
+                "the {} typeface's sheet is not where the reference build has it",
+                self.name
+            ));
+        }
+        let end = image.sections.iter().map(|section| section.va + section.virtual_size).max();
+        let va = end.unwrap_or(image.base).next_multiple_of(0x1000);
+        let data = self.sheet_record();
+        image.sections.push(Section {
+            name: self.section.into(),
+            va,
+            virtual_size: data.len() as u32,
+            flags: 0x4000_0040, // initialised data, readable
+            data,
         });
-        atlas.push(found.unwrap_or_else(|| empty.clone()));
+        let section = image.sections.iter_mut().find(|section| section.contains(self.record_site));
+        let section = section.expect("the site was just read");
+        let offset = (self.record_site - section.va) as usize;
+        section.data[offset..offset + 4].copy_from_slice(&va.to_le_bytes());
+        Ok(())
     }
-    (atlas, present)
-}
-
-/// The cells of the two last rows whose bottom row of pixels is used
-/// while the cell under them (the first row's, under the last) is not
-/// empty: each would show as a line over that cell's sprite.
-pub fn bleeding(atlas: &Cells) -> Vec<usize> {
-    // The colour of nothing: the first pixel of any cell, which no glyph
-    // reaches.
-    let background = &atlas[0][..3];
-    (COMMON_CELLS..CELLS)
-        .filter(|&cell| {
-            let last_row = &atlas[cell][3 * CELL * (CELL - 1)..];
-            let under = &atlas[(cell + CELLS_ACROSS) % CELLS];
-            last_row.chunks(3).any(|pixel| pixel != background)
-                && under.chunks(3).any(|pixel| pixel != background)
-        })
-        .collect()
-}
-
-/// The record of the typeface's sheet of sprites for the atlas: eight
-/// bytes as the reference's begin (the texture's number, the cell's
-/// width and height), then where each of the 64 cells is.
-pub fn sheet_record(texture: u8) -> Vec<u8> {
-    let mut record = vec![texture, 0, CELL as u8, CELL as u8, 0, 0, 0, 0];
-    for cell in 0..CELLS {
-        record.push(((cell % CELLS_ACROSS) * CELL) as u8);
-        record.push(((cell / CELLS_ACROSS) * CELL) as u8);
-    }
-    record
-}
-
-/// Where the reference build's code holds the address of the record of
-/// the large typeface's sheet, and that record's address: 8 bytes and 48
-/// places, for a page of which it uses 48 cells.
-const SHEET_RECORD_SITE: u32 = 0x004F_6B48;
-const SHEET_RECORD: u32 = 0x0050_0CC8;
-/// The texture the sheet is drawn from.
-pub const SHEET_TEXTURE: u8 = 0x1F;
-
-/// Gives the reference build's image the record of the atlas, with all 64
-/// cells, in place of its own.
-pub fn install_sheet_record(image: &mut crate::pe::Image) -> Result<(), String> {
-    use crate::pe::Section;
-    if image.read_u32(SHEET_RECORD_SITE) != Some(SHEET_RECORD) {
-        return Err("the large typeface's sheet is not where the reference build has it".into());
-    }
-    let end = image.sections.iter().map(|section| section.va + section.virtual_size).max();
-    let va = end.unwrap_or(image.base).next_multiple_of(0x1000);
-    let data = sheet_record(SHEET_TEXTURE);
-    image.sections.push(Section {
-        name: ".type".into(),
-        va,
-        virtual_size: data.len() as u32,
-        flags: 0x4000_0040, // initialised data, readable
-        data,
-    });
-    let section = image.sections.iter_mut().find(|section| section.contains(SHEET_RECORD_SITE));
-    let section = section.expect("the site was just read");
-    let offset = (SHEET_RECORD_SITE - section.va) as usize;
-    section.data[offset..offset + 4].copy_from_slice(&va.to_le_bytes());
-    Ok(())
 }
 
 #[cfg(test)]
@@ -303,97 +633,156 @@ mod tests {
 
     #[test]
     fn every_character_has_one_glyph_whatever_the_language() {
-        assert_eq!(glyph(b'a'), Some(Glyph { cell: 0, accent: None }));
-        assert_eq!(glyph(b'Z').unwrap().cell, 25);
-        assert_eq!(glyph(b'7').unwrap().cell, 33);
-        assert_eq!(glyph(b'/').unwrap().cell, 41);
-        assert_eq!(glyph(b' '), None);
+        let plain = |cell| Some(Glyph { cell, accent: None });
+        assert_eq!(LARGE.glyph(b'a'), plain(0));
+        assert_eq!(LARGE.glyph(b'Z'), plain(25));
+        assert_eq!(LARGE.glyph(b'7'), plain(33));
+        assert_eq!(LARGE.glyph(b'/'), plain(41));
+        assert_eq!(LARGE.glyph(b' '), None);
         // The signs beyond the common cells, each in its place.
-        assert_eq!((Sign::ArrowRight.cell(), Sign::CCedilla.cell(), Sign::Hyphen.cell()), (48, 50, 63));
-        assert_eq!(glyph(b'-'), Some(Glyph { cell: Sign::Hyphen.cell(), accent: None }));
-        assert_eq!(glyph(0xBF).unwrap().cell, Sign::InvertedQuestion.cell());
+        assert_eq!(LARGE.glyph(b'-'), plain(63));
+        assert_eq!(LARGE.glyph(0xBF), plain(51));
+        assert_eq!(LARGE.glyph(0xE7), plain(50));
         // Letters with accents, small and capital.
-        assert_eq!(glyph(0xE0), Some(Glyph { cell: 0, accent: Some(Sign::Grave) }));
-        assert_eq!(glyph(0xC9), Some(Glyph { cell: 4, accent: Some(Sign::Acute) }));
-        assert_eq!(glyph(0xF1), Some(Glyph { cell: 13, accent: Some(Sign::Tilde) }));
-        assert_eq!(glyph(0xFC), Some(Glyph { cell: 20, accent: Some(Sign::Diaeresis) }));
-        assert_eq!(glyph(0xEE), Some(Glyph { cell: 8, accent: Some(Sign::Circumflex) }));
-        assert_eq!(glyph(0xE5), Some(Glyph { cell: 0, accent: Some(Sign::Ring) }));
-        assert_eq!(glyph(0xE7).unwrap(), Glyph { cell: Sign::CCedilla.cell(), accent: None });
-        // Every sign has one place, and the place under the cedilla is empty.
-        let placed: Vec<Sign> = PLACES.iter().flatten().copied().collect();
-        assert_eq!(placed.len(), 15);
-        assert!((0..placed.len()).all(|one| placed[one + 1..].iter().all(|&other| other != placed[one])));
-        assert_eq!(PLACES[(Sign::CCedilla.cell() as usize - COMMON_CELLS) + CELLS_ACROSS], None);
+        assert_eq!(LARGE.glyph(0xE0), Some(Glyph { cell: 0, accent: Some(56) }));
+        assert_eq!(LARGE.glyph(0xC9), Some(Glyph { cell: 4, accent: Some(57) }));
+        assert_eq!(LARGE.glyph(0xF1), Some(Glyph { cell: 13, accent: Some(61) }));
+        assert_eq!(LARGE.glyph(0xFC), Some(Glyph { cell: 20, accent: Some(60) }));
+        assert_eq!(LARGE.glyph(0xEE), Some(Glyph { cell: 8, accent: Some(59) }));
+        assert_eq!(LARGE.glyph(0xE5), Some(Glyph { cell: 0, accent: Some(62) }));
+        // The small typeface has its signs elsewhere, the arrows for the
+        // capitals A to D, and signs the large one lacks.
+        assert_eq!(SMALL.glyph(b'b'), plain(1));
+        assert_eq!(
+            (SMALL.glyph(b'A'), SMALL.glyph(b'D'), SMALL.glyph(b'E')),
+            (plain(45), plain(48), plain(4))
+        );
+        assert_eq!(
+            (SMALL.glyph(b'0'), SMALL.glyph(b'1'), SMALL.glyph(b'9')),
+            (plain(44), plain(35), plain(43))
+        );
+        assert_eq!(SMALL.glyph(b'-'), plain(49));
+        assert_eq!(SMALL.glyph(0xE8), Some(Glyph { cell: 4, accent: Some(52) }));
+        assert_eq!(
+            (SMALL.glyph(b'\''), SMALL.glyph(b'$'), SMALL.glyph(0xA7)),
+            (plain(65), plain(67), plain(63))
+        );
+        assert_eq!(LARGE.glyph(b'$'), None);
+        for face in FACES {
+            // Every sign has one place, and the places fit the page.
+            let placed: Vec<Sign> = face.places.iter().flatten().copied().collect();
+            assert!((0..placed.len()).all(|one| placed[one + 1..].iter().all(|&other| other != placed[one])));
+            assert!(face.common + face.places.len() <= face.cells());
+            // Every known page's signs have a place in the atlas.
+            for page in PAGES.iter().filter(|page| std::ptr::eq(page.face, face)) {
+                assert!(page.signs.iter().flatten().all(|&sign| face.cell_of(sign).is_some()));
+                assert!(face.common + page.signs.len() <= face.cells());
+            }
+        }
+        assert!(known_page(PAGES[0].sha256).is_some() && known_page("").is_none());
     }
 
-    /// A page whose cell `n` is filled with the value `base + n`.
-    fn filled(base: u8) -> Cells {
-        (0..CELLS).map(|cell| vec![base.wrapping_add(cell as u8); 3 * CELL * CELL]).collect()
+    /// A page of a face whose cell `n` is filled with the value `base + n`,
+    /// but for the first pixel of each cell, which is nothing (zero).
+    fn filled(face: &Face, base: u8) -> Cells {
+        (0..face.cells())
+            .map(|cell| {
+                let mut pixels = vec![base.wrapping_add(cell as u8); 3 * face.cell.0 * face.cell.1];
+                pixels[..3].fill(0);
+                pixels
+            })
+            .collect()
     }
 
     #[test]
     fn a_page_is_cut_into_cells_and_put_together_again() {
-        let cut = filled(0);
-        let pixels = page(&cut);
-        assert_eq!(pixels.len(), 3 * 256 * 256);
-        // The second cell of the second row begins at pixel (32, 32).
-        assert_eq!(pixels[3 * (32 * 256 + 32)], 9);
-        assert_eq!(cells(&pixels), cut);
-        assert!(is_page(&pixels, &cut));
-        let mut other = cut.clone();
-        other[3][0] ^= 1;
-        assert!(!is_page(&page(&other), &cut));
-        // What differs beyond the common cells does not matter.
-        other = cut.clone();
-        other[50][0] ^= 1;
-        assert!(is_page(&page(&other), &cut));
+        for face in FACES {
+            let cut = filled(face, 1);
+            let pixels = face.page(&cut);
+            assert_eq!(pixels.len(), 3 * 256 * 256);
+            assert!(face.cut(&pixels) == cut);
+        }
+        // The second cell of the second row of the small typeface begins
+        // at pixel (16, 24).
+        let pixels = SMALL.page(&filled(&SMALL, 1));
+        assert_eq!(pixels[3 * (24 * 256 + 16) + 3], 1 + 17);
+        // Fewer cells than the page has: the rest is nothing.
+        let few = filled(&LARGE, 1)[..50].to_vec();
+        assert_eq!(LARGE.page(&few)[3 * (255 * 256 + 255)], 0);
     }
+
+    static FIRST: KnownPage =
+        KnownPage { face: &LARGE, sha256: "", signs: &[None, Some(Grave), Some(Hyphen)], accent_rise: 4 };
+    static SECOND: KnownPage =
+        KnownPage { face: &LARGE, sha256: "", signs: &[Some(Hyphen), Some(Tilde)], accent_rise: 5 };
 
     #[test]
     fn the_atlas_has_every_sign_once_from_whichever_disc_has_it() {
-        let reference = filled(0);
-        // One disc has the hyphen in its cell 62 and the grave accent in
-        // 50; another has the hyphen too, elsewhere, and the tilde.
-        let first = Source { cells: filled(100), signs: vec![(Sign::Hyphen, 62), (Sign::Grave, 50)] };
-        let second = Source { cells: filled(200), signs: vec![(Sign::Hyphen, 55), (Sign::Tilde, 51)] };
-        let (atlas, present) = atlas(&reference, &[first, second]);
-        assert_eq!(atlas.len(), CELLS);
-        assert!(atlas[..COMMON_CELLS] == reference[..COMMON_CELLS]);
-        assert_eq!(atlas[Sign::Hyphen.cell() as usize][0], 100 + 62);
-        assert_eq!(atlas[Sign::Grave.cell() as usize][0], 100 + 50);
-        assert_eq!(atlas[Sign::Tilde.cell() as usize][0], 200 + 51);
-        // What no disc has is empty, like the reference's last cell.
-        assert!(atlas[Sign::Acute.cell() as usize] == reference[CELLS - 1]);
-        assert!(atlas[58] == reference[CELLS - 1], "the place left empty");
-        assert_eq!(present, [Sign::Grave, Sign::Tilde, Sign::Hyphen]);
+        // Common cells alike; after them each its own. Their last rows
+        // are nothing, so that an accent can be moved.
+        let page = |base: u8| {
+            let mut cells = filled(&LARGE, 1);
+            for (number, cell) in cells.iter_mut().enumerate().skip(48) {
+                cell.fill(base.wrapping_add(number as u8));
+                cell[..3 * 32 * 2].fill(0);
+            }
+            cells
+        };
+        let sources = [Source { cells: page(100), page: &FIRST }, Source { cells: page(200), page: &SECOND }];
+        let (atlas, present) = LARGE.atlas(&sources).unwrap();
+        assert_eq!(atlas.len(), 64);
+        // The common cells are the first disc's.
+        assert!(atlas[..48] == sources[0].cells[..48]);
+        let cell = |sign| &atlas[LARGE.cell_of(sign).unwrap() as usize];
+        // The hyphen from the first disc's cell 50, though the second has it too.
+        assert_eq!(cell(Hyphen)[3 * 32 * 2], 150);
+        assert_eq!(cell(Grave)[3 * 32 * 2], 149);
+        // The tilde from the second disc, whose build draws accents one
+        // unit higher: two rows up in its cell.
+        assert_eq!((cell(Tilde)[0], cell(Tilde)[3 * 32 * 2 - 3], cell(Tilde)[3 * 32 * 30]), (249, 249, 0));
+        // What no disc has is empty.
+        assert!(cell(Acute).iter().all(|&byte| byte == 0));
+        assert_eq!(present, [Grave, Tilde, Hyphen]);
+        // A sign reaching the bottom of its cell over a cell that is not
+        // empty is lifted by a pixel; one that cannot be is an error.
+        let mut low = page(100);
+        low[49][3 * 32 * 31..].fill(7);
+        let (atlas, _) = LARGE.atlas(&[Source { cells: low.clone(), page: &FIRST }]).unwrap();
+        let grave = &atlas[LARGE.cell_of(Grave).unwrap() as usize];
+        assert!(grave[3 * 32 * 31..].iter().all(|&byte| byte == 0) && grave[3 * 32 * 30..][..3] == [7; 3]);
+        low[49].fill(7);
+        assert!(LARGE.atlas(&[Source { cells: low, page: &FIRST }]).is_err());
     }
 
     #[test]
     fn a_cell_that_would_show_as_a_line_over_another_is_found() {
-        // Background everywhere but where a test puts something.
-        let blank = || -> Cells { vec![vec![0u8; 3 * CELL * CELL]; CELLS] };
+        let blank = || -> Cells { vec![vec![0u8; 3 * 32 * 32]; 64] };
         let mut cells = blank();
         // A sign in the lower row reaching its bottom, a letter in the
         // first row under it (the picture repeats).
-        cells[62][3 * CELL * (CELL - 1)] = 9;
-        cells[6][0] = 9;
-        assert_eq!(bleeding(&cells), [62]);
+        cells[62][3 * 32 * 31] = 9;
+        cells[6][3] = 9;
+        assert_eq!(LARGE.bleeding(&cells), [62]);
         // In the upper row, over an empty place: nothing.
         let mut cells = blank();
-        cells[50][3 * CELL * (CELL - 1)] = 9;
-        assert!(bleeding(&cells).is_empty());
+        cells[50][3 * 32 * 31] = 9;
+        assert!(LARGE.bleeding(&cells).is_empty());
         cells[58][5] = 9;
-        assert_eq!(bleeding(&cells), [50]);
+        assert_eq!(LARGE.bleeding(&cells), [50]);
     }
 
     #[test]
     fn the_sheet_record_places_all_the_cells() {
-        let record = sheet_record(0x1F);
+        let record = LARGE.sheet_record();
         assert_eq!(record.len(), 8 + 2 * 64);
         assert_eq!(record[..8], [0x1F, 0, 32, 32, 0, 0, 0, 0]);
         assert_eq!(record[8..12], [0, 0, 32, 0]);
         assert_eq!(record[8 + 2 * 9..][..2], [32, 32]);
         assert_eq!(record[8 + 2 * 63..], [224, 224]);
+        let record = SMALL.sheet_record();
+        assert_eq!(record.len(), 8 + 2 * 160);
+        assert_eq!(record[..8], [10, 0, 16, 24, 0, 0, 0, 0]);
+        assert_eq!(record[8 + 2 * 17..][..2], [16, 24]);
+        assert_eq!(record[8 + 2 * 159..], [240, 216]);
     }
 }

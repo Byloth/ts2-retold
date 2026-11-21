@@ -300,3 +300,44 @@ Added by the owner the same day, for the one function:
 - The texts worded by the project are one modification,
   `menu-load-save-wording`; the earlier correction of the Italian text is
   gone with it.
+
+## Pages are known by looking, and the small typeface (2026-11-22)
+
+- **What each disc's page holds is written down, page by page**
+  (`typeface::PAGES`: the SHA-256 of a page's pixels, and the signs in
+  its cells), from looking at the pages. Asking the executables, as was
+  done first for the large typeface, is not reliable: it gave the
+  ligature of O and E the picture of the one of A and E (a number that
+  happened to fall on that cell), and the French build draws the accents
+  of the small typeface from the wrong cells of its own page (a
+  circumflex for a grave). `andy glyphs` still prints what each build
+  draws for each character, as a tool.
+- **The common cells are the reference disc's.** In the large typeface
+  they are the same pictures on every disc; in the small one the Spanish
+  and Italian discs have the digits and one letter drawn anew. One atlas
+  means one drawing: the reference's.
+- **The small typeface** (sheet 0x43, cells of 16 by 24, in `tex10` of
+  `level00/levelt2.ngn`): 48 common cells, then 22 signs. Its two
+  functions of the reference (`0x49B2A0`, centred, where the characters
+  1 to 4 are the buttons' icons; `0x49B3B0`, at a place, at a size) are
+  replaced by the one function. As the reference does, the capital
+  letters A to D are the four arrows.
+- **An accent keeps the height its disc's build gives it**: the French
+  page has the accents a pixel lower in their cells and its build draws
+  them a unit higher; in the atlas such a cell is moved by the
+  difference.
+- **A sign that reaches the bottom of its cell** shows as a line over
+  the sprite of the cell under it. Signs are placed over empty cells;
+  the large typeface has one empty cell and two such signs (the cedilla
+  and the O with a stroke), so the second is a pixel higher in the atlas
+  than on its disc.
+- **Apostrophe.** The reference's functions for the small typeface draw
+  the left arrow for an apostrophe (its number in the large typeface).
+  The one table draws the apostrophe, which the French page has; with
+  no such page at hand it draws nothing.
+- **A native function takes no time on the machine's clock**, which
+  counts instructions. Where the original spent instructions drawing
+  text, what moves by the clock (a turning model in the options) is at
+  another angle in the same frame. The texts themselves are the
+  original's pixel for pixel.
+

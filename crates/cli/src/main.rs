@@ -58,11 +58,14 @@ USAGE:
                                     keyboard and the sound device;
                                     --seconds closes the window after N
                                     seconds of the machine's clock
-    andy atlas --out FILE.png       Put the one atlas of the large typeface
+    andy atlas --out DIRECTORY      Put the one atlas of each typeface
                                     together from the discs at hand
                                     (TS2_LANGUAGE_DIR, TS2_OTHER_DISCS) and
-                                    write it as a picture (derived from the
-                                    game: keep it out of git)
+                                    write them as pictures (derived from the
+                                    game: keep them out of git)
+    andy glyphs                     What each disc's executable draws for
+                                    each character through each of its text
+                                    functions
     andy textures FILE              List the pictures of one of the game's
                                     texture files (*.ngn)
     andy pair FIRST SECOND [--json OUT]
@@ -239,6 +242,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
         None => println!("build     UNKNOWN - addresses and patches are not valid for this file"),
     }
 
+    if command == "glyphs" {
+        return atlas::print_glyphs(&image, &other_discs()?);
+    }
     let is_reference = builds::identify(&bytes).map(|build| build.id) == Some(builds::REFERENCE);
     let mut language = None;
     if mods.is_enabled(andy_runtime::mods::LANGUAGE) {
@@ -252,9 +258,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let one_typeface = is_reference && mods.is_enabled(andy_runtime::mods::ONE_TYPEFACE);
     let atlas = match (one_typeface, exe.parent()) {
         (true, Some(game_dir)) if matches!(command.as_str(), "boot" | "play" | "atlas") => {
-            let atlas = build_atlas(game_dir, &image)?;
-            andy_recomp::typeface::install_sheet_record(&mut image)?;
-            Some(std::rc::Rc::new(atlas))
+            let atlases = build_atlases(game_dir)?;
+            for atlas in &atlases.0 {
+                atlas.face.install_sheet_record(&mut image)?;
+            }
+            Some(std::rc::Rc::new(atlases))
         }
         _ => None,
     };
@@ -281,16 +289,20 @@ fn run(args: Vec<String>) -> Result<(), String> {
 
     match command.as_str() {
         "atlas" => {
-            let (atlas, path) =
-                (atlas.ok_or("no atlas without one-typeface")?, out.ok_or("atlas needs --out FILE")?);
-            // Blue, green, red in the page; red, green, blue in the file.
-            let rgb: Vec<u8> =
-                atlas.pixels.chunks(3).flat_map(|pixel| [pixel[2], pixel[1], pixel[0]]).collect();
-            let file = fs::File::create(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-            let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 256, 256);
-            encoder.set_color(png::ColorType::Rgb);
-            let written = encoder.write_header().and_then(|mut writer| writer.write_image_data(&rgb));
-            written.map_err(|error| format!("{}: {error}", path.display()))?;
+            let (atlases, out) =
+                (atlas.ok_or("no atlas without one-typeface")?, out.ok_or("atlas needs --out DIRECTORY")?);
+            fs::create_dir_all(&out).map_err(|error| format!("{}: {error}", out.display()))?;
+            for atlas in &atlases.0 {
+                let path = out.join(format!("{}.png", atlas.face.name));
+                // Blue, green, red in the page; red, green, blue in the file.
+                let rgb: Vec<u8> =
+                    atlas.pixels.chunks(3).flat_map(|pixel| [pixel[2], pixel[1], pixel[0]]).collect();
+                let file = fs::File::create(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+                let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 256, 256);
+                encoder.set_color(png::ColorType::Rgb);
+                let written = encoder.write_header().and_then(|mut writer| writer.write_image_data(&rgb));
+                written.map_err(|error| format!("{}: {error}", path.display()))?;
+            }
         }
         "info" => info(&image),
         "analyze" => {
@@ -370,7 +382,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 
 struct BootOptions {
     /// The typefaces' one atlas, put into the texture files as they are read.
-    atlas: Option<std::rc::Rc<atlas::Atlas>>,
+    atlas: Option<std::rc::Rc<atlas::Atlases>>,
     mods: Modifications,
     addresses: andy_runtime::game::Addresses,
     game_dir: Option<PathBuf>,
@@ -733,11 +745,28 @@ fn language_build(game_dir: &Path) -> Result<(&'static str, Image), String> {
     Ok((build, image))
 }
 
-/// The one atlas of the large typeface, from the reference disc and every
+/// The one atlas of each typeface, from the reference disc and every
 /// other disc at hand: the language's (`TS2_LANGUAGE_DIR`) and those
 /// listed in `TS2_OTHER_DISCS`, game directories with `:` between them.
-/// The atlas has what all of them have, whatever the language played.
-fn build_atlas(reference_dir: &Path, reference: &Image) -> Result<atlas::Atlas, String> {
+/// The atlases have what all of them have, whatever the language played.
+fn build_atlases(reference_dir: &Path) -> Result<atlas::Atlases, String> {
+    let mut dirs = vec![reference_dir.to_path_buf()];
+    dirs.extend(other_discs()?.into_iter().map(|(dir, _)| dir));
+    let atlases = atlas::build(&dirs)?;
+    for atlas in &atlases.0 {
+        println!(
+            "typeface  {}: one atlas from {} discs, with {:?}",
+            atlas.face.name,
+            dirs.len(),
+            atlas.signs
+        );
+    }
+    Ok(atlases)
+}
+
+/// The other discs at hand, each as its game directory and its
+/// executable's image.
+fn other_discs() -> Result<Vec<(PathBuf, Image)>, String> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     for variable in ["TS2_LANGUAGE_DIR", "TS2_OTHER_DISCS"] {
         if let Some(value) = env::var_os(variable) {
@@ -746,13 +775,7 @@ fn build_atlas(reference_dir: &Path, reference: &Image) -> Result<atlas::Atlas, 
     }
     dirs.sort();
     dirs.dedup();
-    let others = dirs
-        .into_iter()
-        .map(|dir| language_build(&dir).map(|(_, image)| (dir, image)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let atlas = atlas::build((reference_dir, reference), &others)?;
-    println!("typeface  one atlas from {} discs, with {:?}", others.len() + 1, atlas.signs);
-    Ok(atlas)
+    dirs.into_iter().map(|dir| language_build(&dir).map(|(_, image)| (dir, image))).collect()
 }
 
 /// Pairs the addresses of two builds of the game and reports how well.
@@ -794,6 +817,58 @@ fn pair(first: &Path, second: &Path, texts: Option<&Path>) -> Result<(), String>
     println!("pairs of different strings     {differing}");
     let transplant = andy_recomp::language::transplant_texts(&first, &second, &pairing, &[]);
     println!("places that would change text  {}", transplant.moved.len());
+    // Texts the second build refers to from places the first has no place
+    // for: a text one build has as one and the other as two is among them.
+    let aligned: std::collections::BTreeMap<u32, u32> =
+        pairing.sites.iter().map(|&(here, there)| (there, here)).collect();
+    let extra: Vec<u32> = second
+        .relocs
+        .iter()
+        .copied()
+        .filter(|site| second.section_at(*site).is_some_and(|section| section.is_executable()))
+        .filter(|site| !aligned.contains_key(site))
+        .filter(|&site| {
+            second.read_u32(site).is_some_and(|to| andy_recomp::language::text(&second, to).is_some())
+        })
+        .collect();
+    let here: std::collections::BTreeSet<u32> = pairing.sites.iter().map(|&(here, _)| here).collect();
+    let left: Vec<u32> = first
+        .relocs
+        .iter()
+        .copied()
+        .filter(|site| first.section_at(*site).is_some_and(|section| section.is_executable()))
+        .filter(|site| !here.contains(site))
+        .filter(|&site| {
+            first.read_u32(site).is_some_and(|to| andy_recomp::language::text(&first, to).is_some())
+        })
+        .collect();
+    println!("texts only the first refers to  {}", left.len());
+    for site in left {
+        let text = first.read_u32(site).and_then(|at| andy_recomp::language::text(&first, at));
+        println!(
+            "    {site:#010x} {:?}",
+            text.unwrap_or_default().iter().map(|&byte| byte as char).collect::<String>()
+        );
+    }
+    println!("texts only the second refers to {}", extra.len());
+    let latin = |bytes: &[u8]| -> String { bytes.iter().map(|&byte| byte as char).collect() };
+    for site in extra {
+        let to = second.read_u32(site).unwrap_or(0);
+        let before = aligned.range(..site).next_back();
+        let before = before.map(|(&there, &here)| {
+            let text = first.read_u32(here).and_then(|at| andy_recomp::language::text(&first, at));
+            format!(
+                "{} after {there:#x} (first: {here:#x} {:?})",
+                site - there,
+                latin(text.unwrap_or_default())
+            )
+        });
+        println!(
+            "    {site:#010x} {:?}  {}",
+            latin(andy_recomp::language::text(&second, to).unwrap_or_default()),
+            before.unwrap_or_default()
+        );
+    }
     if let Some(path) = texts {
         // For reading: every place, what it refers to and what it would.
         // The texts are Latin-1.

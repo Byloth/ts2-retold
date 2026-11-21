@@ -7,7 +7,7 @@ list. With every entry off the port behaves like the original.
 | Identifier | Class | Affects simulation | On by default | What it does |
 |---|---|---|---|---|
 | `language` | feature | no | no | The game in another language (ADR 0016), from the user's own disc of that language (`TS2_LANGUAGE_DIR`): Italian, French or Spanish, told by the disc. A language is data and nothing else: the places of the executable that refer to a text refer to the text that language's executable has in the same place; speech, movies and textures are read from that disc. Code, level data and timings stay the reference's. **Incomplete**: only the large typeface of the menus is drawn the one way (`one-typeface`); in the other typefaces letters with accents are still wrong. |
-| `one-typeface` | feature | no | yes | Text in the large typeface is drawn by one function with one table from character to glyph, for every language, from one atlas put together from all the discs at hand, with every sign any of them has, each once (ADR 0016): the hyphen, the accents, `¿ ¡ Æ Œ Ç` are there for every language. It also draws the digits and signs the original's function leaves out though the typeface has them (the stroke among them), lays out texts with line breaks, and sets a line closer when it is too wide. English texts come out as in the original, pixel for pixel. |
+| `one-typeface` | feature | no | yes | Text in the large and the small typeface is drawn by one function with one table from character to glyph, for every language, from one atlas put together from all the discs at hand, with every sign any of them has, each once (ADR 0016): the hyphen, the accents, `¿ ¡ Æ Œ Ç` are there for every language. It also draws the digits and signs the original's function leaves out though the typeface has them (the stroke among them), lays out texts with line breaks, and sets a line closer when it is too wide. English texts come out as in the original, pixel for pixel. |
 | `menu-load-save-wording` | feature | no | yes | The main menu's entry for loading and saving reads "load/save" ("carica/salva", "charger/sauvegarder", "cargar/guardar"), where the original has "load game" and the other languages "carica-salva opzioni", "charger-sauvegarder", "cargar-guardar". Needs `one-typeface` for the stroke. Decided by the owner. |
 | `menu-arrows-by-text` | fix | no | yes | The two arrows of the main menu stand beside the text of the entry chosen, wherever it begins and ends, and go from one width to the other as they move. The original draws them at two fixed places that suit its first entry, ten letters long: beside a shorter entry they stand far off, and on a longer one (in other languages) they fall on the text. |
 | `menu-load-before-options` | feature | no | yes | In the main menu the entry for loading and saving comes before the options (the original has the options second and loading third), in every language. Decided by the owner. |
@@ -53,18 +53,19 @@ the code that runs, with its timings, is the reference's for every
 language (ADR 0016, "A language is data").
 
 `one-typeface` has three parts. When the game is started, the one atlas
-of the large typeface is put together from the discs at hand
-(`crates/cli/src/atlas.rs`, `crates/recomp/src/typeface.rs`): the 48
-cells every disc has, then every other sign once, in a fixed place,
-whichever disc it comes from. Which sign a disc's cell holds is asked of
-that disc's own executable, whose text function is run on every character
-with the calls to its sprite function written down. The atlas takes the
-place of each disc's page as texture files are read
-(`Files::texture_filter`), and the image gets a sheet record with all 64
-cells. Then the reference's text function (`0x49B580`) is replaced by a
-native one (`crates/runtime/src/typeface.rs`) drawing through one table
-from character to glyph, the same for every language: with the English
-texts the pictures are the original's, pixel for pixel.
+of each typeface is put together from the discs at hand
+(`crates/cli/src/atlas.rs`, `crates/recomp/src/typeface.rs`): the common
+cells from the reference disc, then every other sign once, in a fixed
+place, from the first disc that has it. What each disc's page holds is
+written in the repository, page by page, known by the hash of its pixels.
+The atlas takes the place of each disc's page as texture files are read
+(`Files::texture_filter`), and the image gets a sheet record with all the
+atlas's cells. Then the reference's text functions (`0x49B580` for the
+large typeface, `0x49B2A0` and `0x49B3B0` for the small one) are replaced
+by native ones (`crates/runtime/src/typeface.rs`) that lay a text out one
+way and draw through one table from character to glyph, the same for
+every language: with the English texts the pictures are the original's,
+pixel for pixel.
 
 `menu-load-save-wording` changes the image: the entry's text is the
 project's own, in a section of its own (`crates/recomp/src/menu.rs`).
