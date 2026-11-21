@@ -49,6 +49,18 @@ pub fn load_save_wording(language: Option<&str>) -> &'static [u8] {
     }
 }
 
+/// The project's name for the camera the mouse turns, as the pause menu
+/// lists it beside the game's two (ADR 0021): at most fifteen characters,
+/// which is what the menu's box holds, in the game's Latin-1.
+pub fn orbit_camera_wording(language: Option<&str>) -> &'static [u8] {
+    match language {
+        Some(crate::builds::ITALIAN) => b"camera orbitale",
+        Some(crate::builds::FRENCH) => b"cam\xE9ra orbitale",
+        Some(crate::builds::SPANISH) => b"c\xE1mara orbital",
+        _ => b"orbit camera",
+    }
+}
+
 /// Makes the main menu's entry for loading and saving read `wording`. To
 /// be done before [`load_before_options`], which moves the entry.
 pub fn word_load_and_save(image: &mut Image, wording: &[u8]) -> Result<(), String> {

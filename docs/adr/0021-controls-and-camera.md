@@ -85,12 +85,24 @@ What the game does was read from its code first (`docs/CODE-DISCOVERY.md`,
    `hat 2`), read 0 being before the game starts, when it looks for
    joysticks.
 
+9. **The pause menu lists three cameras.** Its camera page is a list of
+   the game's two; three short stretches make it a list of three: the
+   number of entries the page has (`0x49F518`), the choice
+   (`0x49F6C5`–`0x49F6FC`) and the drawing (`0x4A0132`–`0x4A0179`), with
+   the game's own text function and shades. The third camera's name is the
+   project's, in the game's language. Which of the three is chosen is kept
+   in the runtime, beside the game's own bit for its two; with one of the
+   game's cameras chosen the stretch of the follower runs as the game's
+   code.
+
 ## Still to build (in this order)
 
-- The settings in the game's own screens: bindings of mouse and joypad in
-  the controls screen, a third camera in the pause menu beside "active" and
-  "passive", sensitivity and inverted axes; kept in the project's settings
-  file (ADR 0016), not in the game's saved block.
+- A fifth entry of the options, "mouse and camera": sensitivity, inverted
+  axes, the buttons' bindings. (Not the controls screen: each of its rows
+  captures one control into the game's saved table.)
+- The settings kept between sessions, in the project's settings file
+  (ADR 0016), not in the game's saved block: the camera chosen is the
+  orbit one at every start for now.
 - The joypad on Linux: the `gilrs` crate wants the system's libudev
   headers there, which this project does not ask to be installed. On
   Windows the window reads the first pad found when the game starts

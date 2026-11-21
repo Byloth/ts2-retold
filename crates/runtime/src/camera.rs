@@ -17,6 +17,85 @@ use crate::{Machine, Stop};
 /// places the camera from them.
 pub const ANGLES_DECIDED: u32 = 0x0040_46CE;
 pub const CAMERA_PLACED: u32 = 0x0040_53B1;
+/// The stretch's second instruction, and what its first loads into `eax`.
+pub const ANGLES_DECIDED_BY_THE_GAME: u32 = 0x0040_46D3;
+const SPEED_SIDEWAYS: u32 = 0x0052_F368;
+
+/// The pause menu (`0x49F4B0` reads it, `0x49FD40` draws it): its page,
+/// the entry the pointer is at, the entries each page has; the camera's
+/// page, and the option its two entries set.
+const MENU_PAGE: u32 = 0x0052_ADB0;
+const MENU_ENTRY: u32 = 0x0052_B7E4;
+const MENU_ENTRIES: u32 = 0x0050_39BC;
+const CAMERA_PAGE: u32 = 1;
+const OPTIONS: u32 = 0x0052_F0CC;
+const CAMERA_TURNS_BY_ITSELF: u32 = 0x40;
+/// Three stretches of the menu: where it takes a page's number of
+/// entries, where the camera's page takes the choice, where it is drawn.
+pub const ENTRIES_COUNTED: u32 = 0x0049_F518;
+pub const ENTRIES_COUNT_TAKEN: u32 = 0x0049_F520;
+pub const CAMERA_CHOSEN: u32 = 0x0049_F6C5;
+pub const CAMERA_CHOICE_TAKEN: u32 = 0x0049_F6FC;
+pub const CAMERA_PAGE_DRAWN: u32 = 0x004A_0132;
+pub const CAMERA_PAGE_DONE: u32 = 0x004A_0179;
+/// The menu's text function: height, text, three shades, which sheet.
+const MENU_TEXT: u32 = 0x0040_1FB0;
+const CAMERA_TITLE: u32 = 0x0050_2714;
+const CAMERA_NAMES: [u32; 2] = [0x0050_2720, 0x0050_2730];
+const TITLE_HEIGHT: u32 = 0x54;
+/// The page's three entries: the menu's first page has four at this step.
+const ENTRY_HEIGHTS: [u32; 3] = [0x60, 0x68, 0x70];
+
+/// In place of the two instructions that take a page's number of entries
+/// (`ebp` holds the page; the number goes to `ecx`): the camera's page
+/// has three.
+pub fn count_camera_entries(m: &mut Machine) -> Result<(), Stop> {
+    let page = m.cpu.regs[5];
+    m.cpu.regs[1] = if page == CAMERA_PAGE {
+        3
+    } else {
+        m.memory.read(MENU_ENTRIES.wrapping_add(page), 1).unwrap_or(0)
+    };
+    m.cpu.instructions += 2;
+    Ok(())
+}
+
+/// In place of the stretch that takes the choice on the camera's page
+/// (`dx` holds the entry, `ecx` is 1 when the page was cancelled): the
+/// game's two cameras as the original sets them, and the third; then back
+/// to the first page.
+pub fn choose_camera(m: &mut Machine) -> Result<(), Stop> {
+    let (entry, cancelled) = (m.cpu.regs[2] & 0xFFFF, m.cpu.regs[1] != 0);
+    if !cancelled {
+        let options = m.memory.read(OPTIONS, 1).unwrap_or(0);
+        match entry {
+            0 => m.memory.write(OPTIONS, 1, options & !CAMERA_TURNS_BY_ITSELF),
+            1 => m.memory.write(OPTIONS, 1, options | CAMERA_TURNS_BY_ITSELF),
+            _ => Some(()),
+        };
+        m.os.controls.camera_orbits = entry == 2;
+    }
+    m.set_game_half(MENU_PAGE, 0)?;
+    m.set_game_half(MENU_ENTRY, 0)?;
+    Ok(())
+}
+
+/// In place of the stretch that draws the camera's page: its title and
+/// three entries, each in the shades the menu has worked out for its
+/// place (the entry the pointer is at pulses).
+pub fn draw_camera_page(m: &mut Machine) -> Result<(), Stop> {
+    let esp = m.cpu.regs[4];
+    let own = m.os.controls.orbit_camera_text.clone();
+    let third = m.os.kept_string(&mut m.memory, &own);
+    m.call_guest_c(MENU_TEXT, &[TITLE_HEIGHT, CAMERA_TITLE, 0x80, 0x80, 0, 0])?;
+    for (place, text) in CAMERA_NAMES.into_iter().chain([third]).enumerate() {
+        let at = 4 * place as u32;
+        let shades =
+            [m.game_word(esp + 0x44 + at)?, m.game_word(esp + 0x34 + at)?, m.game_word(esp + 0x24 + at)?];
+        m.call_guest_c(MENU_TEXT, &[ENTRY_HEIGHTS[place], text, shades[0], shades[1], shades[2], 0])?;
+    }
+    Ok(())
+}
 
 /// The game's time step of the frame.
 const STEP: u32 = 0x0052_F2D4;
@@ -122,6 +201,14 @@ fn sine(m: &mut Machine, angle: i32) -> Result<i32, Stop> {
 /// saved on the stack, and the two marks that make the tail put the
 /// camera exactly where the angles say and keep it out of walls.
 pub fn orbit(m: &mut Machine) -> Result<(), Stop> {
+    if !m.os.controls.camera_orbits {
+        // One of the game's own cameras is chosen: the stretch's first
+        // instruction, and the game's code goes on from the next.
+        m.cpu.regs[0] = m.game_word(SPEED_SIDEWAYS)?;
+        m.cpu.instructions += 1;
+        m.resume_at = Some(ANGLES_DECIDED_BY_THE_GAME);
+        return Ok(());
+    }
     // The stretch begins by saving `ebx`.
     let esp = m.cpu.regs[4] - 4;
     m.set_game_word(esp, m.cpu.regs[3])?;

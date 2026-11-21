@@ -77,6 +77,11 @@ pub struct Controls {
     pub stick_turn: [i32; 2],
     /// Whether moving the mouse or the stick up looks down.
     pub inverted: bool,
+    /// Whether the camera is the one the player turns, and not one of the
+    /// game's two: chosen in the pause menu.
+    pub camera_orbits: bool,
+    /// The pause menu's name for that camera, in the game's language.
+    pub orbit_camera_text: Vec<u8>,
     /// The parts of a unit of angle not yet turned, sideways and up.
     pub(crate) turn_left_over: [i32; 2],
     /// Whether the visor is on because a button is held.
@@ -100,6 +105,8 @@ impl Default for Controls {
             // Twice and once the rate of the camera's two actions.
             stick_turn: [32 * 256, 16 * 256],
             inverted: false,
+            camera_orbits: true,
+            orbit_camera_text: b"orbit camera".to_vec(),
             turn_left_over: [0; 2],
             visor_held: false,
             visor_asked: false,
