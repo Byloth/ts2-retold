@@ -24,6 +24,10 @@ pub struct Memory {
     unmapped: Unmapped,
     /// When set, every guest write is appended as `(address, length)`.
     pub write_log: Option<Vec<(u32, u8)>>,
+    /// While `Some`: every byte written, with what it held before, in
+    /// order. Applied backwards ([`Memory::undo`]) it takes the writes
+    /// back: for running the same stretch of code twice from one state.
+    pub undo_log: Option<Vec<(u32, u8)>>,
 }
 
 impl Memory {
@@ -33,6 +37,7 @@ impl Memory {
             mapped: Vec::new(),
             unmapped,
             write_log: None,
+            undo_log: None,
         }
     }
 
@@ -114,6 +119,13 @@ impl Memory {
         // Check both ends first so that a faulting write changes nothing.
         self.page(address >> PAGE_BITS)?;
         self.page(address.wrapping_add(len - 1) >> PAGE_BITS)?;
+        if self.undo_log.is_some() {
+            for i in 0..len {
+                let at = address.wrapping_add(i);
+                let old = self.read_u8(at)?;
+                self.undo_log.as_mut()?.push((at, old));
+            }
+        }
         for i in 0..len {
             self.write_u8_raw(address.wrapping_add(i), (value >> (8 * i)) as u8)?;
         }
@@ -121,6 +133,13 @@ impl Memory {
             log.push((address, len as u8));
         }
         Some(())
+    }
+
+    /// Takes back the writes in an undo log, the last first.
+    pub fn undo(&mut self, log: &[(u32, u8)]) {
+        for &(address, old) in log.iter().rev() {
+            self.write_u8_raw(address, old);
+        }
     }
 
     pub fn read_u64(&mut self, address: u32) -> Option<u64> {
@@ -214,6 +233,15 @@ mod tests {
         memory.write(0x5000, 2, 0xBEEF).unwrap();
         memory.write_u64(0x6000, 1).unwrap();
         assert_eq!(memory.write_log.as_deref(), Some(&[(0x5000, 2), (0x6000, 4), (0x6004, 4)][..]));
+        // Writes taken back, the last first.
+        memory.undo_log = Some(Vec::new());
+        memory.write(0x5000, 2, 0x1111).unwrap();
+        memory.write(0x5001, 1, 0x22).unwrap();
+        let log = memory.undo_log.take().unwrap();
+        assert_eq!(log, [(0x5000, 0xEF), (0x5001, 0xBE), (0x5001, 0x11)]);
+        assert_eq!(memory.read(0x5000, 2), Some(0x2211));
+        memory.undo(&log);
+        assert_eq!(memory.read(0x5000, 2), Some(0xBEEF));
     }
 
     #[test]

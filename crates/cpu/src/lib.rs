@@ -10,4 +10,5 @@
 pub mod fpu;
 pub mod interp;
 pub mod memory;
+pub mod native;
 pub mod sem;

@@ -5,8 +5,9 @@
 
 use iced_x86::{Decoder, DecoderOptions, Instruction};
 
-use crate::fpu::{self, FBin, FConst, FMem, FUn, Fpu};
+use crate::fpu::{FBin, FConst, FMem, FUn, Fpu};
 use crate::memory::Memory;
+use crate::native;
 use crate::sem::{self, Backend, Bin, Flag, Rep, Size, Trap, Un};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,10 +118,6 @@ impl Run<'_> {
             self.fail(Fault::Memory { address, write: true });
         }
     }
-
-    fn read_u64(&mut self, address: u32) -> u64 {
-        self.read(address, 4) as u64 | (self.read(address.wrapping_add(4), 4) as u64) << 32
-    }
 }
 
 impl Backend for Run<'_> {
@@ -168,33 +165,12 @@ impl Backend for Run<'_> {
 
     #[inline]
     fn bin(&mut self, op: Bin, a: u32, b: u32) -> u32 {
-        match op {
-            Bin::Add => a.wrapping_add(b),
-            Bin::Sub => a.wrapping_sub(b),
-            Bin::And => a & b,
-            Bin::Or => a | b,
-            Bin::Xor => a ^ b,
-            Bin::Shl => a.wrapping_shl(b),
-            Bin::Shr => a.wrapping_shr(b),
-            Bin::Sar => (a as i32).wrapping_shr(b) as u32,
-            Bin::Mul => a.wrapping_mul(b),
-            Bin::MulHighU => ((a as u64 * b as u64) >> 32) as u32,
-            Bin::MulHighS => ((a as i32 as i64 * b as i32 as i64) >> 32) as u32,
-            Bin::Eq => (a == b) as u32,
-            Bin::Ne => (a != b) as u32,
-            Bin::LtU => (a < b) as u32,
-        }
+        native::bin(op, a, b)
     }
 
     #[inline]
     fn un(&mut self, op: Un, a: u32) -> u32 {
-        match op {
-            Un::Not => !a,
-            Un::Neg => a.wrapping_neg(),
-            Un::SignExtend8 => a as i8 as u32,
-            Un::SignExtend16 => a as i16 as u32,
-            Un::ParityEven => ((a as u8).count_ones() + 1) & 1,
-        }
+        native::un(op, a)
     }
 
     #[inline]
@@ -203,33 +179,10 @@ impl Backend for Run<'_> {
     }
 
     fn divide(&mut self, signed: bool, size: Size, high: u32, low: u32, divisor: u32) -> (u32, u32) {
-        let bits = size.bits();
-        let mask = size.mask() as u64;
-        let dividend = (high as u64) << bits | low as u64;
-        let result = if signed {
-            let shift = 64 - 2 * bits;
-            let dividend = ((dividend << shift) as i64) >> shift;
-            let divisor = ((divisor as u64) << (64 - bits)) as i64 >> (64 - bits);
-            let limit = 1i64 << (bits - 1);
-            match (dividend.checked_div(divisor), dividend.checked_rem(divisor)) {
-                (Some(quotient), Some(remainder)) if (-limit..limit).contains(&quotient) => {
-                    Some((quotient as u64 & mask, remainder as u64 & mask))
-                }
-                _ => None,
-            }
-        } else {
-            match (dividend.checked_div(divisor as u64), dividend.checked_rem(divisor as u64)) {
-                (Some(quotient), Some(remainder)) if quotient <= mask => Some((quotient, remainder)),
-                _ => None,
-            }
-        };
-        match result {
-            Some((quotient, remainder)) => (quotient as u32, remainder as u32),
-            None => {
-                self.fail(Fault::Divide);
-                (0, 0)
-            }
-        }
+        native::divide(signed, size, high, low, divisor).unwrap_or_else(|| {
+            self.fail(Fault::Divide);
+            (0, 0)
+        })
     }
 
     fn repeat(&mut self, rep: Rep, mut body: impl FnMut(&mut Self)) {
@@ -251,24 +204,12 @@ impl Backend for Run<'_> {
     }
 
     fn cpuid(&mut self) {
-        // A Pentium II, the class of machine the game was written for.
-        let (eax, ebx, ecx, edx) = match self.cpu.regs[0] {
-            0 => {
-                (1, u32::from_le_bytes(*b"Genu"), u32::from_le_bytes(*b"ntel"), u32::from_le_bytes(*b"ineI"))
-            }
-            _ => (0x0000_0633, 0, 0, 0x0080_F9FF),
-        };
-        self.cpu.regs[0] = eax;
-        self.cpu.regs[3] = ebx;
-        self.cpu.regs[1] = ecx;
-        self.cpu.regs[2] = edx;
+        native::cpuid(self.cpu);
     }
 
     fn rdtsc(&mut self) {
         // Deterministic: derived from the number of instructions executed.
-        let ticks = self.cpu.instructions;
-        self.cpu.regs[0] = ticks as u32;
-        self.cpu.regs[2] = (ticks >> 32) as u32;
+        native::rdtsc(self.cpu, 0);
     }
 
     fn jump(&mut self, target: u32) {
@@ -326,48 +267,18 @@ impl Backend for Run<'_> {
     }
 
     fn fload(&mut self, address: u32, format: FMem) -> f64 {
-        match format {
-            FMem::F32 => f32::from_bits(self.read(address, 4)) as f64,
-            FMem::F64 => f64::from_bits(self.read_u64(address)),
-            FMem::F80 => {
-                let mantissa = self.read_u64(address);
-                let sign_exponent = self.read(address.wrapping_add(8), 2) as u16;
-                fpu::f80_to_f64(mantissa, sign_exponent)
-            }
-            FMem::I16 => self.read(address, 2) as i16 as f64,
-            FMem::I32 => self.read(address, 4) as i32 as f64,
-            FMem::I64 => self.read_u64(address) as i64 as f64,
-        }
+        // What cannot be read is the first byte of the number or one after
+        // it; the fault names where the number begins.
+        native::fload(self.memory, address, format).unwrap_or_else(|| {
+            self.fail(Fault::Memory { address, write: false });
+            0.0
+        })
     }
 
     fn fstore(&mut self, address: u32, format: FMem, value: f64) {
-        let control = self.cpu.fpu.control;
-        match format {
-            FMem::F32 => {
-                let narrowed = fpu::to_f32(value, self.cpu.fpu.rounding());
-                self.write(address, 4, narrowed.to_bits());
-            }
-            FMem::F64 => {
-                let bits = value.to_bits();
-                if self.fault.is_none() && self.memory.write_u64(address, bits).is_none() {
-                    self.fail(Fault::Memory { address, write: true });
-                }
-            }
-            FMem::F80 => {
-                let (mantissa, sign_exponent) = fpu::f64_to_f80(value);
-                if self.fault.is_none() && self.memory.write_u64(address, mantissa).is_none() {
-                    self.fail(Fault::Memory { address, write: true });
-                }
-                self.write(address.wrapping_add(8), 2, sign_exponent as u32);
-            }
-            FMem::I16 => self.write(address, 2, fpu::to_integer(value, control, 16) as u32),
-            FMem::I32 => self.write(address, 4, fpu::to_integer(value, control, 32) as u32),
-            FMem::I64 => {
-                let bits = fpu::to_integer(value, control, 64);
-                if self.fault.is_none() && self.memory.write_u64(address, bits).is_none() {
-                    self.fail(Fault::Memory { address, write: true });
-                }
-            }
+        // After a fault nothing more is written: the instruction is abandoned.
+        if self.fault.is_none() && native::fstore(self.cpu, self.memory, address, format, value).is_none() {
+            self.fail(Fault::Memory { address, write: true });
         }
     }
 
