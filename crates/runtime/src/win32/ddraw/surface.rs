@@ -60,6 +60,7 @@ const DDSD_MIPMAPCOUNT: u32 = 0x0002_0000;
 const DDLOCK_READONLY: u32 = 0x0010;
 const DDBLT_COLORFILL: u32 = 0x0000_0400;
 const DDBLT_KEYSRC: u32 = 0x0000_8000;
+const DDBLT_ROP: u32 = 0x0002_0000;
 const DDBLT_WAIT: u32 = 0x0100_0000;
 const DDBLT_DEPTHFILL: u32 = 0x0200_0000;
 const DDBLTFAST_SRCCOLORKEY: u32 = 0x1;
@@ -69,6 +70,10 @@ const DDFLIP_WAIT: u32 = 0x1;
 const DDERR_WASSTILLDRAWING: u32 = dd_error(540);
 /// Position of the fill colour (or depth) in `DDBLTFX`, in words.
 const BLTFX_FILL: u32 = 20;
+/// `dwROP` in `DDBLTFX`, in words, and the raster operation that copies
+/// the source as it is (`wingdi.h`).
+const BLTFX_ROP: u32 = 2;
+const SRCCOPY: u32 = 0x00CC_0020;
 
 /// The two homes of a surface's pixels.
 #[derive(Debug, Clone, Copy)]
@@ -656,8 +661,17 @@ fn blt(m: &mut Machine, a: &[u32]) -> HostResult {
         m.fill_surface(index, to, value);
         return Ok(DD_OK);
     }
-    if operation & !DDBLT_KEYSRC != 0 {
+    if operation & !(DDBLT_KEYSRC | DDBLT_ROP) != 0 {
         return not_implemented(format!("Blt with flags {flags:#x}"));
+    }
+    if operation & DDBLT_ROP != 0 {
+        // A copy with a raster operation: the one that copies the source
+        // is a copy like any other. The game scrolls a surface with it,
+        // copying one part of the surface onto another part of itself.
+        let Some(rop) = m.memory.read(effects + 4 * BLTFX_ROP, 4) else { return Ok(DDERR_INVALIDPARAMS) };
+        if rop != SRCCOPY {
+            return not_implemented(format!("Blt with the raster operation {rop:#x}"));
+        }
     }
     let Some(from_index) = m.surface_index(source) else { return Ok(DDERR_INVALIDOBJECT) };
     let Some(from) = m.surface_rect(from_index, source_rect) else { return Ok(DDERR_INVALIDRECT) };
@@ -1043,5 +1057,52 @@ mod tests {
         assert_eq!(read(&mut m, target, 5, 5), 0xFFFF);
         assert_eq!(read(&mut m, target, 4, 7), 0x1234); // a keyed pixel of the sprite
         assert_eq!(m.os.ddraw.downloads, 1);
+    }
+
+    /// The game scrolls a surface by copying a part of it onto another
+    /// part of itself, with the raster operation that copies the source.
+    #[test]
+    fn a_surface_is_scrolled_by_a_copy_onto_itself() {
+        use surface_desc::*;
+        let read = |m: &mut Machine, surface: u32, x: u32| {
+            let description = m.scratch(4 * WORDS_V2 as u32);
+            m.memory.write(description, 4, 4 * WORDS_V2 as u32).unwrap();
+            assert_eq!(m.method(surface, LOCK, &[0, description, DDLOCK_READONLY, 0]), DD_OK);
+            let words: [u32; WORDS_V2] = m.read_words(description);
+            let value = m.memory.read(words[SURFACE] + 2 * x, 2).unwrap();
+            assert_eq!(m.method(surface, UNLOCK, &[0]), DD_OK);
+            value
+        };
+        for on_video in [false, true] {
+            let mut m = testing::machine();
+            let dd = direct_draw(&mut m);
+            let surface = create(
+                &mut m,
+                dd,
+                &[
+                    (FLAGS, DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT),
+                    (CAPS, DDSCAPS_OFFSCREENPLAIN),
+                    (WIDTH, 8),
+                    (HEIGHT, 2),
+                ],
+            );
+            for x in 0..8 {
+                fill(&mut m, surface, Some([x, 0, x + 1, 2]), 0x100 + x);
+            }
+            if on_video {
+                let index = m.surface_index(surface).unwrap();
+                m.ensure_video(index);
+            }
+            // Columns 0 to 5 go two to the right, over columns they also
+            // come from.
+            let (to, from, effects) = (m.scratch(16), m.scratch(16), m.scratch(100));
+            m.write_words(to, &[2, 0, 8, 2]);
+            m.write_words(from, &[0, 0, 6, 2]);
+            m.memory.write(effects + 4 * BLTFX_ROP, 4, SRCCOPY).unwrap();
+            let flags = DDBLT_ROP | DDBLT_WAIT;
+            assert_eq!(m.method(surface, BLT, &[to, surface, from, flags, effects]), DD_OK);
+            let seen: Vec<u32> = (0..8).map(|x| read(&mut m, surface, x)).collect();
+            assert_eq!(seen, [0x100, 0x101, 0x100, 0x101, 0x102, 0x103, 0x104, 0x105], "video: {on_video}");
+        }
     }
 }

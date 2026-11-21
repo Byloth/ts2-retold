@@ -129,8 +129,9 @@ out of here into the roadmap or an ADR when work on them starts.
   vertices passed straight to a draw call.
 - **A run starts from what the previous one wrote.** `andy boot` keeps
   `out/run` (saves, `toy2.cfg`) between runs, as an installed game would,
-  so two runs are identical only if that directory is. Tests and replays
-  need a way to start from a named state.
+  so two runs are identical only if that directory is. `--state DIR`
+  names another directory (an empty one is a game never played; ADR 0017);
+  the older recordings of `tools/check.sh` still run from `out/run`.
 - **The guest heap never reuses memory.** `Os::allocate` only moves forward;
   blocks the game frees, and the runtime's own blocks (surface memory,
   DIB sections, vertex buffers), are never returned. A long session will

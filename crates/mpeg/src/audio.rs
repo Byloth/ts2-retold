@@ -385,7 +385,10 @@ mod tests {
         // Allocations: four bits for the first two subbands, three for the
         // other ten. In this table's row an allocation of 1 is three levels.
         put(1, 4);
-        put(0, 4 + 3 * 10);
+        put(0, 4);
+        for _ in 0..10 {
+            put(0, 3);
+        }
         put(2, 2); // one scale factor for all three parts
         put(factor, 6);
         // Twelve groups of three samples, each group one number of five bits.

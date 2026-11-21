@@ -29,16 +29,22 @@ done
 unset TS2_LANGUAGE_DIR TS2_OTHER_DISCS
 
 # A recording and the seconds of the machine's clock it is run for.
-runs="level:260 pause:200 options:170 options-list:135 en-menu:150"
+# A third field, `new`, starts it from a game never played (an empty state
+# directory) and not from what out/run holds: so were the recordings made
+# by `play --record --state DIR` on an empty directory.
+runs="level:260 pause:200 options:170 options-list:135 en-menu:150 robot:94:new stairs:90:new wall:100:new"
 
 mkdir -p out/check
 one() {
     name=${1%%:*}
-    seconds=${1##*:}
+    rest=${1#*:}
+    seconds=${rest%%:*}
     work=out/check/$name
     rm -rf "$work"
     mkdir -p "$work"
-    "$program" boot --limit 12000000000 --seconds "$seconds" --gpu \
+    state=out/run
+    case $rest in *:new) state=$work/state; mkdir -p "$state" ;; esac
+    "$program" boot --limit 12000000000 --seconds "$seconds" --gpu --state "$state" \
         --input "out/input/$name.txt" --frames "$work/frames" --frame-step 100 \
         --sound "$work/sound.wav" > "$work/log.txt" 2>&1 || true
     {

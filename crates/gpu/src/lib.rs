@@ -176,6 +176,7 @@ struct DrawUniforms {
     test: [u32; 4],
     key: [f32; 4],
     fog: [f32; 4],
+    nearest: [u32; 4],
 }
 
 /// The uniforms of a fill or copy; `RectUniforms` in the shader.
@@ -1363,6 +1364,14 @@ impl Video for Gpu {
             ],
             key: key.map_or([0.0; 4], |(surface, raw)| shader_color(self.surface(surface).format, raw)),
             fog: fog.map_or([0.0; 4], |color| shader_color(PixelFormat::Xrgb8888, color)),
+            nearest: [
+                texture.is_some_and(|sampling| {
+                    sampling.magnify == Filter::Nearest && sampling.minify == Filter::Nearest
+                }) as u32,
+                0,
+                0,
+                0,
+            ],
         };
         let command = Command {
             pipeline: PipelineKey { depth_attached: draw.depth.is_some(), depth, blend, cull },

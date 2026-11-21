@@ -16,6 +16,9 @@ struct DrawUniforms {
     key: vec4<f32>,
     // The fog colour; the fourth component is not zero when there is fog.
     fog: vec4<f32>,
+    // Not zero when the texture is sampled at its nearest texel both
+    // enlarged and reduced.
+    nearest: vec4<u32>,
 }
 
 @group(0) @binding(0) var<uniform> draw: DrawUniforms;
@@ -95,7 +98,19 @@ fn passes(function: u32, value: u32, reference: u32) -> bool {
 }
 
 fn shade(diffuse: vec4<f32>, specular: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
-    let texel = textureSample(texture, texture_sampler, uv);
+    // The nearest texel is chosen here and not by the sampler. Coordinates
+    // interpolated across a triangle carry a rounding error, and where they
+    // fall exactly between two texels (the game draws bands from a single
+    // column of a texture, at its edge) the sampler takes one or the other
+    // from pixel to pixel. Rounded to 1/256 of a texel first, they give the
+    // texel that exact arithmetic gives.
+    var at = uv;
+    if draw.nearest.x != 0u {
+        let size = vec2<f32>(textureDimensions(texture));
+        let texels = floor(uv * size * 256.0 + vec2<f32>(0.5)) / 256.0;
+        at = (floor(texels) + vec2<f32>(0.5)) / size;
+    }
+    let texel = textureSample(texture, texture_sampler, at);
     if draw.test.w != 0u && all(abs(texel - draw.key) < vec4<f32>(0.5 / 255.0)) {
         discard;
     }

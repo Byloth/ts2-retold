@@ -55,10 +55,17 @@ USAGE:
                                     while the game waits)
                                     --with/--without ID switch a modification
     andy play    [EXE] [--args TEXT] [--seconds N] [--gauge] [--with/--without ID]
+                 [--record FILE]
                                     Run the game in a window, with the
                                     keyboard and the sound device;
                                     --seconds closes the window after N
-                                    seconds of the machine's clock
+                                    seconds of the machine's clock;
+                                    --record writes what the game saw of
+                                    the keyboard, for boot's --input
+    boot, bench and play take --state DIR: where the game's saves and
+    settings are kept between runs (out/run if not given). A recording
+    replays only from the state it was made from: an empty directory is
+    a game never played.
     andy bench [boot's options]     Run as boot does and report, for every
                                     500 frames, how fast they were made
     andy atlas --out DIRECTORY      Put the one atlas of each typeface
@@ -122,6 +129,8 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
     let mut frames = None;
     let mut frame_step = 1u64;
     let mut input = None;
+    let mut record = None;
+    let mut state = PathBuf::from("out/run");
     let mut yuv = None;
     let mut pcm = None;
     let mut pictures = u64::MAX;
@@ -156,6 +165,8 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
             "--check-blocks" => check_blocks = true,
             "--interpret" => interpret = true,
             "--input" => input = Some(PathBuf::from(args.next().ok_or("--input needs a file")?)),
+            "--record" => record = Some(PathBuf::from(args.next().ok_or("--record needs a file")?)),
+            "--state" => state = PathBuf::from(args.next().ok_or("--state needs a directory")?),
             "--frames" => frames = Some(PathBuf::from(args.next().ok_or("--frames needs a directory")?)),
             "--yuv" => yuv = Some(PathBuf::from(args.next().ok_or("--yuv needs a path")?)),
             "--pcm" => pcm = Some(PathBuf::from(args.next().ok_or("--pcm needs a path")?)),
@@ -376,12 +387,14 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
                 sound,
                 gpu,
                 input,
+                state,
                 frames: frames.map(|directory| (directory, frame_step)),
             },
         ),
         "play" => {
-            // The program reads the game directory and writes only to `out/run`.
-            let mut files = Files::new(exe.parent().map(Path::to_path_buf), Some(PathBuf::from("out/run")));
+            // The program reads the game directory and writes only to
+            // the state directory.
+            let mut files = Files::new(exe.parent().map(Path::to_path_buf), Some(state));
             if let Some(dir) = language_dir(&mods) {
                 files.set_language_dir(dir);
             }
@@ -395,7 +408,23 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
                 machine.use_blocks(blocks);
                 machine.check_blocks = check_blocks;
             }
+            if record.is_some() {
+                machine.os.recorder = Some(Default::default());
+            }
             let (machine, stop) = play::play(machine, seconds, gauge)?;
+            if let (Some(path), Some(recorder)) = (&record, &machine.os.recorder) {
+                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    fs::create_dir_all(parent)
+                        .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+                }
+                fs::write(path, recorder.recording().to_text())
+                    .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+                println!(
+                    "input recorded         {} reads of the keyboard, to {}",
+                    machine.os.keyboard_reads,
+                    path.display()
+                );
+            }
             println!("frames shown           {}", machine.os.ddraw.frames);
             match stop {
                 Some(stop) => println!("stopped at eip {:#010x}: {}", machine.cpu.eip, describe(&stop)),
@@ -567,6 +596,8 @@ struct BootOptions {
     gpu: bool,
     /// A recording of input to play back.
     input: Option<PathBuf>,
+    /// Where the game writes and finds its own files.
+    state: PathBuf,
     /// Where to write presented frames, and every how many.
     frames: Option<(PathBuf, u64)>,
 }
@@ -609,9 +640,10 @@ fn boot(image: &Image, options: BootOptions) {
         gpu,
         frames,
         input,
+        state: write_dir,
     } = options;
-    // The program reads the game directory and writes only to `out/run`.
-    let write_dir = PathBuf::from("out/run");
+    // The program reads the game directory and writes only to the state
+    // directory.
     let log_path = write_dir.join("toy2.log");
     let _ = fs::remove_file(&log_path);
     let mut files = Files::new(game_dir, Some(write_dir));

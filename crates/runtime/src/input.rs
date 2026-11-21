@@ -91,6 +91,39 @@ impl Recording {
     }
 }
 
+/// A recording being made: what the game sees of the keyboard, read by
+/// read. Written where the game reads, and not where the keys arrive, a
+/// recording holds exactly what the game observed and nothing else.
+#[derive(Debug, Clone)]
+pub struct Recorder {
+    /// The keyboard as the game last read it.
+    seen: [bool; 256],
+    events: Vec<Event>,
+}
+
+impl Default for Recorder {
+    fn default() -> Recorder {
+        Recorder { seen: [false; 256], events: Vec::new() }
+    }
+}
+
+impl Recorder {
+    /// Notes how the keyboard at this read differs from the one before.
+    pub(crate) fn observe(&mut self, read: u64, input: &Input) {
+        for (key, (&down, seen)) in input.keys.iter().zip(&mut self.seen).enumerate() {
+            if down != *seen {
+                *seen = down;
+                self.events.push(Event { read, key: key as u8, down });
+            }
+        }
+    }
+
+    /// What has been recorded so far.
+    pub fn recording(&self) -> Recording {
+        Recording::new(self.events.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +145,26 @@ mod tests {
         for wrong in ["press SPACE", "0 press SPACE", "5 hold SPACE", "5 press SPACEBAR", "5 press SPACE now"]
         {
             assert!(Recording::parse(wrong).is_err(), "{wrong}");
+        }
+    }
+
+    #[test]
+    fn what_is_recorded_plays_back_the_same() {
+        let mut recorder = Recorder::default();
+        let mut input = Input::default();
+        let mut seen = Vec::new();
+        for read in 1..=6u64 {
+            input.keys[0x39] = (3..5).contains(&read);
+            input.keys[0x01] = read >= 5;
+            recorder.observe(read, &input);
+            seen.push(input.keys);
+        }
+        let mut recording = recorder.recording();
+        assert_eq!(recording.to_text(), "3 press SPACE\n5 press ESCAPE\n5 release SPACE\n");
+        let mut input = Input::default();
+        for read in 1..=6u64 {
+            recording.apply(read, &mut input);
+            assert_eq!(input.keys, seen[read as usize - 1], "read {read}");
         }
     }
 

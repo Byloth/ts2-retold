@@ -36,3 +36,17 @@ a network.
   state a run starts from).
 - The mouse and joysticks will need their own events when they are used;
   the game has shown no use of the mouse so far.
+
+## Addendum (2026-11-21): recordings made by playing, and the state they start from
+
+- `andy play --record FILE` writes a recording. It is made where the game
+  reads the keyboard (`Recorder::observe`), not where keys arrive from the
+  window: at each read the keyboard is compared with the one the game saw
+  at the read before. A recording therefore holds exactly what the game
+  observed, and replays to the same instruction (checked: three sessions
+  played by the owner, replayed in the interpreter and as compiled code).
+- `--state DIR` (`boot`, `bench`, `play`) names the directory the game's
+  saves and settings are kept in; `out/run` if not given. A recording
+  replays only from the state it was made from. An empty directory is a
+  game never played, and is what recordings are made from and
+  `tools/check.sh` replays them in (its runs marked `new`).

@@ -61,6 +61,8 @@ pub struct Os {
     pub input: dinput::Input,
     /// A recording of input being played back, if any.
     pub recording: Option<crate::input::Recording>,
+    /// A recording of input being made, if any.
+    pub recorder: Option<crate::input::Recorder>,
     /// How many times the program has read the keyboard: the clock of
     /// recorded input.
     pub keyboard_reads: u64,

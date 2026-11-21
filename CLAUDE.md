@@ -161,6 +161,10 @@ out/recomp/target/release/andy-game boot --check-blocks --limit 9000000000 --sec
 # outcomes (instructions, frames, sound); --record writes them down. The
 # compiled game must give what the interpreter gives.
 tools/check.sh --record
+# A recording made by playing, from a game never played (an empty state
+# directory); replayed from an empty one too
+out/recomp/target/release/andy-game play --state out/state/NAME --record out/input/NAME.txt
+out/recomp/target/release/andy-game boot --limit 20000000000 --seconds 100 --gpu --state out/state/NAME-replay --input out/input/NAME.txt --frames out/frames --frame-step 50
 tools/check.sh out/recomp/target/release/andy-game
 # How fast frames are made, stretch by stretch (boot's options)
 cargo run --release --bin andy -- bench --limit 9000000000 --seconds 240 --gpu --input out/input/level.txt

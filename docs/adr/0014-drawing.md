@@ -97,3 +97,27 @@ program has changed since is drawn from the buffer's visible contents.
   against numbers.
 - CPU cost per vertex is paid by the interpreter's host, not the guest; at
   the game's vertex counts it is negligible next to interpretation.
+
+## Addendum (2026-11-21): the nearest texel is chosen in the shader
+
+The game draws some surfaces from a single column of a texture, with
+every vertex at the same `u`, exactly on the edge between two texels: the
+band at the waist of the tin robot (`u` = 224/256), a patch of wall by the
+pole in the first level. Interpolated across a triangle such a coordinate
+carries a rounding error of either sign, and a sampler set to the nearest
+texel takes one column or the other from pixel to pixel: the surface came
+out as noise that changed with every frame, on every adapter tried.
+
+When a texture is sampled at its nearest texel both enlarged and reduced,
+the shader now rounds the coordinates to 1/256 of a texel, takes the texel
+they fall in and samples its centre. Where exact arithmetic puts a
+coordinate on an edge, the texel is the one exact arithmetic gives.
+
+- This changes pixels wherever nearest sampling met an edge, the menus'
+  texts included (their glyphs are drawn at a scale that puts many pixels
+  on edges): each such pixel now takes a defined texel instead of whichever
+  the adapter's arithmetic gave.
+- `UNVERIFIED`: which of the two texels the graphics cards of 1999 took at
+  an exact edge. They kept texture coordinates in fixed point, so their
+  choice was steady; whether it was this one has no source at hand, and
+  wants a picture of the original game on such a card.
