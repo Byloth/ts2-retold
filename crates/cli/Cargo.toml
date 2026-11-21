@@ -7,6 +7,14 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[lib]
+name = "andy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "andy"
+path = "src/main.rs"
+
 [dependencies]
 andy-recomp = { path = "../recomp" }
 andy-gpu = { path = "../gpu" }

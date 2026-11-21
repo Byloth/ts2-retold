@@ -255,7 +255,7 @@ impl<'a> Hybrid<'a> {
                     (next..theirs.len()).find(|&at| content(other, theirs[at]) == content(reference, site));
                 match same {
                     Some(at) => {
-                        let (ours, head) = std::mem::replace(&mut piece, (Vec::new(), None));
+                        let (ours, head) = std::mem::take(&mut piece);
                         pieces.push((ours, theirs[next..at].to_vec(), head));
                         next = at + 1;
                     }

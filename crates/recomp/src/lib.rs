@@ -5,8 +5,10 @@
 //! repository (see `docs/adr/0001-local-recompilation-no-derived-code.md`).
 
 pub mod analysis;
+pub mod blocks;
 pub mod builds;
 pub mod difftest;
+pub mod emit;
 pub mod language;
 pub mod menu;
 pub mod pairing;

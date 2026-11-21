@@ -13,6 +13,7 @@
 //! which is how window procedures and enumeration callbacks run.
 
 pub mod audio;
+pub mod blocks;
 pub mod files;
 pub mod game;
 pub mod input;
@@ -81,6 +82,13 @@ pub enum Stop {
     Breakpoint,
     /// Every thread is waiting for something only another thread could do.
     Deadlock,
+    /// A block of compiled code did not leave what the interpreter leaves
+    /// for the same instructions (see [`blocks`]): the block's address
+    /// and what differs.
+    BlockMismatch {
+        address: u32,
+        what: String,
+    },
     /// Internal: the running thread has to wait; the host call that asked is
     /// repeated when the thread runs again. Never returned by [`Machine::run`].
     WouldBlock,
@@ -162,6 +170,15 @@ pub struct Machine {
     /// Stop before executing the instruction at this address. A debugging
     /// aid; the address is never a host function.
     pub breakpoint: Option<u32>,
+    /// The game's code as compiled blocks, if the machine has it, and for
+    /// each byte of the code the number, from one, of the block that
+    /// begins there.
+    blocks: Option<&'static blocks::Blocks>,
+    block_index: Vec<u32>,
+    /// Whether every block is checked against the interpreter as it runs.
+    pub check_blocks: bool,
+    /// How many instructions were run as blocks.
+    pub block_instructions: u64,
     /// How far, in milliseconds, the clock may be moved forward while every
     /// thread waits. Without a limit a waiting machine skips straight to
     /// the next thing that happens, which is what a run as fast as possible
@@ -215,6 +232,10 @@ impl Machine {
             note: None,
             first_inexact: None,
             breakpoint: None,
+            blocks: None,
+            block_index: Vec::new(),
+            check_blocks: false,
+            block_instructions: 0,
             clock_limit: None,
         };
         machine.os.resources = image.resources.clone();
@@ -329,6 +350,9 @@ impl Machine {
         if offset < self.decoded_index.len() {
             self.decoded_index[offset] = FIRST_REPLACEMENT + self.replacements.len() as u32;
             self.replacements.push(&RECORDER);
+            if let Some(block) = self.block_index.get_mut(offset) {
+                *block = 0;
+            }
         }
     }
 
@@ -467,6 +491,23 @@ impl Machine {
             }
             if self.breakpoint == Some(eip) {
                 return Err(Stop::Breakpoint);
+            }
+            // A block, if one begins here and the thread's time is not up
+            // before its end: then the interpreter goes instruction by
+            // instruction, so that threads change where they always do.
+            if let Some(block) = self.block_at(eip).filter(|_| self.breakpoint.is_none())
+                && self.cpu.instructions + block.instructions as u64 <= self.threads.slice_end
+            {
+                if self.check_blocks {
+                    self.run_block_checked(block)?;
+                } else {
+                    (block.run)(&mut self.cpu, &mut self.memory).map_err(Stop::Fault)?;
+                }
+                self.block_instructions += block.instructions as u64;
+                if self.cpu.fpu.inexact_model && self.first_inexact.is_none() {
+                    self.first_inexact = Some(eip);
+                }
+                continue;
             }
             let instruction = match self.fetch(eip).map_err(Stop::Fault)? {
                 Fetched::Instruction(instruction) => instruction,

@@ -35,6 +35,17 @@ pub struct Replacement {
     pub function: fn(&mut Machine) -> Result<(), Stop>,
 }
 
+/// The addresses of the reference build's code at which a replacement
+/// starts or the game's code is taken up again after one: places control
+/// arrives at from the runtime, which code compiled from the game must
+/// be cut at (`andy_recomp::blocks`).
+pub fn replacement_points() -> Vec<u32> {
+    let points = REPLACEMENTS.iter().flat_map(|replacement| {
+        [Some((replacement.address)(&Addresses::REFERENCE)), replacement.resume].into_iter().flatten()
+    });
+    points.collect()
+}
+
 pub static REPLACEMENTS: &[Replacement] = &[
     Replacement {
         modification: SKIP_MODE_SELECT,

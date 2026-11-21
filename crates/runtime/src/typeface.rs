@@ -225,7 +225,7 @@ const LEVEL_ICONS_SHEET: u32 = 0x26;
 pub fn draw_level_character(m: &mut Machine) -> Result<(), Stop> {
     let [x, y, character, c1, c2, c3, which] = arguments(m)?;
     let character = character as u8;
-    if let Some(picture) = [b'~', b'@'].iter().position(|&icon| icon == character) {
+    if let Some(picture) = b"~@".iter().position(|&icon| icon == character) {
         m.call_guest_c(DRAW_LEVEL_ICON, &[x as u32, (y - 2) as u32, LEVEL_ICONS_SHEET, picture as u32])?;
         return Ok(());
     }

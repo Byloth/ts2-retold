@@ -9,7 +9,7 @@ known gaps: `docs/BACKLOG.md`. The catalogue of modifications:
 `docs/MODIFICATIONS.md` (keep it in step with `crates/runtime/src/mods.rs`). Analysis results:
 `docs/CODE-DISCOVERY.md`. Instruction semantics and their verification:
 `docs/SEMANTICS.md`. How drawing is split between runtime and video backend:
-ADR 0014. The window's own frame: ADR 0018. Sound, mixed in the runtime: ADR 0019. Languages and settings (one build, English and Italian): ADR 0016. Input and its recordings: ADR 0017.
+ADR 0014. The window's own frame: ADR 0018. Sound, mixed in the runtime: ADR 0019. Languages and settings (one build, English and Italian): ADR 0016. Input and its recordings: ADR 0017. The recompiler (blocks of Rust beside the interpreter): ADR 0020.
 
 **Crates.** `crates/cli` (`andy`): the command-line tool.
 `crates/runtime` (`andy-runtime`): the machine, the loader and the replacement
@@ -20,7 +20,8 @@ git-ignored `ref/dx` (see `docs/LICENSES.md`), never copied from them.
 runtime's `Video` interface; its tests need a graphics adapter, a software
 Vulkan driver (lavapipe) will do.
 `crates/mpeg` (`andy-mpeg`): the decoder of the game's movies (ADR 0015).
-`crates/recomp` (`andy-recomp`): PE loader, code discovery, test generation.
+`crates/recomp` (`andy-recomp`): PE loader, code discovery, test generation,
+and the recompiler (`emit`, `blocks`; ADR 0020).
 `crates/cpu` (`andy-cpu`): instruction semantics written once over a backend
 trait, plus the interpreter backend (ADR 0009) and the x87 model (ADR 0010).
 Every new instruction or change in `crates/cpu` must pass the differential
@@ -147,6 +148,15 @@ cargo run --release --bin andy -- atlas --out out/lang/atlas.png
 cargo run --release --bin andy -- boot ref/game-it/toy2.exe --limit 9000000000 --seconds 230 --gpu --input out/input/it-level.txt --frames out/frames-it --frame-step 100
 # The addresses of one language's build in another's, and the texts that change
 cargo run --release --bin andy -- pair ref/game/toy2.exe ref/game-it/toy2.exe --json out/lang/texts.json
+# The game's code as compiled Rust (ADR 0020): written to out/recomp,
+# compiled there into andy-game, which takes andy's commands. Recompile
+# with the same language and modifications the game is then run with.
+cargo run --release --bin andy -- recompile --out out/recomp
+cargo build --release --manifest-path out/recomp/Cargo.toml
+out/recomp/target/release/andy-game play
+# Every block checked against the interpreter; rerun on the recordings
+# after any change to crates/cpu, to the emitter or to a replacement
+out/recomp/target/release/andy-game boot --check-blocks --limit 9000000000 --seconds 260 --input out/input/level.txt
 # How fast frames are made, stretch by stretch (boot's options)
 cargo run --release --bin andy -- bench --limit 9000000000 --seconds 240 --gpu --input out/input/level.txt
 # What the game plays, as a WAVE file (the same for the same run)
