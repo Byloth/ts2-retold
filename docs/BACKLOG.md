@@ -176,12 +176,17 @@ out of here into the roadmap or an ADR when work on them starts.
   2. then the Italian executable's functions go (`ITALIAN_FUNCTIONS`,
      `ITALIAN_TABLES`, `ITALIAN_COUNTERPARTS` and the transplanting of
      functions with them, unless something else needs it);
-  3. the main menu with loading and saving before the options, for every
-     language, as a modification of the reference's menu; and its entry
-     worded with the stroke the large typeface does have ("carica /
-     salva"), once the one function draws it;
-  4. texts that a language's build split over two lines are two texts
-     there and one in the reference: to be joined as data.
+  3. the main menu's entry for loading and saving worded with the stroke
+     the large typeface does have ("carica / salva"), once the one
+     function draws it (its order, before the options, and the arrows
+     that follow the text are done: `menu-load-before-options`,
+     `menu-arrows-by-text`);
+  4. line breaks in texts (`\n`), laid out by the one function; texts
+     that a language's build split over two lines are two texts there and
+     one in the reference: to be joined as data with a line break;
+  5. the other places where something is put beside a text by a fixed
+     number, to be found screen by screen and placed from the text's
+     extent like the main menu's arrows.
   Until 1, French and Spanish show accents and some plain letters as
   wrong glyphs (their textures are laid out for their own code), and
   Italian is right only by the borrowed functions:

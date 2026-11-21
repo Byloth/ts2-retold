@@ -8,7 +8,7 @@
 
 use andy_cpu::interp::Fault;
 
-use crate::mods::SKIP_MODE_SELECT;
+use crate::mods::{MENU_ARROWS_BY_TEXT, SKIP_MODE_SELECT};
 use crate::{Machine, Stop};
 
 /// A function of the game that a modification replaces with native code.
@@ -24,17 +24,114 @@ pub struct Replacement {
     pub name: &'static str,
     /// Bytes of arguments the original removes from the stack on return.
     pub callee_pops: u32,
+    /// For a stretch of code inside a function instead of a whole
+    /// function: where the game goes on after it. The native code leaves
+    /// the registers and the stack as the stretch would.
+    pub resume: Option<u32>,
+    /// Whether it is written against the reference build's code and data
+    /// and so cannot serve another build run as it is.
+    pub reference_only: bool,
     /// Performs the function's effects, register results included.
     pub function: fn(&mut Machine) -> Result<(), Stop>,
 }
 
-pub static REPLACEMENTS: &[Replacement] = &[Replacement {
-    modification: SKIP_MODE_SELECT,
-    address: |addresses| addresses.mode_select,
-    name: "screen mode select",
-    callee_pops: 0,
-    function: select_screen_mode,
-}];
+pub static REPLACEMENTS: &[Replacement] = &[
+    Replacement {
+        modification: SKIP_MODE_SELECT,
+        address: |addresses| addresses.mode_select,
+        name: "screen mode select",
+        callee_pops: 0,
+        resume: None,
+        reference_only: false,
+        function: select_screen_mode,
+    },
+    Replacement {
+        modification: MENU_ARROWS_BY_TEXT,
+        address: |_| MAIN_MENU_ARROWS,
+        name: "main menu arrows",
+        callee_pops: 0,
+        resume: Some(MAIN_MENU_AFTER_ARROWS),
+        reference_only: true,
+        function: draw_main_menu_arrows,
+    },
+];
+
+// The main menu (the function at 0x437C40) draws, every frame, two arrows
+// beside the entry chosen and then its five entries, each centred on the
+// screen's middle (x = 160 of 320) by the function at 0x49B580, which sets
+// the letters of the large typeface 12 apart. The arrows are drawn at
+// x = 64 and x = 240 whatever the entry: right for "start game", which
+// is ten letters, and for nothing else.
+
+/// Where the stretch that draws the two arrows begins, and where the code
+/// goes on after the two calls (it then removes their twenty arguments).
+const MAIN_MENU_ARROWS: u32 = 0x0043_7E61;
+const MAIN_MENU_AFTER_ARROWS: u32 = 0x0043_7EAE;
+/// The function that draws a sprite: x, y, sheet, picture, three colour
+/// values, opacity and two scales.
+const DRAW_SPRITE: u32 = 0x0049_3F40;
+/// The sheet of the arrows; its pictures 0 and 1 point right and left.
+const ARROW_SHEET: u32 = 0x3E;
+/// Not zero when there is a game to continue: the first entry then reads
+/// otherwise.
+const GAME_TO_CONTINUE: u32 = 0x0083_0D58;
+/// Where the code holds the address of each entry's text: the first
+/// entry's two wordings, then the other four.
+const MAIN_MENU_TEXTS: [u32; 6] =
+    [0x0043_7EC7, 0x0043_7EC0, 0x0043_7EDB, 0x0043_7EEF, 0x0043_7F03, 0x0043_7F17];
+/// The first entry's height on the screen and the step to the next.
+const MAIN_MENU_TOP: u32 = 0x78;
+const MAIN_MENU_STEP: u32 = 0x14;
+/// The middle of the screen and the step between letters of the large
+/// typeface, as the function at 0x49B580 has them.
+const SCREEN_MIDDLE: i32 = 160;
+const LARGE_LETTER_STEP: i32 = 12;
+/// How far left of a text's first letter the left arrow is drawn, and how
+/// far right of its last letter's place the right one: what the original
+/// has for its ten-letter entry (100 - 64 and 240 - 220).
+const ARROW_BEFORE: i32 = 36;
+const ARROW_AFTER: i32 = 20;
+
+/// Replaces the stretch of the main menu that draws the two arrows: they
+/// are drawn beside the text of the entry they are at, wherever that text
+/// begins and ends, instead of at two fixed places. While they move from
+/// one entry to the next, they go from the one width to the other.
+///
+/// At the stretch's start `eax` holds the arrows' brightness step, `ebx`
+/// zero, `edi` the arrows' height and `ebp` the height of the entry
+/// chosen; it leaves four times `eax` in `esi` and the arguments of its
+/// two calls on the stack.
+fn draw_main_menu_arrows(m: &mut Machine) -> Result<(), Stop> {
+    let (step, y) = (m.cpu.regs[0], m.cpu.regs[7]);
+    let brightness = step * 4;
+    m.cpu.regs[6] = brightness;
+    // Half the width of each entry's text, in letters.
+    let continuing = m.game_word(GAME_TO_CONTINUE)? != 0;
+    let mut letters = [0i32; 5];
+    for (entry, letters) in letters.iter_mut().enumerate() {
+        let site = match entry {
+            0 => MAIN_MENU_TEXTS[usize::from(continuing)],
+            other => MAIN_MENU_TEXTS[other + 1],
+        };
+        let text = m.game_word(site)?;
+        while m.memory.read(text + *letters as u32, 1).is_some_and(|byte| byte != 0) {
+            *letters += 1;
+        }
+    }
+    // Where the arrows are between two entries, in 256ths of a step.
+    let along = (y.saturating_sub(MAIN_MENU_TOP) as i32 * 256 / MAIN_MENU_STEP as i32).clamp(0, 4 * 256);
+    let (from, part) = ((along / 256).min(3) as usize, along - (along / 256).min(3) * 256);
+    let half_width = LARGE_LETTER_STEP * (letters[from] * (256 - part) + letters[from + 1] * part) / 512;
+    let (left, right) = (SCREEN_MIDDLE - half_width - ARROW_BEFORE, SCREEN_MIDDLE + half_width + ARROW_AFTER);
+    let esp = m.cpu.regs[4];
+    for (x, picture) in [(left, 0), (right, 1)] {
+        let arguments = [x as u32, y, ARROW_SHEET, picture, brightness, brightness, 0x80, 0xFF, 0x800, 0x800];
+        m.call_guest_c(DRAW_SPRITE, &arguments)?;
+    }
+    // The stretch's two calls leave their arguments for the code after it.
+    m.cpu.regs[4] = esp - 4 * 20;
+    Ok(())
+}
 
 // The game keeps what its device enumeration found (code at 0x4AC4D0, which
 // follows the DirectX 6 SDK's D3DFrame) in three linked lists.

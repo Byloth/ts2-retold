@@ -236,6 +236,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
     if mods.is_enabled(andy_runtime::mods::LANGUAGE) {
         image = in_another_language(&bytes, image)?;
     }
+    let is_reference = builds::identify(&bytes).map(|build| build.id) == Some(builds::REFERENCE);
+    if is_reference && mods.is_enabled(andy_runtime::mods::MENU_LOAD_BEFORE_OPTIONS) {
+        andy_recomp::menu::load_before_options(&mut image)?;
+    }
     // Another build of the game than the reference has the things the
     // runtime knows at other addresses.
     let addresses = match builds::identify(&bytes).map(|build| build.id) {

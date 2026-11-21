@@ -110,11 +110,12 @@ pub fn corrections(build: &str) -> &'static [(u32, &'static [u8])] {
 pub const ITALIAN_FUNCTIONS: &[(u32, u32)] = &[
     // The text shown while nothing is pressed ("press jump to continue").
     (0x0040_1C30, 0x0040_1C30),
-    // The front end: the options menu, the main menu, two functions of its
-    // drawing and one they call that the reference build lacks, the level
-    // map, the credits and the movie viewer.
+    // The front end: the options menu, two functions of its drawing and
+    // one they call that the reference build lacks, the level map, the
+    // credits and the movie viewer. (Not the main menu: the Italian one
+    // differs from the reference's only in where it draws the arrows,
+    // which the reference now works out from the text.)
     (0x0043_71B0, 0x0043_71C0),
-    (0x0043_7C40, 0x0043_7C90),
     (0, 0x0043_8000),
     (0x0043_81F0, 0x0043_8250),
     (0x0043_8520, 0x0043_8580),
@@ -168,6 +169,7 @@ pub const ITALIAN_TABLES: &[(u32, u32, u32)] = &[
 /// the reference's. In the reference build and in the Italian one.
 pub const ITALIAN_COUNTERPARTS: &[(u32, u32)] = &[
     (0x0043_2AD0, 0x0043_2AE0),
+    (0x0043_7C40, 0x0043_7C90),
     // These two clear 128 entries of a block of the game's variables where
     // the reference's clear 96; nothing in either build refers past the
     // first 64.

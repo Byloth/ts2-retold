@@ -209,7 +209,12 @@ impl Machine {
         machine.os.resources = image.resources.clone();
         for replacement in game::REPLACEMENTS {
             let offset = (replacement.address)(&machine.os.addresses).wrapping_sub(code.va) as usize;
-            if machine.os.mods.is_enabled(replacement.modification) && offset < machine.decoded_index.len() {
+            // What is written for the reference build's code is for it alone.
+            let fits = !replacement.reference_only || machine.os.addresses == game::Addresses::REFERENCE;
+            if fits
+                && machine.os.mods.is_enabled(replacement.modification)
+                && offset < machine.decoded_index.len()
+            {
                 machine.decoded_index[offset] = FIRST_REPLACEMENT + machine.replacements.len() as u32;
                 machine.replacements.push(replacement);
             }
@@ -290,6 +295,11 @@ impl Machine {
     /// then returns to the game's caller.
     fn run_replacement(&mut self, replacement: &Replacement) -> Result<(), Stop> {
         (replacement.function)(self)?;
+        // A stretch of code inside a function: the game goes on after it.
+        if let Some(resume) = replacement.resume {
+            self.cpu.eip = resume;
+            return Ok(());
+        }
         let esp = self.cpu.regs[4];
         self.cpu.eip = self.read_stack(esp)?;
         self.cpu.regs[4] = esp + 4 + replacement.callee_pops;
@@ -443,6 +453,18 @@ impl Machine {
     /// returns its result. Used by host functions for window procedures and
     /// enumeration callbacks.
     pub fn call_guest(&mut self, address: u32, args: &[u32]) -> Result<u32, Stop> {
+        self.call_guest_leaving(address, args, 0)
+    }
+
+    /// Calls a function of the program with the C convention, which leaves
+    /// its arguments on the stack for the caller to remove.
+    pub fn call_guest_c(&mut self, address: u32, args: &[u32]) -> Result<u32, Stop> {
+        self.call_guest_leaving(address, args, 4 * args.len() as u32)
+    }
+
+    /// Calls a function that leaves `left` bytes of its arguments on the
+    /// stack when it returns.
+    fn call_guest_leaving(&mut self, address: u32, args: &[u32], left: u32) -> Result<u32, Stop> {
         let (saved_eip, base) = (self.cpu.eip, self.cpu.regs[4]);
         let mut esp = base;
         for &value in args.iter().rev().chain([&CALLBACK_RETURN]) {
@@ -460,9 +482,10 @@ impl Machine {
             Pause::CallbackReturned => {}
             Pause::Yield => unreachable!("a thread inside a callback does not yield"),
         }
-        if self.cpu.regs[4] != base {
-            return Err(Stop::CallbackStack { address, expected: base, actual: self.cpu.regs[4] });
+        if self.cpu.regs[4] != base - left {
+            return Err(Stop::CallbackStack { address, expected: base - left, actual: self.cpu.regs[4] });
         }
+        self.cpu.regs[4] = base;
         self.cpu.eip = saved_eip;
         Ok(self.cpu.regs[0])
     }

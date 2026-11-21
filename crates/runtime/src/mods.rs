@@ -30,8 +30,29 @@ pub struct Modification {
 pub const SKIP_MODE_SELECT: &str = "skip-mode-select";
 
 pub const LANGUAGE: &str = "language";
+pub const MENU_ARROWS_BY_TEXT: &str = "menu-arrows-by-text";
+pub const MENU_LOAD_BEFORE_OPTIONS: &str = "menu-load-before-options";
 
 pub static CATALOGUE: &[Modification] = &[
+    Modification {
+        id: MENU_ARROWS_BY_TEXT,
+        class: Class::Fix,
+        affects_simulation: false,
+        enabled_by_default: true,
+        summary: "The two arrows of the main menu stand beside the text of the entry chosen, wherever it \
+                  begins and ends, and go from one width to the other as they move. The original draws \
+                  them at two fixed places that suit its first entry, ten letters long: beside a shorter \
+                  entry they stand far off, and on a longer one (in other languages) they fall on the text.",
+    },
+    Modification {
+        id: MENU_LOAD_BEFORE_OPTIONS,
+        class: Class::Feature,
+        affects_simulation: false,
+        enabled_by_default: true,
+        summary: "In the main menu the entry for loading and saving comes before the options (the \
+                  original has the options second and loading third), in every language. Decided by the \
+                  owner.",
+    },
     Modification {
         id: LANGUAGE,
         class: Class::Feature,

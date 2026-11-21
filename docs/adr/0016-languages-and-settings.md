@@ -269,3 +269,16 @@ How it is to be built:
 
 This is a modification (ADR 0004): with it off the reference draws its
 own text from its own pages.
+
+Added by the owner the same day, for the one function:
+
+- **A text can hold line breaks** (`\n`). The function lays the lines out
+  itself: each aligned as the text is, the block placed by its height and
+  width where the one line would have been. That is how a text that a
+  language's build split into two texts drawn at two heights becomes one
+  text again, and how a long one is made to fit.
+- **Nothing is placed by a number written for one language.** What stands
+  beside a text (the main menu's arrows) is placed from the text's own
+  extent, worked out when it is drawn. Done for the main menu's arrows
+  (`menu-arrows-by-text`), with the reference's letter step; to be led
+  through the one function's measuring when it exists.
