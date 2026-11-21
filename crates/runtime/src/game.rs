@@ -123,6 +123,16 @@ pub static REPLACEMENTS: &[Replacement] = &[
     },
     Replacement {
         modification: ONE_TYPEFACE,
+        address: |_| 0x0049_D390,
+        name: "text in the large typeface, in quads: its lines",
+        callee_pops: 0,
+        resume: None,
+        also_resumes: &[crate::typeface::QUADS_BODY],
+        reference_only: true,
+        function: crate::typeface::draw_quads_lines,
+    },
+    Replacement {
+        modification: ONE_TYPEFACE,
         address: |_| crate::typeface::QUADS_GLYPH,
         name: "which glyph of the large typeface a character of a text drawn in quads is",
         callee_pops: 0,

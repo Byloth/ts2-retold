@@ -262,6 +262,10 @@ out of here into the roadmap or an ADR when work on them starts.
   - the name of a long key ("barra spaziatrice") runs off the screen's
     right edge: it is drawn from a fixed place.
   Known about the layout, where the reference's suits English only:
+  - in the Italian screen of the graphics settings two hints of two
+    lines each stand on one another: the Italian build draws their four
+    lines at four heights, the reference its two texts at two, and a
+    text of two lines is put around its one height;
   - the pause menu's dark box is as wide as the English texts: the
     Spanish ones run past it;
   - a text of two lines stands around the height of the reference's one

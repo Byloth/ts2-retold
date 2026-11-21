@@ -380,3 +380,10 @@ The four codes the reference's function maps to half cells (`0xB2`,
 `0xB3`, `0xB9`, `0xBA`, leftovers of another layout of the page) draw
 nothing now; no text has them.
 
+Its entry is replaced too, for line breaks: a text with them is drawn
+line by line, each by the function itself, around the height the one
+line would have; a text of one line goes on into the function after its
+first instruction. Twelve places of the game draw through it (the hints
+of the movie viewer among them, which the other languages have in two
+lines): seen in the four languages, the English frames unchanged.
+

@@ -257,6 +257,47 @@ pub(crate) const QUADS_NEXT: u32 = 0x0049_D654;
 /// centred on, for a text of one letter (half of thirteen, rounded down).
 const QUADS_HALF_STEP: i32 = 6;
 
+/// Where the function goes on after its first instruction, which loads
+/// the text's address into `ecx`.
+pub(crate) const QUADS_BODY: u32 = 0x0049_D394;
+/// How far apart the lines of a text drawn in quads are: the large
+/// typeface's 20 of a screen 240 high, in this function's 256ths of the
+/// screen's height.
+const QUADS_LINE: i32 = 21;
+/// The longest line of such a text, in characters.
+const QUADS_LONGEST: usize = 255;
+
+/// In place of the entry of the function at 0x49D390: a text with line
+/// breaks is drawn line by line, each by the function itself, the block
+/// of lines standing around the height the one line would have; a text
+/// of one line goes on into the function as it is. Its arguments: the
+/// text, the height, the place it is centred on, and four numbers of its
+/// colour.
+pub fn draw_quads_lines(m: &mut Machine) -> Result<(), Stop> {
+    let [text, y, x, c1, c2, c3, c4] = arguments(m)?;
+    let bytes = text_at(m, text as u32);
+    if !bytes.contains(&b'\n') {
+        // The function's first instruction, then the function.
+        m.cpu.regs[1] = text as u32;
+        m.resume_at = Some(QUADS_BODY);
+        return Ok(());
+    }
+    // A place in the game's memory for one line at a time.
+    let line_at = m.os.kept_string(&mut m.memory, &[b' '; QUADS_LONGEST]);
+    let lines: Vec<&[u8]> = bytes.split(|&byte| byte == b'\n').collect();
+    let top = y - QUADS_LINE * (lines.len() as i32 - 1) / 2;
+    for (number, line) in lines.iter().enumerate() {
+        let mut line = line[..line.len().min(QUADS_LONGEST)].to_vec();
+        line.push(0);
+        let fault = Stop::Fault(andy_cpu::interp::Fault::Memory { address: line_at, write: true });
+        m.memory.load(line_at, &line).ok_or(fault)?;
+        let line_y = top + QUADS_LINE * number as i32;
+        let arguments = [line_at as i32, line_y, x, c1, c2, c3, c4].map(|argument| argument as u32);
+        m.call_guest_c(DRAW_QUADS, &arguments)?;
+    }
+    Ok(())
+}
+
 /// Replaces the stretch that works out a character's cell: the cell is
 /// the one table's, so every sign of the atlas can be drawn, and a letter
 /// with an accent is its letter with the accent drawn over it (by the
