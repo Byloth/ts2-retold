@@ -185,6 +185,39 @@ fn data_marks(image: &Image, known: impl Fn(u32) -> Option<u32>) -> (Vec<u32>, V
     (sites, marks)
 }
 
+/// The functions two builds have in common: where each begins in the
+/// first and in the second, and its length. `starts` are the addresses at
+/// which functions begin in each build, ascending (from the analysis of
+/// each); a function reaches to the next one. Two functions are the same
+/// if their bytes are, with the addresses written in them and the
+/// distances of calls and jumps set aside; the two lists are aligned, so a
+/// function is only paired with one that stands in the same order.
+pub fn common_functions(first: &Image, second: &Image, starts: (&[u32], &[u32])) -> Vec<(u32, u32, u32)> {
+    let bodies = |image: &Image, starts: &[u32]| -> Vec<Vec<u8>> {
+        let Some(code) = image.code_section() else { return Vec::new() };
+        let end = code.va + code.data.len() as u32;
+        starts
+            .iter()
+            .enumerate()
+            .map(|(index, &start)| {
+                let next = starts.get(index + 1).copied().unwrap_or(end).min(end);
+                let mut bytes = code.data[(start - code.va) as usize..(next - code.va) as usize].to_vec();
+                for &site in image.relocs_in(start, next.saturating_sub(3)) {
+                    bytes[(site - start) as usize..(site - start) as usize + 4].fill(0);
+                }
+                without_distances(&bytes)
+            })
+            .collect()
+    };
+    let (bodies_a, bodies_b) = (bodies(first, starts.0), bodies(second, starts.1));
+    let mut numbers: HashMap<&[u8], u32> = HashMap::new();
+    let (numbered_a, numbered_b) = (numbered(&mut numbers, &bodies_a), numbered(&mut numbers, &bodies_b));
+    align(&numbered_a, &numbered_b)
+        .into_iter()
+        .map(|(a, b)| (starts.0[a], starts.1[b], bodies_a[a].len() as u32))
+        .collect()
+}
+
 /// Gives each piece a number, the same for equal pieces.
 fn numbered<'p>(numbers: &mut HashMap<&'p [u8], u32>, pieces: &'p [Vec<u8>]) -> Vec<u32> {
     pieces

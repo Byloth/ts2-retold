@@ -239,7 +239,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
         ),
         "play" => {
             // The program reads the game directory and writes only to `out/run`.
-            let files = Files::new(exe.parent().map(Path::to_path_buf), Some(PathBuf::from("out/run")));
+            let mut files = Files::new(exe.parent().map(Path::to_path_buf), Some(PathBuf::from("out/run")));
+            if let Some(dir) = italian_dir(&mods) {
+                files.set_language_dir(dir);
+            }
             let mut os = Os::new(files);
             os.command_line_arguments = game_args;
             os.mods = mods;
@@ -330,7 +333,10 @@ fn boot(image: &Image, options: BootOptions) {
     let write_dir = PathBuf::from("out/run");
     let log_path = write_dir.join("toy2.log");
     let _ = fs::remove_file(&log_path);
-    let files = Files::new(game_dir, Some(write_dir));
+    let mut files = Files::new(game_dir, Some(write_dir));
+    if let Some(dir) = italian_dir(&mods) {
+        files.set_language_dir(dir);
+    }
     let mut os = Os::new(files);
     os.command_line_arguments = game_args;
     os.mods = mods;
@@ -515,6 +521,13 @@ fn write_surfaces(machine: &mut Machine, directory: &Path) -> Result<usize, Box<
 
 /// Decodes a movie and writes its pictures one after another as planar
 /// YUV 4:2:0, the form other decoders can write too.
+/// The Italian game's directory, if the game is to be in Italian.
+fn italian_dir(mods: &Modifications) -> Option<PathBuf> {
+    let dir =
+        env::var_os("TS2_ITALIAN_DIR").filter(|_| mods.is_enabled(andy_runtime::mods::LANGUAGE_ITALIAN))?;
+    Some(PathBuf::from(dir))
+}
+
 /// The reference image with the Italian language, taken from the user's
 /// Italian disc (ADR 0016).
 fn italian(reference_bytes: &[u8], reference: Image) -> Result<Image, String> {
@@ -530,8 +543,54 @@ fn italian(reference_bytes: &[u8], reference: Image) -> Result<Image, String> {
     }
     let other = Image::parse(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
     let pairing = andy_recomp::pairing::pair(&reference, &other);
-    let transplant = andy_recomp::language::transplant_texts(&reference, &other, &pairing, &[]);
-    println!("italian   {} places refer to Italian texts", transplant.moved.len());
+    let mut hybrid = andy_recomp::language::Hybrid::new(&reference, &other, &pairing);
+    hybrid.texts(&[]);
+    // The Italian functions, each as long as to the next function there.
+    let analysis = analysis::analyze(&other).ok_or("the Italian executable has no code")?;
+    let function_starts = |analysis: &analysis::Analysis| {
+        let mut starts: Vec<u32> = analysis.functions.iter().map(|function| function.start).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        starts
+    };
+    let starts = function_starts(&analysis);
+    let reference_analysis = analysis::analyze(&reference).ok_or("the executable has no code")?;
+    let reference_starts = function_starts(&reference_analysis);
+    hybrid.functions =
+        andy_recomp::pairing::common_functions(&reference, &other, (&reference_starts, &starts))
+            .into_iter()
+            .map(|(reference, other, length)| (other, reference, length))
+            .collect();
+    hybrid.functions.sort_unstable();
+    let grafts: Vec<_> = andy_recomp::language::ITALIAN_FUNCTIONS
+        .iter()
+        .map(|&(reference, other)| {
+            let end = starts[starts.partition_point(|&start| start <= other)..].first().copied();
+            let reference = (reference != 0).then_some(reference);
+            end.map(|end| andy_recomp::language::Graft { reference, other: (other, end) })
+                .ok_or(format!("no end found for the Italian function at {other:#x}"))
+        })
+        .collect::<Result<_, _>>()?;
+    let counterparts = andy_recomp::language::ITALIAN_COUNTERPARTS;
+    hybrid.graft(&grafts, counterparts, &analysis.instruction_starts).map_err(|problems| {
+        let problems: Vec<String> = problems.iter().map(|problem| format!("{problem:x?}")).collect();
+        format!("the Italian functions cannot be taken over: {}", problems.join(", "))
+    })?;
+    let (inferred, added) = (hybrid.inferred.clone(), hybrid.added.clone());
+    let transplant = hybrid.finish();
+    println!(
+        "italian   {} places refer to Italian texts, {} functions are the Italian ones",
+        transplant.moved.len(),
+        grafts.len()
+    );
+    for (other, reference) in inferred {
+        println!("          {other:#010x} there taken as {reference:#010x} here, by its neighbours");
+    }
+    for (other, now, size) in added {
+        println!(
+            "          {other:#010x} there, {size} bytes only the Italian build has, now at {now:#010x}"
+        );
+    }
     Ok(transplant.image)
 }
 

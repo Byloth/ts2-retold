@@ -39,9 +39,12 @@ pub static CATALOGUE: &[Modification] = &[
         enabled_by_default: false,
         summary: "The game in Italian (ADR 0016), from the user's own Italian disc (TS2_ITALIAN_DIR): the \
                   places of the executable that refer to a text refer to the text the Italian executable \
-                  has in the same place. INCOMPLETE: texts only, and only where the code of the two \
-                  executables is the same; the letters with accents are drawn wrongly, and speech, movies \
-                  and screens are still English.",
+                  has in the same place; the functions the Italian executable has in another form because of \
+                  the language (text drawing, menus, the level map, loading and saving) are its own, \
+                  placed beside the reference image; speech, movies, screens and the textures with the \
+                  typefaces are read from the Italian disc. Level data and all other code stay the \
+                  reference's. INCOMPLETE: not yet compared with the Italian game itself; the main menu's \
+                  logo and the hyphen of the large typeface are drawn wrongly.",
     },
     Modification {
         id: SKIP_MODE_SELECT,

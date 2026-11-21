@@ -162,25 +162,38 @@ out of here into the roadmap or an ADR when work on them starts.
   copy in `ref/disc` (ADR 0003).
 - **Italian** (ADR 0016), the modification `language-italian`: a hybrid on
   the reference build, made by transplanting from the Italian executable
-  through an address map between the two builds (`andy pair`: 33,023 of
-  33,186 relocation sites in the code aligned, 1,521 of 1,522 elsewhere,
-  8,623 addresses paired, 4 with more than one answer, 40 without).
-  Done: the texts, place by place (330 places, some 300 texts): the title,
-  the main menu, the level names and the levels' own texts come out
-  Italian. Still to do, in order:
-  - the functions that differ (about 40), each looked at once and, if its
-    difference is language, taken from the Italian executable: the four
-    that draw glyphs first (accents, the hyphen, the colon and the
-    narrower spacing; where the accents' glyphs come from in the data is
-    not yet known), then the menus, whose texts in changed code are still
-    English or stand against the wrong entry (the entry that loads a game
-    reads as the Italian build's "load and save options");
-  - speech, movies and screens served from the Italian disc, by a list of
-    which files are language and which are the later revision's level
-    data;
+  through an address map between the two builds (`andy pair`). Done: the
+  texts, place by place (330 places); the 19 functions that differ
+  because of the language, taken from the Italian executable (15 more
+  differ as a later revision and stay the reference's); speech, movies,
+  screens and typeface textures read from the Italian disc. With it the
+  game goes from the Italian legal screen through title, menu, level map,
+  the dubbed introduction and the Italian loading screen into the level.
+  Still to do:
+  - **compare with the Italian game itself**: run the Italian executable
+    in the interpreter (the one native replacement, `skip-mode-select`,
+    and its five addresses translated through the pairing) and set its
+    pictures beside the hybrid's. Until then what is right is judged by
+    eye;
+  - known wrong: the main menu's logo (its lower part is distorted) and
+    the hyphen of the large typeface; the cause is not known (the front
+    end's textures come from the Italian disc and are laid out
+    differently; some table or function that goes with them is still the
+    reference's);
+  - one variable the Italian build alone has (4 bytes, used by its level
+    map function) was given room of its own, and three addresses were
+    taken from their neighbours for lack of a pair: each is printed when
+    the game starts and wants a look;
+  - which of the 19 functions is what is known from the texts they use
+    and where they stand; none has been read through;
+  - the Italian movies have other lengths, so recordings made for the
+    English sequence do not fit (`out/input/it-level.txt` is one for it);
+  - code outside the image's code section is decoded again every time it
+    runs (`Machine::fetch`): the copied functions are slow in the
+    interpreter;
   - choosing the language in a settings file instead of `--with`;
-  - a reading of all 300 pairs by someone who knows the game (the list is
-    written by `andy pair --json`).
+  - a reading of all the text pairs by someone who knows the game
+    (`andy pair --json`).
 - **The other languages**: French, Spanish, Dutch, Swedish, Norwegian and
   Finnish are at hand as disc images; German, Danish and Portuguese have
   not been found (ADR 0003).

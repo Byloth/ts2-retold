@@ -31,6 +31,9 @@ pub struct OpenFile {
 #[derive(Debug, Default)]
 pub struct Files {
     game_dir: Option<PathBuf>,
+    /// Another language's game directory: the files that are language
+    /// ([`is_language_file`]) are read from it where it has them.
+    language_dir: Option<PathBuf>,
     write_dir: Option<PathBuf>,
     open: HashMap<u32, OpenFile>,
     next_handle: u32,
@@ -51,7 +54,37 @@ pub enum Disposition {
     CreateAlways,
 }
 
+/// Whether a file of the game, named relative to the install directory in
+/// lower case with `/` between the parts, carries language: speech, a
+/// movie, a screen with words on it, or the textures that hold the
+/// typefaces. The discs of the other languages are also a later revision
+/// of the levels' data (terrain, placement, paths); those files are not
+/// language and stay the reference's (ADR 0016).
+pub fn is_language_file(name: &str) -> bool {
+    let parts: Vec<&str> = name.split('/').collect();
+    match parts.as_slice() {
+        // The movies.
+        ["rtlibs", file] => file.ends_with(".dll"),
+        // Speech (and the other sounds, which are the same on every disc).
+        ["data", "sfx", file] => file.ends_with(".wav"),
+        // The loading, bonus and result screens.
+        ["data", "gfx", file] => file.ends_with(".ngn"),
+        // The front end: its textures and the level map's.
+        ["data", "level00", file] => file.ends_with(".ngn"),
+        // Each level's textures, the typefaces among them. Not `level1.ngn`
+        // and the rest, which are the level itself.
+        ["data", level, "level.ngn"] => level.starts_with("level"),
+        _ => false,
+    }
+}
+
 impl Files {
+    /// Has the files that are language read from another language's game
+    /// directory.
+    pub fn set_language_dir(&mut self, dir: PathBuf) {
+        self.language_dir = Some(dir);
+    }
+
     pub fn new(game_dir: Option<PathBuf>, write_dir: Option<PathBuf>) -> Files {
         Files { game_dir, write_dir, next_handle: 0x100, ..Files::default() }
     }
@@ -128,7 +161,12 @@ impl Files {
                 return None;
             }
         }
-        let path = Self::resolve(self.game_dir.as_ref()?, parts)?;
+        let language = self.language_dir.as_ref().filter(|_| is_language_file(&name.to_ascii_lowercase()));
+        let in_language = language.and_then(|root| Self::resolve(root, parts)).filter(|path| path.is_file());
+        let path = match in_language {
+            Some(path) => path,
+            None => Self::resolve(self.game_dir.as_ref()?, parts)?,
+        };
         if path.is_file() { fs::read(path).ok() } else { None }
     }
 
@@ -224,6 +262,32 @@ impl Files {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_files_that_are_language() {
+        for name in [
+            "rtlibs/l 01 in.dll",
+            "data/sfx/usbuz20.wav",
+            "data/gfx/loading.ngn",
+            "data/level00/level.ngn",
+            "data/level00/levelt2.ngn",
+            "data/level07/level.ngn",
+        ] {
+            assert!(super::is_language_file(name), "{name}");
+        }
+        for name in [
+            "toy2.exe",
+            "data/level07/level1.ngn",
+            "data/level05/terrain.all",
+            "data/level01/level1.raw",
+            "data/pad/path02.bin",
+            "data/gfx/level4b.raw",
+            "audio/house.wav",
+            "data/sfx/camera.txt",
+        ] {
+            assert!(!super::is_language_file(name), "{name}");
+        }
+    }
+
     use super::*;
 
     #[test]
