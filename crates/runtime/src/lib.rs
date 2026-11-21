@@ -208,7 +208,7 @@ impl Machine {
         };
         machine.os.resources = image.resources.clone();
         for replacement in game::REPLACEMENTS {
-            let offset = replacement.address.wrapping_sub(code.va) as usize;
+            let offset = (replacement.address)(&machine.os.addresses).wrapping_sub(code.va) as usize;
             if machine.os.mods.is_enabled(replacement.modification) && offset < machine.decoded_index.len() {
                 machine.decoded_index[offset] = FIRST_REPLACEMENT + machine.replacements.len() as u32;
                 machine.replacements.push(replacement);

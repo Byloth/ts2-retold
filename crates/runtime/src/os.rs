@@ -47,6 +47,8 @@ pub struct Os {
     pub gdi: Gdi,
     /// The modifications switched on for this run.
     pub mods: Modifications,
+    /// Where the things the runtime knows are in this build of the game.
+    pub addresses: crate::game::Addresses,
     pub(crate) com: Com,
     pub ddraw: ddraw::State,
     pub(crate) dsound: dsound::State,

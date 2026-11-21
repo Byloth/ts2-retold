@@ -119,6 +119,28 @@ pub const ITALIAN_FUNCTIONS: &[(u32, u32)] = &[
     (0x0049_FD40, 0x004A_1190),
 ];
 
+/// Tables of the Italian build that go with its language and take the
+/// place of the reference's: where each is in the reference build and in
+/// the Italian one, and its size there.
+pub const ITALIAN_TABLES: &[(u32, u32, u32)] = &[
+    // The records of three sheets of sprites: eight bytes and then where
+    // each picture of the sheet is in its texture, two bytes a picture.
+    // The Italian ones go on where the reference's end: the textures have
+    // more pictures (the signs and accents of the two typefaces, sheets
+    // 0x32 and 0x43, and sixteen more in sheet 0x14). A picture past the
+    // end of the reference's record is read from whatever follows it:
+    // the hyphen of the menus came out as pieces of two other letters.
+    (0x0050_0D30, 0x0050_3CB0, 152),
+    (0x0050_0CC8, 0x0050_3C28, 136),
+    (0x0050_0C30, 0x0050_3B70, 168),
+    // Twelve bytes that the code setting up the sprites copies (the same
+    // code in both builds, at 0x4525CA in the reference). Three of them
+    // differ. What they mean is not known (`UNVERIFIED`); with the
+    // Italian ones the text of the loading screen comes out as in the
+    // Italian game, with the reference's it does not.
+    (0x004F_7408, 0x004F_A240, 12),
+];
+
 /// Functions that differ between the two builds for other reasons than
 /// language (the Italian build is a later revision: fixes in the 3D
 /// engine and the sound, sizes of tables, line numbers in messages). They
@@ -126,6 +148,9 @@ pub const ITALIAN_FUNCTIONS: &[(u32, u32)] = &[
 /// the reference's. In the reference build and in the Italian one.
 pub const ITALIAN_COUNTERPARTS: &[(u32, u32)] = &[
     (0x0043_2AD0, 0x0043_2AE0),
+    // These two clear 128 entries of a block of the game's variables where
+    // the reference's clear 96; nothing in either build refers past the
+    // first 64.
     (0x0045_2260, 0x0045_2340),
     (0x0045_2FC0, 0x0045_30A0),
     (0x0047_E420, 0x0047_E500),
@@ -183,8 +208,9 @@ pub struct Hybrid<'a> {
     /// Addresses taken from their neighbours for lack of a pair of their
     /// own: the other build's and the reference's.
     pub inferred: Vec<(u32, u32)>,
-    /// Variables only the other build has, given room beside the texts:
-    /// the other build's address, the new one and the size.
+    /// What of the other build's data was put beside the texts: tables
+    /// ([`Hybrid::tables`]) and variables only the other build has. The
+    /// other build's address, the new one and the size.
     pub added: Vec<(u32, u32, u32)>,
     /// The functions the two builds have in common: where each begins in
     /// the other build and in the reference, and its length; by the other
@@ -232,6 +258,34 @@ impl<'a> Hybrid<'a> {
         let section = section.expect("a site is in a section");
         let offset = (site - section.va) as usize;
         section.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    /// Puts tables of the other build beside the image and makes every
+    /// place of the reference that refers to one of the reference's (to
+    /// its start or into it) refer to the other build's. Each table is
+    /// given as its address in the reference build, in the other build,
+    /// and its size there; it must hold no addresses. To be called before
+    /// [`Hybrid::graft`], so that the functions taken over use it too.
+    pub fn tables(&mut self, tables: &[(u32, u32, u32)]) {
+        for &(_, other, size) in tables {
+            let section = self.other.section_at(other).expect("the table is in the other build");
+            assert!(self.other.relocs_in(other, other + size).is_empty(), "a table with addresses in it");
+            let offset = (other - section.va) as usize;
+            let now = self.section_va + self.texts.len() as u32;
+            // What it holds at the start; nothing, past the section's
+            // initialised part.
+            let initial = section.data.get(offset..).unwrap_or_default();
+            let initial = &initial[..initial.len().min(size as usize)];
+            self.texts.extend_from_slice(initial);
+            self.texts.resize((self.texts.len() - initial.len() + size as usize).next_multiple_of(4), 0);
+            self.added.push((other, now, size));
+            for &(site, other_site) in &self.pairing.sites {
+                let Some(to) = self.other.read_u32(other_site) else { continue };
+                if (other..other + size).contains(&to) {
+                    self.write(site, now + (to - other));
+                }
+            }
+        }
     }
 
     /// Makes every place of the reference that refers to a text refer to
@@ -288,14 +342,14 @@ impl<'a> Hybrid<'a> {
     /// reference build that is kept uses the variable, which is for
     /// whoever lists the functions to check ([`Hybrid::added`]).
     fn data_in_reference(&mut self, at: u32, backward: &BTreeMap<u32, u32>) -> Option<u32> {
-        if let Some(&paired) = backward.get(&at) {
-            return Some(paired);
-        }
-        if let Some(&(_, now, _)) =
+        // Something of the other build that was put beside the image.
+        if let Some(&(other, now, _)) =
             self.added.iter().find(|&&(other, _, size)| (other..other + size).contains(&at))
         {
-            let other = self.added.iter().find(|&&(other, _, size)| (other..other + size).contains(&at))?.0;
             return Some(now + (at - other));
+        }
+        if let Some(&paired) = backward.get(&at) {
+            return Some(paired);
         }
         let (&below, &below_paired) = backward.range(..at).next_back()?;
         let (&above, &above_paired) = backward.range(at..).next()?;

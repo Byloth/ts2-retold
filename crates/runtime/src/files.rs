@@ -56,10 +56,12 @@ pub enum Disposition {
 
 /// Whether a file of the game, named relative to the install directory in
 /// lower case with `/` between the parts, carries language: speech, a
-/// movie, a screen with words on it, or the textures that hold the
-/// typefaces. The discs of the other languages are also a later revision
-/// of the levels' data (terrain, placement, paths); those files are not
-/// language and stay the reference's (ADR 0016).
+/// movie, or textures. Every texture file of the game holds the typefaces
+/// beside its own pictures (and the screens with words on them are
+/// texture files), so all of them are language. The discs of the other
+/// languages are also a later revision of the levels' data (terrain,
+/// placement, paths); those files are not language and stay the
+/// reference's (ADR 0016).
 pub fn is_language_file(name: &str) -> bool {
     let parts: Vec<&str> = name.split('/').collect();
     match parts.as_slice() {
@@ -67,13 +69,8 @@ pub fn is_language_file(name: &str) -> bool {
         ["rtlibs", file] => file.ends_with(".dll"),
         // Speech (and the other sounds, which are the same on every disc).
         ["data", "sfx", file] => file.ends_with(".wav"),
-        // The loading, bonus and result screens.
-        ["data", "gfx", file] => file.ends_with(".ngn"),
-        // The front end: its textures and the level map's.
-        ["data", "level00", file] => file.ends_with(".ngn"),
-        // Each level's textures, the typefaces among them. Not `level1.ngn`
-        // and the rest, which are the level itself.
-        ["data", level, "level.ngn"] => level.starts_with("level"),
+        // The textures: of the front end, of each level, of the screens.
+        ["data", _, file] => file.ends_with(".ngn"),
         _ => false,
     }
 }
@@ -271,12 +268,14 @@ mod tests {
             "data/level00/level.ngn",
             "data/level00/levelt2.ngn",
             "data/level07/level.ngn",
+            "data/level07/level1.ngn",
+            "data/level06/level1t1.ngn",
         ] {
             assert!(super::is_language_file(name), "{name}");
         }
         for name in [
             "toy2.exe",
-            "data/level07/level1.ngn",
+            "data/level07/level1.raw",
             "data/level05/terrain.all",
             "data/level01/level1.raw",
             "data/pad/path02.bin",

@@ -482,6 +482,12 @@ pub struct Headless {
     pub draws: u64,
     pub triangles: u64,
     pub last_draw: Option<RecordedDraw>,
+    /// When set, every batch is kept: those drawn since the last frame was
+    /// presented, and those of that frame. For comparing what two runs
+    /// draw, triangle by triangle.
+    pub keep_draws: bool,
+    pub draws_so_far: Vec<RecordedDraw>,
+    pub draws_of_last_frame: Vec<RecordedDraw>,
     pub last_frame: Option<Frame>,
     pub frames_presented: u64,
 }
@@ -586,17 +592,24 @@ impl Video for Headless {
     fn draw(&mut self, draw: &Draw) {
         self.draws += 1;
         self.triangles += draw.indices.len() as u64 / 3;
-        self.last_draw = Some(RecordedDraw {
+        let recorded = RecordedDraw {
             target: draw.target,
             depth: draw.depth,
             viewport: draw.viewport,
             state: draw.state,
             vertices: draw.vertices.to_vec(),
             indices: draw.indices.to_vec(),
-        });
+        };
+        if self.keep_draws {
+            self.draws_so_far.push(recorded.clone());
+        }
+        self.last_draw = Some(recorded);
     }
 
     fn present(&mut self, surface: SurfaceId) {
+        if self.keep_draws {
+            self.draws_of_last_frame = std::mem::take(&mut self.draws_so_far);
+        }
         let surface = self.surface(surface);
         let frame = Frame {
             width: surface.width,

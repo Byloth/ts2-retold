@@ -164,28 +164,31 @@ out of here into the roadmap or an ADR when work on them starts.
   the reference build, made by transplanting from the Italian executable
   through an address map between the two builds (`andy pair`). Done: the
   texts, place by place (330 places); the 19 functions that differ
-  because of the language, taken from the Italian executable (15 more
-  differ as a later revision and stay the reference's); speech, movies,
-  screens and typeface textures read from the Italian disc. With it the
-  game goes from the Italian legal screen through title, menu, level map,
-  the dubbed introduction and the Italian loading screen into the level.
+  because of the language, with four small tables (17 more functions
+  differ as a later revision and stay the reference's); speech, movies
+  and all textures read from the Italian disc.
+  **Checked against the Italian game itself**, which `andy boot` runs as
+  it is (`andy boot ref/game-it/toy2.exe`, with `TS2_GAME_DIR` set to the
+  reference): with the same recorded input, of 76 pictures taken every
+  100 frames from the start into the first level, 62 are the same pixel
+  for pixel: the legal screens, the movies, the title, the main menu and
+  the loading screen among them. The 14 that differ are the fade to the
+  level map, one of the map, and those in the level, where the two runs
+  are not at the same instant (the hybrid's code is not the Italian
+  build's, so the same frame falls at another moment of the game's clock)
+  and where the hybrid has the reference's level data on purpose.
   Still to do:
-  - **compare with the Italian game itself**: run the Italian executable
-    in the interpreter (the one native replacement, `skip-mode-select`,
-    and its five addresses translated through the pairing) and set its
-    pictures beside the hybrid's. Until then what is right is judged by
-    eye;
-  - known wrong: the main menu's logo (its lower part is distorted) and
-    the hyphen of the large typeface; the cause is not known (the front
-    end's textures come from the Italian disc and are laid out
-    differently; some table or function that goes with them is still the
-    reference's);
+  - the same check for every other screen: options, controls, graphics
+    settings, loading and saving, the pause menu, the messages of the
+    levels, the credits, the movie viewer. Each needs a recording that
+    reaches it;
+  - the twelve bytes of `ITALIAN_TABLES` are not understood, only seen to
+    be needed; and what each of the 19 functions is, is known from the
+    texts they use and where they stand, not from reading them;
   - one variable the Italian build alone has (4 bytes, used by its level
     map function) was given room of its own, and three addresses were
     taken from their neighbours for lack of a pair: each is printed when
-    the game starts and wants a look;
-  - which of the 19 functions is what is known from the texts they use
-    and where they stand; none has been read through;
+    the game starts;
   - the Italian movies have other lengths, so recordings made for the
     English sequence do not fit (`out/input/it-level.txt` is one for it);
   - code outside the image's code section is decoded again every time it
@@ -194,6 +197,10 @@ out of here into the roadmap or an ADR when work on them starts.
   - choosing the language in a settings file instead of `--with`;
   - a reading of all the text pairs by someone who knows the game
     (`andy pair --json`).
+- **The first vertex of each sprite's quad has an unset specular colour**:
+  the game leaves whatever was on its stack there (seen as a return
+  address). Specular is off in those draws, so nothing shows; noted
+  because the value differs from run to run of different code.
 - **The other languages**: French, Spanish, Dutch, Swedish, Norwegian and
   Finnish are at hand as disc images; German, Danish and Portuguese have
   not been found (ADR 0003).

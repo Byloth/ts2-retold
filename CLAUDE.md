@@ -137,6 +137,9 @@ cargo run --release --bin andy -- boot --limit 6000000000 --seconds 400 --gpu --
 # tools/game-dir-from-disc.sh ref/disc-it ref/game-it
 export TS2_ITALIAN_DIR="$PWD/ref/game-it"
 cargo run --release --bin andy -- play --with language-italian
+# The Italian game itself, as a comparison for the hybrid (TS2_GAME_DIR
+# stays the reference: its addresses are translated for the other build)
+cargo run --release --bin andy -- boot ref/game-it/toy2.exe --limit 9000000000 --seconds 230 --gpu --input out/input/it-level.txt --frames out/frames-it --frame-step 100
 # The addresses of one language's build in another's, and the texts that change
 cargo run --release --bin andy -- pair ref/game/toy2.exe ref/game-it/toy2.exe --json out/lang/texts.json
 # What the game plays, as a WAVE file (the same for the same run)

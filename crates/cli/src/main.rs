@@ -27,7 +27,7 @@ USAGE:
     andy boot    [EXE] [--trace] [--limit N] [--seconds N] [--args TEXT]
                  [--stop-at ADDR] [--dump ADDR:LEN]... [--surfaces DIR]
                  [--gpu] [--frames DIR [--frame-step N]] [--input FILE]
-                 [--sound FILE]
+                 [--sound FILE] [--draws FILE]
                                     Run the game in the interpreter until it
                                     stops, and report how far it got. --args
                                     is the game's own command line: -log
@@ -42,6 +42,9 @@ USAGE:
                                     game shows as a PNG file into DIR;
                                     --input plays back recorded input (one
                                     line per change: READ press|release KEY);
+                                    --draws writes the triangles of the last
+                                    frame shown, batch by batch, as text
+                                    (without --gpu);
                                     --sound writes what the game plays as
                                     a WAVE file;
                                     --limit stops after N instructions,
@@ -94,6 +97,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut stop_at = None;
     let mut dumps = Vec::new();
     let mut surfaces = None;
+    let mut draws = None;
     let mut sound = None;
     let mut gpu = false;
     let mut frames = None;
@@ -139,6 +143,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--frame-step" => {
                 frame_step = args.next().and_then(|n| n.parse().ok()).ok_or("--frame-step needs a number")?;
             }
+            "--draws" => draws = Some(PathBuf::from(args.next().ok_or("--draws needs a file")?)),
             "--sound" => sound = Some(PathBuf::from(args.next().ok_or("--sound needs a file")?)),
             "--surfaces" => {
                 surfaces = Some(PathBuf::from(args.next().ok_or("--surfaces needs a directory")?));
@@ -203,6 +208,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
     if mods.is_enabled(andy_runtime::mods::LANGUAGE_ITALIAN) {
         image = italian(&bytes, image)?;
     }
+    // Another build of the game than the reference has the things the
+    // runtime knows at other addresses.
+    let addresses = match builds::identify(&bytes).map(|build| build.id) {
+        Some(builds::ITALIAN) => addresses_in(&image)?,
+        _ => andy_runtime::game::Addresses::REFERENCE,
+    };
 
     match command.as_str() {
         "info" => info(&image),
@@ -223,6 +234,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             &image,
             BootOptions {
                 mods,
+                addresses,
                 game_dir: exe.parent().map(Path::to_path_buf),
                 trace,
                 limit,
@@ -231,6 +243,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 stop_at,
                 dumps,
                 surfaces,
+                draws,
                 sound,
                 gpu,
                 input,
@@ -246,6 +259,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let mut os = Os::new(files);
             os.command_line_arguments = game_args;
             os.mods = mods;
+            os.addresses = addresses;
             let (machine, stop) = play::play(Machine::load(&image, os), seconds)?;
             println!("frames shown           {}", machine.os.ddraw.frames);
             match stop {
@@ -278,6 +292,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 
 struct BootOptions {
     mods: Modifications,
+    addresses: andy_runtime::game::Addresses,
     game_dir: Option<PathBuf>,
     trace: bool,
     limit: u64,
@@ -287,6 +302,8 @@ struct BootOptions {
     stop_at: Option<u32>,
     dumps: Vec<(u32, u32)>,
     surfaces: Option<PathBuf>,
+    /// The file the batches of the last frame are written to.
+    draws: Option<PathBuf>,
     /// The file the machine's sound is written to.
     sound: Option<PathBuf>,
     gpu: bool,
@@ -316,6 +333,7 @@ fn parse_hex(text: &str) -> Option<u32> {
 fn boot(image: &Image, options: BootOptions) {
     let BootOptions {
         mods,
+        addresses,
         game_dir,
         trace,
         limit,
@@ -324,6 +342,7 @@ fn boot(image: &Image, options: BootOptions) {
         stop_at,
         dumps,
         surfaces,
+        draws: draws_file,
         sound,
         gpu,
         frames,
@@ -340,6 +359,7 @@ fn boot(image: &Image, options: BootOptions) {
     let mut os = Os::new(files);
     os.command_line_arguments = game_args;
     os.mods = mods;
+    os.addresses = addresses;
     let mut machine = Machine::load(image, os);
     machine.breakpoint = stop_at;
     if let Some(path) = sound {
@@ -387,6 +407,15 @@ fn boot(image: &Image, options: BootOptions) {
     }
     if trace {
         machine.trace = Some(Vec::new());
+    }
+    if draws_file.is_some() {
+        match machine.video.as_any_mut().downcast_mut::<andy_runtime::video::Headless>() {
+            Some(headless) => headless.keep_draws = true,
+            None => {
+                eprintln!("--draws works without --gpu");
+                return;
+            }
+        }
     }
     let started = std::time::Instant::now();
     // The clock passes with the instructions run and while every thread
@@ -468,8 +497,33 @@ fn boot(image: &Image, options: BootOptions) {
             statistics.triangles, statistics.batches, statistics.passes
         );
     }
+    if let Some(path) = draws_file {
+        use std::fmt::Write;
+        let headless = machine.video.as_any().downcast_ref::<andy_runtime::video::Headless>();
+        let mut text = String::new();
+        for (number, draw) in
+            headless.map(|headless| &headless.draws_of_last_frame).into_iter().flatten().enumerate()
+        {
+            let _ = writeln!(text, "batch {number}: target {:?}, {:?}", draw.target, draw.state);
+            let _ = writeln!(text, "  indices {:?}", draw.indices);
+            for vertex in &draw.vertices {
+                let _ = writeln!(text, "  {vertex:?}");
+            }
+        }
+        if let Err(error) = fs::write(&path, text) {
+            eprintln!("{}: {error}", path.display());
+        }
+    }
     let missing = machine.os.files.log.iter().filter(|(_, found)| !found).count();
     println!("files opened           {} ({missing} not found)", machine.os.files.log.len());
+    if trace {
+        let mut names: Vec<&str> = machine.os.files.log.iter().map(|(name, _)| name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        for name in names {
+            println!("  file {name}");
+        }
+    }
     if let Ok(log) = fs::read_to_string(&log_path) {
         println!("\nthe game's own log (toy2.log)");
         for line in log.lines() {
@@ -521,6 +575,44 @@ fn write_surfaces(machine: &mut Machine, directory: &Path) -> Result<usize, Box<
 
 /// Decodes a movie and writes its pictures one after another as planar
 /// YUV 4:2:0, the form other decoders can write too.
+/// The addresses the runtime knows, in another build of the game than
+/// the reference: found by pairing the reference executable (in
+/// `TS2_GAME_DIR`) with it. This is how another language's executable is
+/// run as it is, to compare the reference build in that language with.
+fn addresses_in(other: &Image) -> Result<andy_runtime::game::Addresses, String> {
+    let dir =
+        env::var_os("TS2_GAME_DIR").ok_or("running another build needs the reference one in TS2_GAME_DIR")?;
+    let path = Path::new(&dir).join("toy2.exe");
+    let bytes = fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    if builds::identify(&bytes).map(|build| build.id) != Some(builds::REFERENCE) {
+        return Err(format!("{} is not the reference build", path.display()));
+    }
+    let reference = Image::parse(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+    let pairing = andy_recomp::pairing::pair(&reference, other);
+    let starts = |image: &Image| -> Result<Vec<u32>, String> {
+        let analysis = analysis::analyze(image).ok_or("an executable without code")?;
+        let mut starts: Vec<u32> = analysis.functions.iter().map(|function| function.start).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        Ok(starts)
+    };
+    let (reference_starts, other_starts) = (starts(&reference)?, starts(other)?);
+    let functions =
+        andy_recomp::pairing::common_functions(&reference, other, (&reference_starts, &other_starts));
+    let code = reference.code_section().ok_or("an executable without code")?;
+    let translate = |address: u32| {
+        if code.contains(address) {
+            let function =
+                functions.iter().find(|&&(start, _, length)| (start..start + length).contains(&address))?;
+            Some(function.1 + (address - function.0))
+        } else {
+            pairing.pairs.get(&address).copied()
+        }
+    };
+    andy_runtime::game::Addresses::translated(translate)
+        .ok_or_else(|| "an address the runtime knows was not found in this build".into())
+}
+
 /// The Italian game's directory, if the game is to be in Italian.
 fn italian_dir(mods: &Modifications) -> Option<PathBuf> {
     let dir =
@@ -545,6 +637,8 @@ fn italian(reference_bytes: &[u8], reference: Image) -> Result<Image, String> {
     let pairing = andy_recomp::pairing::pair(&reference, &other);
     let mut hybrid = andy_recomp::language::Hybrid::new(&reference, &other, &pairing);
     hybrid.texts(&[]);
+    hybrid.tables(andy_recomp::language::ITALIAN_TABLES);
+    let tables = hybrid.added.len();
     // The Italian functions, each as long as to the next function there.
     let analysis = analysis::analyze(&other).ok_or("the Italian executable has no code")?;
     let function_starts = |analysis: &analysis::Analysis| {
@@ -586,7 +680,7 @@ fn italian(reference_bytes: &[u8], reference: Image) -> Result<Image, String> {
     for (other, reference) in inferred {
         println!("          {other:#010x} there taken as {reference:#010x} here, by its neighbours");
     }
-    for (other, now, size) in added {
+    for (other, now, size) in added.into_iter().skip(tables) {
         println!(
             "          {other:#010x} there, {size} bytes only the Italian build has, now at {now:#010x}"
         );

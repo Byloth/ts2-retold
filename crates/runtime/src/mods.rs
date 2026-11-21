@@ -43,8 +43,8 @@ pub static CATALOGUE: &[Modification] = &[
                   the language (text drawing, menus, the level map, loading and saving) are its own, \
                   placed beside the reference image; speech, movies, screens and the textures with the \
                   typefaces are read from the Italian disc. Level data and all other code stay the \
-                  reference's. INCOMPLETE: not yet compared with the Italian game itself; the main menu's \
-                  logo and the hyphen of the large typeface are drawn wrongly.",
+                  reference's. INCOMPLETE: compared with the Italian game itself only from the start to \
+                  the first level, where title, menu and loading screen are the same picture for picture.",
     },
     Modification {
         id: SKIP_MODE_SELECT,
