@@ -420,6 +420,15 @@ fn draw(m: &mut Machine, this: u32, primitive: Primitive, indices: Option<Vec<u1
     let Some(indices) = triangles(primitive, &indices) else {
         return unsupported(format!("points or lines (primitive type {primitive})"));
     };
+    // Only the vertices the triangles use are read and prepared: a draw
+    // from a vertex buffer names a few of the buffer's many.
+    let (lowest, vertex_count) = match (indices.iter().min(), indices.iter().max()) {
+        (Some(&lowest), Some(&highest)) => (lowest, (highest - lowest) as u32 + 1),
+        _ => (0, 0),
+    };
+    let indices: Vec<u16> = indices.iter().map(|index| index - lowest).collect();
+    let vertices = vertices + lowest as u32 * layout.size;
+    let buffer = buffer.map(|(buffer, first)| (buffer, first + lowest as u32));
     let Some(bytes) = m.memory.dump(vertices, vertex_count * layout.size) else {
         return Ok(DDERR_INVALIDPARAMS);
     };

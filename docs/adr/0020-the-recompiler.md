@@ -128,3 +128,22 @@ all drawing: `Flip` 0.56 ms a frame, 7 µs for each of some 270 draw
 calls, the clears. **The drawing path is now what limits the speed**,
 not the game's code (`docs/BACKLOG.md`, "one render pass per frame").
 
+Then the drawing path, the same day (frames still the interpreter's,
+89 of 89):
+
+- **A draw from a vertex buffer read and prepared the whole buffer**,
+  hundreds of vertices, for the few its triangles use: 6.3 µs a call. It
+  reads those between the lowest and the highest index used: 0.74 µs.
+- **Consecutive batches with the same state are one draw call** on the
+  graphics adapter (the same triangles in the same order).
+
+| in the first level | frames a second | ms a frame | game's code | host functions |
+|---|---|---|---|---|
+| interpreter, no adapter | 85 | 11.7 | 9.4 | 2.3 |
+| blocks, no adapter | 482 | 2.1 | 1.1 | 1.0 |
+| blocks, graphics card | 345 | 2.9 | 1.2 | 1.7 |
+
+What is left in a frame on the graphics card: `Flip` 0.24 ms, a clear
+0.35 ms, each copy 0.3 ms. Every fill and copy is a render pass and a
+submission of its own: next is one submission a frame.
+

@@ -1299,6 +1299,25 @@ impl Video for Gpu {
                 ..(self.pending.indices.len() + draw.indices.len()) as u32,
             base_vertex: self.pending.vertices.len() as i32,
         };
+        // A batch with the state of the one before it goes on in the same
+        // draw call, if its vertices are still within an index's reach of
+        // that call's first: the triangles are drawn in the same order
+        // with the same state, in fewer calls.
+        let added = if flat { draw.indices.len() } else { draw.vertices.len() };
+        let joined = match (self.pending.commands.last(), self.pending.uniforms.last()) {
+            (Some(last), Some(last_uniforms))
+                if last.pipeline == command.pipeline
+                    && last.viewport == command.viewport
+                    && last.texture == command.texture
+                    && bytemuck::bytes_of(last_uniforms) == bytemuck::bytes_of(&uniforms)
+                    && last.indices.end == command.indices.start =>
+            {
+                let offset = self.pending.vertices.len() - last.base_vertex as usize;
+                (offset + added <= u16::MAX as usize + 1).then_some(offset as u16)
+            }
+            _ => None,
+        };
+        let offset = joined.unwrap_or(0);
         if flat {
             // Every pixel of a triangle takes the colours of its first
             // vertex. Which vertex a graphics API takes for that differs, so
@@ -1315,15 +1334,20 @@ impl Video for Gpu {
                         ..vertex
                     });
                 }
-                let base = 3 * number as u16;
+                let base = offset + 3 * number as u16;
                 self.pending.indices.extend_from_slice(&[base, base + 1, base + 2]);
             }
         } else {
             self.pending.vertices.extend_from_slice(draw.vertices);
-            self.pending.indices.extend_from_slice(draw.indices);
+            self.pending.indices.extend(draw.indices.iter().map(|index| index + offset));
         }
-        self.pending.uniforms.push(uniforms);
-        self.pending.commands.push(command);
+        match (joined, self.pending.commands.last_mut()) {
+            (Some(_), Some(last)) => last.indices.end = self.pending.indices.len() as u32,
+            _ => {
+                self.pending.uniforms.push(uniforms);
+                self.pending.commands.push(command);
+            }
+        }
         self.statistics.batches += 1;
         self.statistics.triangles += draw.indices.len() as u64 / 3;
     }
