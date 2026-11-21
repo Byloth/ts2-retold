@@ -90,6 +90,15 @@ pub static REPLACEMENTS: &[Replacement] = &[
         reference_only: true,
         function: crate::typeface::draw_small_at,
     },
+    Replacement {
+        modification: ONE_TYPEFACE,
+        address: |_| 0x0049_B630,
+        name: "a character of the levels' typeface",
+        callee_pops: 0,
+        resume: None,
+        reference_only: true,
+        function: crate::typeface::draw_level_character,
+    },
 ];
 
 // The main menu (the function at 0x437C40) draws, every frame, two arrows

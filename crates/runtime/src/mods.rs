@@ -41,7 +41,7 @@ pub static CATALOGUE: &[Modification] = &[
         class: Class::Feature,
         affects_simulation: false,
         enabled_by_default: true,
-        summary: "Text in the large and the small typeface is drawn by one function with one table from character to \
+        summary: "Text in the three typefaces (large, small, levels') is drawn by one function with one table from character to \
                   glyph, for every language, from one atlas put together from all the discs at hand, with \
                   every sign any of them has, each once (ADR 0016): the hyphen, the accents and the signs \
                   of each language are there for every language. It also draws the digits and signs the \

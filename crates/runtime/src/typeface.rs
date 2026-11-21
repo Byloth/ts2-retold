@@ -5,7 +5,8 @@
 //! have their own, each different. Here is one table from character to
 //! glyph and one way of laying a text out, in place of those functions.
 //!
-//! So far: the large typeface of the menus and the small one. Their
+//! The three typefaces: the large one of the menus, the small one, and
+//! the one of the levels' texts, whose layout stays the game's own. Their
 //! tables and atlases are in `andy_recomp::typeface`; the atlases are put
 //! together from the discs at hand when the game is started, and written
 //! into the texture files as they are read.
@@ -13,7 +14,7 @@
 //! A text may hold line breaks; and one that is too wide for its room is
 //! set closer.
 
-use andy_recomp::typeface::{Face, LARGE, SMALL};
+use andy_recomp::typeface::{Face, LARGE, LEVELS, SMALL};
 
 use crate::game::{DRAW_SPRITE, SCREEN_MIDDLE};
 use crate::{Machine, Stop};
@@ -207,6 +208,35 @@ pub fn draw_small_at(m: &mut Machine) -> Result<(), Stop> {
     let line = SMALL_LINE * size / USUAL_SIZE;
     let setting = Setting { face: &SMALL, look: small_look(flag), size, line, buttons: false };
     draw(m, &setting, &text, y, |letters| small_line_at(letters, x, mode, size))
+}
+
+/// The game's other function that draws a sprite, with the same
+/// arguments, and its function for one of two pictures of a sheet as an
+/// icon; the sheet of the two icons a text of the levels can hold.
+const DRAW_SPRITE_OTHERWISE: u32 = 0x0049_42D0;
+const DRAW_LEVEL_ICON: u32 = 0x0049_46A0;
+const LEVEL_ICONS_SHEET: u32 = 0x26;
+
+/// In place of the reference's function at 0x49B630: one character of
+/// the levels' typeface at a place. Its arguments: x, y, the character,
+/// three colours, and which of the two sprite functions draws it. The
+/// characters `@` and `~` are two icons. The game's own code lays the
+/// texts out and calls this for each character.
+pub fn draw_level_character(m: &mut Machine) -> Result<(), Stop> {
+    let [x, y, character, c1, c2, c3, which] = arguments(m)?;
+    let character = character as u8;
+    if let Some(picture) = [b'~', b'@'].iter().position(|&icon| icon == character) {
+        m.call_guest_c(DRAW_LEVEL_ICON, &[x as u32, (y - 2) as u32, LEVEL_ICONS_SHEET, picture as u32])?;
+        return Ok(());
+    }
+    let Some(glyph) = LEVELS.glyph(character) else { return Ok(()) };
+    let function = if which != 0 { DRAW_SPRITE } else { DRAW_SPRITE_OTHERWISE };
+    let accent = glyph.accent.map(|accent| (accent, y - LEVELS.accent_rise));
+    for (cell, y) in [(glyph.cell, y)].into_iter().chain(accent) {
+        let arguments = [x, y, LEVELS.sheet as i32, cell as i32, c1, c2, c3, 0xFF, USUAL_SIZE, USUAL_SIZE];
+        m.call_guest_c(function, &arguments.map(|argument| argument as u32))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

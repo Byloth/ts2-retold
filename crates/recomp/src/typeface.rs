@@ -1,7 +1,8 @@
 //! The game's typefaces, each with one atlas and one table from character
 //! to glyph (ADR 0016).
 //!
-//! A typeface is a page of 256 by 256 pixels cut into cells. On every
+//! A typeface is a page of 256 by 256 pixels, or a part of one, cut into
+//! cells. On every
 //! language's disc the first cells hold the same things: the letters, the
 //! digits and some signs (the same pictures in the large typeface; in the
 //! small one some discs have the digits and a letter drawn anew). After
@@ -131,8 +132,12 @@ pub struct Face {
     /// texture that sheet is on.
     pub sheet: u32,
     pub texture: u8,
-    /// A cell's width and height in pixels.
+    /// A cell's width and height in pixels, and how many cells there are
+    /// across and down, from the page's corner. What else the page holds
+    /// is not the typeface's and is left as it is.
     pub cell: (usize, usize),
+    pub across: usize,
+    pub rows: usize,
     /// How many cells, from the first, hold the same things on every disc.
     pub common: usize,
     /// The places of the signs in the atlas, after the common cells.
@@ -164,6 +169,8 @@ pub static LARGE: Face = Face {
     sheet: 0x32,
     texture: 0x1F,
     cell: (32, 32),
+    across: 8,
+    rows: 8,
     common: 48,
     // The cedilla reaches the bottom of its cell: it stands in the upper
     // row, over the one place left empty. So does the O with a stroke,
@@ -222,6 +229,8 @@ pub static SMALL: Face = Face {
     sheet: 0x43,
     texture: 10,
     cell: (16, 24),
+    across: 16,
+    rows: 10,
     common: 48,
     // The first sixteen as the Spanish page has them; the cedilla and
     // the asterisk reach the bottom of their cells, and under them
@@ -276,7 +285,65 @@ pub static SMALL: Face = Face {
     },
 };
 
-pub static FACES: [&Face; 2] = [&LARGE, &SMALL];
+/// The typeface of the levels' texts and messages: cells of 16 by 16 in
+/// a corner of a page of other sprites, 51 of them common.
+pub static LEVELS: Face = Face {
+    name: "levels",
+    sheet: 0x14,
+    texture: 32,
+    cell: (16, 16),
+    across: 8,
+    rows: 9,
+    common: 51,
+    // As the Spanish and Italian pages have them, and the ring after.
+    places: &[
+        Some(Diaeresis),
+        Some(Circumflex),
+        Some(Grave),
+        Some(Acute),
+        Some(Tilde),
+        Some(InvertedQuestion),
+        Some(InvertedExclamation),
+        Some(OSlash),
+        Some(Ae),
+        Some(Oe),
+        Some(CCedilla),
+        Some(Ring),
+    ],
+    // The French build's, whose ring stands at the very top of its cell
+    // and could not be moved higher; the Spanish and Italian accents,
+    // drawn a unit lower by their builds, are moved down in their cells.
+    accent_rise: 4,
+    record_site: 0x004E_C0F4,
+    record: 0x0050_0D30,
+    section: ".tlevels",
+    plain: |character| {
+        Some(match character {
+            b'a'..=b'z' => character - b'a',
+            b'A'..=b'Z' => character - b'A',
+            b'0'..=b'9' => 26 + character - b'0',
+            b'.' => 36,
+            b',' => 37,
+            b':' => 38,
+            b';' => 39,
+            b'?' => 40,
+            b'!' => 41,
+            b'/' => 42,
+            b'\\' => 43,
+            b'<' => 44,
+            b'>' => 45,
+            b'(' => 46,
+            b')' => 47,
+            b'\'' => 48,
+            b'-' => 49,
+            // A filled square, which the reference draws for an asterisk.
+            b'*' => 50,
+            _ => return None,
+        } as u32)
+    },
+};
+
+pub static FACES: [&Face; 3] = [&LARGE, &SMALL, &LEVELS];
 
 /// A page of a typeface as one of the discs has it: the picture, known by
 /// the SHA-256 of its pixels, and the signs in its cells after the common
@@ -421,25 +488,77 @@ pub static PAGES: &[KnownPage] = &[
     },
 ];
 
+const LEVELS_SPANISH: [Option<Sign>; 11] = [
+    Some(Diaeresis),
+    Some(Circumflex),
+    Some(Grave),
+    Some(Acute),
+    Some(Tilde),
+    Some(InvertedQuestion),
+    Some(InvertedExclamation),
+    Some(OSlash),
+    Some(Ae),
+    Some(Oe),
+    Some(CCedilla),
+];
+
+/// The pages of the levels' typeface: the same picture in 36 files of
+/// each disc.
+pub static LEVELS_PAGES: &[KnownPage] = &[
+    KnownPage {
+        face: &LEVELS,
+        sha256: "632b8e80366989dfc1c9a099cd443dd193a9c071246101954e40bd480e0f5f92",
+        signs: &[],
+        accent_rise: 3,
+    },
+    KnownPage {
+        face: &LEVELS,
+        sha256: "5e217fbf7a33c888bd2be761e7cb1abd2284890633502db142217c8c02950d09",
+        signs: &LEVELS_SPANISH,
+        accent_rise: 3,
+    },
+    // The Italian page has the Spanish one's signs. (Both builds draw the
+    // ring from the cell after the cedilla, which is empty.)
+    KnownPage {
+        face: &LEVELS,
+        sha256: "eafc137633d21cbe2fe206afb2f8d058209fbe43129b63ba14159486a71c2be9",
+        signs: &LEVELS_SPANISH,
+        accent_rise: 3,
+    },
+    // The French page: no cedilla.
+    KnownPage {
+        face: &LEVELS,
+        sha256: "946eb4b94341052dfa3b1d0280f8cf9f310422a7badd7c18489c0b27bb1057d4",
+        signs: &[
+            Some(Diaeresis),
+            Some(Circumflex),
+            Some(Grave),
+            Some(Acute),
+            Some(Tilde),
+            Some(Ring),
+            Some(Ae),
+            Some(Oe),
+        ],
+        accent_rise: 4,
+    },
+];
+
 /// The known page with these pixels' SHA-256, if it is one.
 pub fn known_page(sha256: &str) -> Option<&'static KnownPage> {
-    PAGES.iter().find(|page| page.sha256 == sha256)
+    PAGES.iter().chain(LEVELS_PAGES).find(|page| page.sha256 == sha256)
 }
 
-/// A disc's page, cut into cells, with what is known of it.
+/// A disc's page (its pixels: blue, green, red, rows from the top), with
+/// what is known of it.
 pub struct Source {
-    pub cells: Cells,
+    pub pixels: Vec<u8>,
     pub page: &'static KnownPage,
 }
 
 impl Face {
-    /// The cells of a page, across and in all.
-    pub fn across(&self) -> usize {
-        PAGE / self.cell.0
-    }
-
+    /// The cells of the typeface on a page.
     pub fn cells(&self) -> usize {
-        self.across() * (PAGE / self.cell.1)
+        self.across * self.rows
     }
 
     /// The sign's cell in the atlas, if the typeface has a place for it.
@@ -462,7 +581,7 @@ impl Face {
     }
 
     fn corner(&self, cell: usize) -> (usize, usize) {
-        ((cell % self.across()) * self.cell.0, (cell / self.across()) * self.cell.1)
+        ((cell % self.across) * self.cell.0, (cell / self.across) * self.cell.1)
     }
 
     /// Cuts a page into its cells.
@@ -481,11 +600,10 @@ impl Face {
             .collect()
     }
 
-    /// Puts cells together into a page; what is left of the page, to the
-    /// right of the cells and under them, has the colour of nothing.
-    pub fn page(&self, cells: &Cells) -> Vec<u8> {
-        let background = &cells[0][..3];
-        let mut pixels: Vec<u8> = background.iter().copied().cycle().take(3 * PAGE * PAGE).collect();
+    /// A page with these cells in place of its own; the rest of it is
+    /// left as it is.
+    pub fn page(&self, page: &[u8], cells: &Cells) -> Vec<u8> {
+        let mut pixels = page.to_vec();
         for (cell, picture) in cells.iter().enumerate() {
             let (x, y) = self.corner(cell);
             for row in 0..self.cell.1 {
@@ -497,27 +615,29 @@ impl Face {
         pixels
     }
 
-    /// The atlas: the first source's common cells, then every sign in its
-    /// place, each taken from the first source that has it; a sign none
-    /// has is an empty cell. Also says which signs are there.
+    /// The atlas, as a page: the first source's page with, after its
+    /// common cells, every sign in its place, each taken from the first
+    /// source that has it; a sign none has is an empty cell, and so are
+    /// the cells after the last place. Also says which signs are there.
     ///
     /// An accent from a page whose build draws it higher or lower than
     /// this typeface does is moved in its cell by as much (a screen unit
     /// is two pixels of the page), so that it stands where that build
     /// has it.
-    pub fn atlas(&self, sources: &[Source]) -> Result<(Cells, Vec<Sign>), String> {
+    pub fn atlas(&self, sources: &[Source]) -> Result<(Vec<u8>, Vec<Sign>), String> {
         let first = sources.first().ok_or("no page of the typeface")?;
+        let cut: Vec<Cells> = sources.iter().map(|source| self.cut(&source.pixels)).collect();
         // The colour of nothing: the first pixel of a cell, which no
         // glyph reaches.
-        let background = first.cells[0][..3].to_vec();
+        let background = cut[0][0][..3].to_vec();
         let empty: Vec<u8> = background.iter().copied().cycle().take(3 * self.cell.0 * self.cell.1).collect();
-        let mut atlas: Cells = first.cells[..self.common].to_vec();
+        let mut atlas: Cells = cut[0][..self.common].to_vec();
         let mut present = Vec::new();
         for &place in self.places {
             let found = place.and_then(|sign| {
-                sources.iter().find_map(|source| {
+                sources.iter().zip(&cut).find_map(|(source, cells)| {
                     let at = source.page.signs.iter().position(|&held| held == Some(sign))?;
-                    Some((sign, &source.cells[self.common + at], source.page.accent_rise))
+                    Some((sign, &cells[self.common + at], source.page.accent_rise))
                 })
             });
             let Some((sign, cell, rise)) = found else {
@@ -547,7 +667,8 @@ impl Face {
                 )
             })?;
         }
-        Ok((atlas, present))
+        atlas.resize(self.cells(), empty);
+        Ok((self.page(&first.pixels, &atlas), present))
     }
 
     /// A cell's picture moved up by some rows (down, if negative); `None`
@@ -573,8 +694,10 @@ impl Face {
     }
 
     /// The cells after the common ones whose bottom row of pixels is used
-    /// while the cell under them (the first row's, under the last) is
-    /// not empty: each would show as a line over that cell's sprite.
+    /// while the cell under them is not empty: each would show as a line
+    /// over that cell's sprite. Under the last row is the first, where the
+    /// typeface fills its page (the picture repeats), and otherwise what
+    /// else the page holds, taken as not empty.
     pub fn bleeding(&self, atlas: &Cells) -> Vec<usize> {
         let background = &atlas[0][..3];
         let is_empty =
@@ -582,8 +705,13 @@ impl Face {
         (self.common..atlas.len())
             .filter(|&cell| {
                 let last_row = &atlas[cell][3 * self.cell.0 * (self.cell.1 - 1)..];
-                let under = (cell + self.across()) % self.cells();
-                last_row.chunks(3).any(|pixel| pixel != background) && !is_empty(under)
+                let under = cell + self.across;
+                let under_is_empty = if under < self.cells() {
+                    is_empty(under)
+                } else {
+                    self.rows * self.cell.1 == PAGE && is_empty(under % self.cells())
+                };
+                last_row.chunks(3).any(|pixel| pixel != background) && !under_is_empty
             })
             .collect()
     }
@@ -668,13 +796,21 @@ mod tests {
             (plain(65), plain(67), plain(63))
         );
         assert_eq!(LARGE.glyph(b'$'), None);
+        // The levels' typeface: its own signs, and accents too.
+        assert_eq!(
+            (LEVELS.glyph(b'!'), LEVELS.glyph(b'-'), LEVELS.glyph(b'*')),
+            (plain(41), plain(49), plain(50))
+        );
+        assert_eq!(LEVELS.glyph(0xF1), Some(Glyph { cell: 13, accent: Some(55) }));
+        assert_eq!(LEVELS.glyph(0xA1), plain(57));
         for face in FACES {
             // Every sign has one place, and the places fit the page.
             let placed: Vec<Sign> = face.places.iter().flatten().copied().collect();
             assert!((0..placed.len()).all(|one| placed[one + 1..].iter().all(|&other| other != placed[one])));
             assert!(face.common + face.places.len() <= face.cells());
+            assert!(face.across * face.cell.0 <= PAGE && face.rows * face.cell.1 <= PAGE);
             // Every known page's signs have a place in the atlas.
-            for page in PAGES.iter().filter(|page| std::ptr::eq(page.face, face)) {
+            for page in PAGES.iter().chain(LEVELS_PAGES).filter(|page| std::ptr::eq(page.face, face)) {
                 assert!(page.signs.iter().flatten().all(|&sign| face.cell_of(sign).is_some()));
                 assert!(face.common + page.signs.len() <= face.cells());
             }
@@ -682,33 +818,42 @@ mod tests {
         assert!(known_page(PAGES[0].sha256).is_some() && known_page("").is_none());
     }
 
-    /// A page of a face whose cell `n` is filled with the value `base + n`,
-    /// but for the first pixel of each cell, which is nothing (zero).
-    fn filled(face: &Face, base: u8) -> Cells {
-        (0..face.cells())
+    /// A page whose every pixel is nothing (zero) but for the typeface's
+    /// cells: cell `n` is filled with the value `base + n`, save its
+    /// first pixel.
+    fn filled(face: &Face, base: u8) -> Vec<u8> {
+        let cells: Cells = (0..face.cells())
             .map(|cell| {
                 let mut pixels = vec![base.wrapping_add(cell as u8); 3 * face.cell.0 * face.cell.1];
                 pixels[..3].fill(0);
                 pixels
             })
-            .collect()
+            .collect();
+        face.page(&vec![0; 3 * PAGE * PAGE], &cells)
     }
 
     #[test]
     fn a_page_is_cut_into_cells_and_put_together_again() {
         for face in FACES {
-            let cut = filled(face, 1);
-            let pixels = face.page(&cut);
-            assert_eq!(pixels.len(), 3 * 256 * 256);
-            assert!(face.cut(&pixels) == cut);
+            let pixels = filled(face, 1);
+            let cut = face.cut(&pixels);
+            assert_eq!(cut.len(), face.across * face.rows);
+            assert!(face.page(&pixels, &cut) == pixels);
+            // What the page holds beside the typeface stays.
+            let mut other = pixels.clone();
+            *other.last_mut().unwrap() = 9;
+            assert_eq!(
+                face.page(&other, &cut).last(),
+                Some(&9).filter(|_| face.rows * face.cell.1 < PAGE).or(pixels.last())
+            );
         }
         // The second cell of the second row of the small typeface begins
         // at pixel (16, 24).
-        let pixels = SMALL.page(&filled(&SMALL, 1));
+        let pixels = filled(&SMALL, 1);
         assert_eq!(pixels[3 * (24 * 256 + 16) + 3], 1 + 17);
-        // Fewer cells than the page has: the rest is nothing.
-        let few = filled(&LARGE, 1)[..50].to_vec();
-        assert_eq!(LARGE.page(&few)[3 * (255 * 256 + 255)], 0);
+        // The levels' typeface is a corner of its page.
+        let pixels = filled(&LEVELS, 1);
+        assert_eq!((pixels[3 * (16 * 256 + 16) + 3], pixels[3 * (16 * 256 + 128) + 3]), (1 + 9, 0));
     }
 
     static FIRST: KnownPage =
@@ -718,40 +863,45 @@ mod tests {
 
     #[test]
     fn the_atlas_has_every_sign_once_from_whichever_disc_has_it() {
-        // Common cells alike; after them each its own. Their last rows
-        // are nothing, so that an accent can be moved.
+        // Common cells alike; after them each its own. Their first two
+        // and last rows are nothing, so that an accent can be moved.
         let page = |base: u8| {
-            let mut cells = filled(&LARGE, 1);
+            let mut cells = LARGE.cut(&filled(&LARGE, 1));
             for (number, cell) in cells.iter_mut().enumerate().skip(48) {
                 cell.fill(base.wrapping_add(number as u8));
                 cell[..3 * 32 * 2].fill(0);
+                cell[3 * 32 * 31..].fill(0);
             }
-            cells
+            LARGE.page(&vec![0; 3 * PAGE * PAGE], &cells)
         };
-        let sources = [Source { cells: page(100), page: &FIRST }, Source { cells: page(200), page: &SECOND }];
+        let sources =
+            [Source { pixels: page(100), page: &FIRST }, Source { pixels: page(200), page: &SECOND }];
         let (atlas, present) = LARGE.atlas(&sources).unwrap();
+        let atlas = LARGE.cut(&atlas);
         assert_eq!(atlas.len(), 64);
         // The common cells are the first disc's.
-        assert!(atlas[..48] == sources[0].cells[..48]);
+        assert!(atlas[..48] == LARGE.cut(&sources[0].pixels)[..48]);
         let cell = |sign| &atlas[LARGE.cell_of(sign).unwrap() as usize];
         // The hyphen from the first disc's cell 50, though the second has it too.
         assert_eq!(cell(Hyphen)[3 * 32 * 2], 150);
         assert_eq!(cell(Grave)[3 * 32 * 2], 149);
         // The tilde from the second disc, whose build draws accents one
         // unit higher: two rows up in its cell.
-        assert_eq!((cell(Tilde)[0], cell(Tilde)[3 * 32 * 2 - 3], cell(Tilde)[3 * 32 * 30]), (249, 249, 0));
+        assert_eq!((cell(Tilde)[0], cell(Tilde)[3 * 32 * 29 - 3], cell(Tilde)[3 * 32 * 29]), (249, 249, 0));
         // What no disc has is empty.
         assert!(cell(Acute).iter().all(|&byte| byte == 0));
         assert_eq!(present, [Grave, Tilde, Hyphen]);
         // A sign reaching the bottom of its cell over a cell that is not
         // empty is lifted by a pixel; one that cannot be is an error.
-        let mut low = page(100);
+        let mut low = LARGE.cut(&page(100));
         low[49][3 * 32 * 31..].fill(7);
-        let (atlas, _) = LARGE.atlas(&[Source { cells: low.clone(), page: &FIRST }]).unwrap();
-        let grave = &atlas[LARGE.cell_of(Grave).unwrap() as usize];
+        let lowered =
+            |cells: &Cells| Source { pixels: LARGE.page(&vec![0; 3 * PAGE * PAGE], cells), page: &FIRST };
+        let (atlas, _) = LARGE.atlas(&[lowered(&low)]).unwrap();
+        let grave = &LARGE.cut(&atlas)[LARGE.cell_of(Grave).unwrap() as usize];
         assert!(grave[3 * 32 * 31..].iter().all(|&byte| byte == 0) && grave[3 * 32 * 30..][..3] == [7; 3]);
         low[49].fill(7);
-        assert!(LARGE.atlas(&[Source { cells: low, page: &FIRST }]).is_err());
+        assert!(LARGE.atlas(&[lowered(&low)]).is_err());
     }
 
     #[test]

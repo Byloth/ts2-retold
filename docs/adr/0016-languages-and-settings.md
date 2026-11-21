@@ -341,3 +341,20 @@ Added by the owner the same day, for the one function:
   another angle in the same frame. The texts themselves are the
   original's pixel for pixel.
 
+## The levels' typeface (2026-11-22)
+
+- Sheet 0x14 on texture 32: cells of 16 by 16, eight across, in a corner
+  of a page of other sprites (the same picture in 36 files of each disc).
+  51 common cells; the Spanish and Italian pages add five accents and
+  `¿ ¡ Ø Æ Œ Ç`, the French one the accents, a ring and the two
+  ligatures. A typeface is therefore a grid in a corner of a page, and
+  the atlas leaves the rest of the page as it is.
+- The reference draws it one character at a time (`0x49B630`); its own
+  code lays the texts out (the boxes of messages, with `^` for a
+  highlight and `~` for a new line; the pause menu). Only that function
+  is replaced, so the layout stays the game's.
+- Seen on screen: the Spanish pause menu, with its accents.
+- The accents' height is the French build's (4): its ring stands at the
+  top of its cell and cannot be moved higher; the Spanish and Italian
+  accents are moved down in their cells instead.
+

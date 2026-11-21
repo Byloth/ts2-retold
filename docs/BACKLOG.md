@@ -176,17 +176,14 @@ out of here into the roadmap or an ADR when work on them starts.
   mechanism for all, no code of a language's own. Done for the three:
   the texts, place by place (330, 345 and 333 places); speech, movies and all textures read from the
   language's disc. **Next, in this order:**
-  1. the typefaces. **Done for the large one** (`one-typeface`): one
-     atlas put together from all the discs at hand, one table, one native
-     function in place of `0x49B580`; with it the Italian executable's
-     functions and tables are gone, and every language runs the
-     reference's code with the reference's timings (same number of frames
-     and the same instants of every change of screen up to the main menu,
-     in the four languages). Still to do the same way: the small typeface
-     (`0x49B2A0`, `0x49B3B0`), the levels' one (`0x49B630`, whose page
-     differs between the English disc and the others) and the text boxes
-     (`0x49D390`, `0x49D910`). Until then accents in those are wrong in
-     Italian, French and Spanish;
+  1. the typefaces: **done** (`one-typeface`). One atlas of each of the
+     three (large, small, levels') put together from all the discs at
+     hand, one table, and native functions in place of the reference's
+     four (`0x49B580`, `0x49B2A0`, `0x49B3B0`, `0x49B630`); the Italian
+     executable's functions and tables are gone, and every language runs
+     the reference's code with the reference's timings. The boxes of the
+     levels' messages (`0x49D390`, `0x49D910`) keep the game's own layout
+     and draw through the replaced character function;
   2. texts that a language's build split over two lines are joined as
      the lines of one text (`Hybrid::texts_between`), and about thirty
      texts each language had left in English, in code that differs
@@ -200,20 +197,33 @@ out of here into the roadmap or an ADR when work on them starts.
   3. the other places where something is put beside a text by a fixed
      number, to be found screen by screen and placed from the text's
      extent like the main menu's arrows.
-  Known about the atlas of the large typeface:
-  - no disc's executable draws `Ø` (the Spanish and French pages seem to
-    have its picture): its place in the atlas is empty, `UNVERIFIED`
-    whether any text needs it;
-  - a letter with an accent is on screen in one place so far, the
-    Spanish main menu ("reproductor vídeos"); the others are known by the
-    recorded calls only (same cells as each build draws, the accent 4
-    higher);
-  - the atlas is made at every start; a built game would make it once.
+  Known about the atlases:
+  - what each disc's page holds was written down by looking at it
+    (`typeface::PAGES`); a page not listed there (another pressing,
+    another language) is not used and not replaced, and nothing says so
+    yet when the game starts;
+  - whether the French small page's cell after the ring is Æ or Œ is
+    `UNVERIFIED`;
+  - seen on screen with accents: the Spanish main menu and options (large
+    and small), the Spanish pause menu (levels'). Not yet: a message box
+    of a level, the screens for saving and for the keys;
+  - the atlases are made at every start; a built game would make them
+    once.
+  Known about the layout, where the reference's suits English only:
+  - the pause menu's dark box is as wide as the English texts: the
+    Spanish ones run past it;
+  - a text of two lines stands around the height of the reference's one
+    line: in the options the lower line comes close to the screen's
+    edge.
   Still to do besides:
   - the comparison with each language's own game for every other screen:
     options, controls, graphics settings, loading and saving, the pause
     menu, the messages of the levels, the credits, the movie viewer;
-  - choosing the language in a settings file instead of `--with`;
+  - choosing the language in a settings file instead of `--with`
+    (**for the owner to decide**; proposed: the keyword `LANGUAGE` the
+    game's `toy2.ini` already has, read by the tool from the directory
+    the game writes to, picking among the discs at hand the one whose
+    build is of that language);
   - a reading of all the text pairs by someone who knows the game
     (`andy pair --json`).
 - **The first vertex of each sprite's quad has an unset specular colour**:

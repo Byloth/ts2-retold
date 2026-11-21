@@ -63,7 +63,7 @@ pub fn build(game_dirs: &[PathBuf]) -> Result<Atlases, String> {
             for picture in pictures.into_iter().filter(is_candidate) {
                 let Some(page) = typeface::known_page(&builds::sha256_hex(&picture.pixels)) else { continue };
                 if !sources.iter().any(|(sha256, _)| *sha256 == page.sha256) {
-                    sources.push((page.sha256, Source { cells: page.face.cut(&picture.pixels), page }));
+                    sources.push((page.sha256, Source { pixels: picture.pixels, page }));
                 }
             }
         }
@@ -77,15 +77,8 @@ pub fn build(game_dirs: &[PathBuf]) -> Result<Atlases, String> {
         if of_face.is_empty() {
             return Err(format!("no known page of the {} typeface on the discs at hand", face.name));
         }
-        let (atlas, signs) = face.atlas(&of_face)?;
-        let bleeding = face.bleeding(&atlas);
-        if !bleeding.is_empty() {
-            return Err(format!(
-                "in the {} typeface's atlas, cells {bleeding:?} would show as a line over the cells under them",
-                face.name
-            ));
-        }
-        atlases.push(Atlas { face, pixels: face.page(&atlas), signs });
+        let (pixels, signs) = face.atlas(&of_face)?;
+        atlases.push(Atlas { face, pixels, signs });
     }
     Ok(Atlases(atlases))
 }
