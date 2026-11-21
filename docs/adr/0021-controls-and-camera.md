@@ -58,15 +58,19 @@ What the game does was read from its code first (`docs/CODE-DISCOVERY.md`,
    (`Input::frame_motion`), and recordings carry it (`move X Y WHEEL`) and
    the buttons (`press MOUSE_RIGHT`). A session with the mouse replays as
    one with the keyboard does.
-5. **The window holds the mouse while the game has it**: a press on the
+5. **In the visor the mouse aims** (part of `orbit-camera`): where the
+   visor's function is about to turn the aim by its two rates
+   (`0x403FC1`), the mouse's movement of the frame turns it first, straight
+   and not through the rates: sideways it turns the character, as the
+   visor does, and up and down it moves the aim's elevation within the
+   visor's own limits. The direction actions go on working beside it.
+6. **The window holds the mouse while the game has it**: a press on the
    picture takes it (pointer hidden and held), F10 or leaving the window
    gives it back. The game is given the mouse's own movement, not the
    pointer's.
 
 ## Still to build (in this order)
 
-- The visor aimed by the mouse (its two rates are driven by the direction
-  actions and by the analogue pair).
 - The settings in the game's own screens: bindings of mouse and joypad in
   the controls screen, a third camera in the pause menu beside "active" and
   "passive", sensitivity and inverted axes; kept in the project's settings

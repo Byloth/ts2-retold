@@ -63,6 +63,16 @@ pub static REPLACEMENTS: &[Replacement] = &[
     },
     Replacement {
         modification: ORBIT_CAMERA,
+        address: |_| crate::camera::VISOR_TURNS,
+        name: "the visor's aim",
+        callee_pops: 0,
+        resume: Some(crate::camera::VISOR_TURNED),
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::camera::aim_visor,
+    },
+    Replacement {
+        modification: ORBIT_CAMERA,
         address: |_| crate::camera::ANGLES_DECIDED,
         name: "the camera's angles",
         callee_pops: 0,

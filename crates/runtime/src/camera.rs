@@ -49,6 +49,59 @@ const KEY_TURN: i32 = 16;
 const LOWEST: i32 = -0x280;
 const HIGHEST: i32 = 0x380;
 
+/// In the visor's function (`0x4038E0`): where every path arrives with the
+/// two rates it turns the aim by, and the instruction after the two this
+/// stands for.
+pub const VISOR_TURNS: u32 = 0x0040_3FC1;
+pub const VISOR_TURNED: u32 = 0x0040_3FC6;
+/// Where the character faces: the visor looks that way.
+const HEADING: u32 = 0x0052_F30E;
+/// In the visor the camera's wanted place holds the aim's elevation
+/// instead, 0 for level; a quarter turn more, it is kept within these.
+const AIM_ELEVATION: u32 = 0x0C;
+const AIM_LIMITS: (i32, i32) = (0xC8, 0x720);
+
+/// The mouse's movement of this frame as angles, sideways and up or down.
+fn mouse_turn(m: &mut Machine) -> [i32; 2] {
+    let motion = m.os.input.frame_motion;
+    let controls = &mut m.os.controls;
+    let mut turned = [0; 2];
+    for axis in 0..2 {
+        let parts = motion[axis] * controls.turn[axis] + controls.turn_left_over[axis];
+        turned[axis] = parts.div_euclid(256);
+        controls.turn_left_over[axis] = parts.rem_euclid(256);
+    }
+    if controls.inverted {
+        turned[1] = -turned[1];
+    }
+    turned
+}
+
+/// In place of two instructions of the visor, where it is about to turn
+/// the aim by its two rates: the mouse's movement turns it first, straight
+/// and not through the rates. `ebp` holds the camera, `ebx` the time step,
+/// `esi` the rate sideways; it leaves their product in `eax`, as the two
+/// instructions do.
+pub fn aim_visor(m: &mut Machine) -> Result<(), Stop> {
+    let camera = m.cpu.regs[5];
+    let [sideways, down] = mouse_turn(m);
+    if sideways != 0 {
+        let heading = m.game_half(HEADING)? as i32;
+        m.set_game_half(HEADING, (heading + sideways) as u32 & 0xFFF)?;
+    }
+    if down != 0 {
+        let elevation = (m.game_word(camera + AIM_ELEVATION)? as i32 + 0x400) & 0xFFF;
+        let elevation = (elevation + down * VISOR_DOWN).clamp(AIM_LIMITS.0, AIM_LIMITS.1);
+        m.set_game_word(camera + AIM_ELEVATION, (elevation - 0x400) as u32 & 0xFFF)?;
+    }
+    m.cpu.regs[0] = m.cpu.regs[3].wrapping_mul(m.cpu.regs[6]);
+    m.cpu.instructions += 2;
+    Ok(())
+}
+
+/// Which way the aim's elevation goes when the mouse moves down.
+const VISOR_DOWN: i32 = 1;
+
 fn sine(m: &mut Machine, angle: i32) -> Result<i32, Stop> {
     Ok(m.game_half(SINES + 2 * (angle & 0xFFF) as u32)? as u16 as i16 as i32)
 }
@@ -69,17 +122,7 @@ pub fn orbit(m: &mut Machine) -> Result<(), Stop> {
 
     // The angles: the mouse's movement of this frame, and the camera's two
     // actions as the original's own camera takes them.
-    let motion = m.os.input.frame_motion;
-    let controls = &mut m.os.controls;
-    let mut turned = [0; 2];
-    for axis in 0..2 {
-        let parts = motion[axis] * controls.turn[axis] + controls.turn_left_over[axis];
-        turned[axis] = parts.div_euclid(256);
-        controls.turn_left_over[axis] = parts.rem_euclid(256);
-    }
-    if controls.inverted {
-        turned[1] = -turned[1];
-    }
+    let turned = mouse_turn(m);
     let (left, right) = camera_actions(m)?;
     let keys = KEY_TURN * step * (left as i32 - right as i32);
     let yaw = (m.game_half(camera + YAW)? as i32 + turned[0] + keys) & 0xFFF;
