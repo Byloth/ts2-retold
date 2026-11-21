@@ -158,8 +158,10 @@ struct Meter {
     since: Instant,
     /// Frames of the game shown.
     frames: u32,
-    /// The time spent running the machine and showing its frames; the
-    /// rest was spent waiting for the game's clock.
+    /// The time spent running the machine: the game's code and what the
+    /// runtime does for it, drawing included. The rest went into waiting
+    /// for the game's clock and into putting frames on the screen, which
+    /// waits for the display.
     busy: Duration,
     reading: Reading,
 }
@@ -488,9 +490,7 @@ impl ApplicationHandler for Play {
         if self.window.is_none() || self.stopped.is_some() {
             return;
         }
-        let turn = Instant::now();
         self.advance(event_loop);
-        self.meter.busy += turn.elapsed();
         // The gauge follows the meter while it is shown.
         if let Some(reading) = self.meter.read()
             && self.gauge.is_some_and(|shown| shown != reading)
@@ -528,7 +528,10 @@ impl Play {
                 return;
             }
             self.machine.clock_limit = Some(self.clock_start + now);
-            match self.machine.run(STRETCH) {
+            let running = Instant::now();
+            let stop = self.machine.run(STRETCH);
+            self.meter.busy += running.elapsed();
+            match stop {
                 Stop::Budget | Stop::Idle => {}
                 stop => {
                     self.stopped = Some(stop);

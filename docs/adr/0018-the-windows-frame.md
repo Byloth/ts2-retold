@@ -62,7 +62,9 @@ shown.
 - It reads, twice a second: the frames of the game shown in a second, the
   time from one frame to the next, and the frames a second there could
   be if nothing were waited for: the frames shown divided by the time
-  spent running the machine and showing them. The game presents at the
+  spent running the machine (the game's code and what the runtime does
+  for it, drawing included; not the putting of a frame on the screen,
+  which waits for the display). The game presents at the
   display's 60 a second (ADR 0014); the third figure is the room left.
 - Its look is a space ranger's wrist panel, drawn by code
   (`crates/cli/src/gauge.rs`): a white shell with a purple rim, a lime
