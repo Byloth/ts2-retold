@@ -157,6 +157,11 @@ out/recomp/target/release/andy-game play
 # Every block checked against the interpreter; rerun on the recordings
 # after any change to crates/cpu, to the emitter or to a replacement
 out/recomp/target/release/andy-game boot --check-blocks --limit 9000000000 --seconds 260 --input out/input/level.txt
+# The recordings of out/input rerun and compared with their recorded
+# outcomes (instructions, frames, sound); --record writes them down. The
+# compiled game must give what the interpreter gives.
+tools/check.sh --record
+tools/check.sh out/recomp/target/release/andy-game
 # How fast frames are made, stretch by stretch (boot's options)
 cargo run --release --bin andy -- bench --limit 9000000000 --seconds 240 --gpu --input out/input/level.txt
 # What the game plays, as a WAVE file (the same for the same run)
