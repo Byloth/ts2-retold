@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use andy_gpu::{Bar, Gpu, Presenter};
+use andy_gpu::{Bar, Gpu, Overlay, Presenter};
 use andy_runtime::{Machine, Stop};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -23,10 +23,13 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 
 use crate::frame::{Button, Edge, Frame, Hit};
+use crate::gauge::{self, Reading};
 
 /// Instructions the machine runs before the window is looked at again: two
 /// milliseconds of its clock.
 const STRETCH: u64 = 2 * andy_runtime::INSTRUCTIONS_PER_MS;
+/// How often the gauge takes a new reading.
+const READING_EVERY: Duration = Duration::from_millis(500);
 /// How long the machine may run before events are handled again.
 const TURN: Duration = Duration::from_millis(8);
 /// The game's picture at the size the window opens with, and the smallest
@@ -150,6 +153,37 @@ fn key_name(key: KeyCode) -> Option<&'static str> {
     })
 }
 
+/// What the gauge reads from: what happened since its last reading.
+struct Meter {
+    since: Instant,
+    /// Frames of the game shown.
+    frames: u32,
+    /// The time spent running the machine and showing its frames; the
+    /// rest was spent waiting for the game's clock.
+    busy: Duration,
+    reading: Reading,
+}
+
+impl Meter {
+    /// A new reading, if it is time for one.
+    fn read(&mut self) -> Option<Reading> {
+        let elapsed = self.since.elapsed();
+        if elapsed < READING_EVERY {
+            return None;
+        }
+        let (seconds, busy) = (elapsed.as_secs_f64(), self.busy.as_secs_f64());
+        let frames = self.frames as f64;
+        self.reading = Reading {
+            frames: (frames / seconds).round() as u32,
+            frame_tenths: if self.frames == 0 { 0 } else { (10_000.0 * seconds / frames).round() as u32 },
+            // What the same work would give if nothing were waited for.
+            could: if busy > 0.0 { (frames / busy).round() as u32 } else { 0 },
+        };
+        (self.since, self.frames, self.busy) = (Instant::now(), 0, Duration::ZERO);
+        Some(self.reading)
+    }
+}
+
 struct Play {
     machine: Machine,
     window: Option<Arc<Window>>,
@@ -163,6 +197,9 @@ struct Play {
     bar_pressed: Option<(Instant, (f64, f64))>,
     /// Frames of the game shown so far.
     frames_shown: u64,
+    meter: Meter,
+    /// Whether the gauge is shown (F9), and the reading it shows.
+    gauge: Option<Reading>,
     /// When the machine's clock read `clock_start`.
     started: Instant,
     clock_start: u64,
@@ -192,6 +229,22 @@ impl Play {
 
     fn gpu(&mut self) -> &mut Gpu {
         self.machine.video.as_any_mut().downcast_mut().expect("the window's backend is the GPU one")
+    }
+
+    /// Gives the presenter the gauge's picture as it now reads, or takes
+    /// it away.
+    fn lay_gauge(&mut self) {
+        let Some(mut presenter) = self.presenter.take() else { return };
+        let scale = self.window.as_ref().map_or(1.0, |window| window.scale_factor());
+        let picture = self.gauge.map(|reading| gauge::render(reading, scale));
+        let overlay = picture.as_ref().map(|picture| Overlay {
+            rgba: &picture.rgba,
+            width: picture.width,
+            height: picture.height,
+            margin: (gauge::MARGIN * scale).round() as u32,
+        });
+        presenter.set_overlay(self.gpu(), overlay);
+        self.presenter = Some(presenter);
     }
 
     /// Shows the frame and, inside it, the surface the game last presented.
@@ -349,6 +402,7 @@ impl ApplicationHandler for Play {
                 self.frame = Some(frame);
                 (self.window, self.presenter) = (Some(window), Some(presenter));
                 // The window has a picture from the start.
+                self.lay_gauge();
                 self.show();
                 // And only now is there sound: what plays it is on the
                 // screen first.
@@ -405,6 +459,16 @@ impl ApplicationHandler for Play {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let PhysicalKey::Code(key) = event.physical_key else { return };
+                // F9 is the window's own: it shows and hides the gauge,
+                // and the game does not see it.
+                if key == KeyCode::F9 {
+                    if event.state == ElementState::Pressed && !event.repeat {
+                        self.gauge = if self.gauge.is_some() { None } else { Some(self.meter.reading) };
+                        self.lay_gauge();
+                        self.show();
+                    }
+                    return;
+                }
                 if let Some(code) = key_name(key).and_then(andy_runtime::keys::code) {
                     self.machine.os.input.keys[code as usize] = event.state == ElementState::Pressed;
                 }
@@ -424,6 +488,23 @@ impl ApplicationHandler for Play {
         if self.window.is_none() || self.stopped.is_some() {
             return;
         }
+        let turn = Instant::now();
+        self.advance(event_loop);
+        self.meter.busy += turn.elapsed();
+        // The gauge follows the meter while it is shown.
+        if let Some(reading) = self.meter.read()
+            && self.gauge.is_some_and(|shown| shown != reading)
+        {
+            self.gauge = Some(reading);
+            self.lay_gauge();
+            self.show();
+        }
+    }
+}
+
+impl Play {
+    /// Lets the machine run as far as real time has, showing its frames.
+    fn advance(&mut self, event_loop: &ActiveEventLoop) {
         let turn = Instant::now();
         loop {
             // The machine's clock may go as far as real time has, counted
@@ -457,6 +538,7 @@ impl ApplicationHandler for Play {
             }
             let frames = self.machine.os.ddraw.frames;
             if frames != self.frames_shown {
+                self.meter.frames += (frames - self.frames_shown) as u32;
                 self.frames_shown = frames;
                 self.show();
             }
@@ -469,7 +551,7 @@ impl ApplicationHandler for Play {
 }
 
 /// Runs the game in a window until it stops or the window is closed.
-pub fn play(machine: Machine, seconds: Option<u64>) -> Result<(Machine, Option<Stop>), String> {
+pub fn play(machine: Machine, seconds: Option<u64>, gauge: bool) -> Result<(Machine, Option<Stop>), String> {
     let event_loop = EventLoop::new().map_err(|error| format!("no window system: {error}"))?;
     let mut play = Play {
         machine,
@@ -480,6 +562,8 @@ pub fn play(machine: Machine, seconds: Option<u64>) -> Result<(Machine, Option<S
         pointer: None,
         bar_pressed: None,
         frames_shown: 0,
+        meter: Meter { since: Instant::now(), frames: 0, busy: Duration::ZERO, reading: Reading::default() },
+        gauge: gauge.then(Reading::default),
         started: Instant::now(),
         clock_start: 0,
         until: seconds.map(|seconds| seconds * 1000),
@@ -490,6 +574,13 @@ pub fn play(machine: Machine, seconds: Option<u64>) -> Result<(Machine, Option<S
     event_loop.run_app(&mut play).map_err(|error| error.to_string())?;
     // The sound device is let go before the machine is handed back.
     play.machine.audio = None;
+    let reading = play.meter.reading;
+    println!(
+        "at the end             {} frames a second, {:.1} ms a frame; {} a second without waiting",
+        reading.frames,
+        reading.frame_tenths as f64 / 10.0,
+        reading.could
+    );
     if let Some(losses) = play.losses.take() {
         let (starved, dropped) = losses.count();
         let rate = andy_runtime::audio::OUTPUT_RATE as u64;

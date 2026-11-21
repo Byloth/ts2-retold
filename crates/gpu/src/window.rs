@@ -14,6 +14,27 @@ pub struct Presenter {
     /// A black pixel, drawn large behind the game's picture.
     black: wgpu::BindGroup,
     surround: Option<Surround>,
+    /// The same pipeline, laying a picture over what is there by its
+    /// transparency; and the picture laid over the game's, if any.
+    pipeline_over: wgpu::RenderPipeline,
+    overlay: Option<Laid>,
+}
+
+/// A picture of the window's own laid over the game's picture, in its
+/// top right corner: rows of red, green, blue, alpha bytes, shown pixel
+/// for pixel, `margin` pixels from the corner.
+pub struct Overlay<'a> {
+    pub rgba: &'a [u8],
+    pub width: u32,
+    pub height: u32,
+    pub margin: u32,
+}
+
+struct Laid {
+    picture: wgpu::BindGroup,
+    width: u32,
+    height: u32,
+    margin: u32,
 }
 
 /// What the window shows around the game's picture when it draws its own
@@ -162,31 +183,35 @@ impl Presenter {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("show"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &gpu.shader,
-                entry_point: Some("vertex_show"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &gpu.shader,
-                entry_point: Some("fragment_show"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: configuration.format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline_with = |blend: Option<wgpu::BlendState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("show"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &gpu.shader,
+                    entry_point: Some("vertex_show"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &gpu.shader,
+                    entry_point: Some("fragment_show"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: configuration.format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = pipeline_with(None);
+        let pipeline_over = pipeline_with(Some(wgpu::BlendState::ALPHA_BLENDING));
         // The picture is enlarged without smoothing: its pixels stay pixels.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("show"),
@@ -195,7 +220,17 @@ impl Presenter {
             ..Default::default()
         });
         let black = picture(gpu, &layout, &sampler, 1, 1, &[0, 0, 0, 0xFF]);
-        Presenter { surface, configuration, pipeline, layout, sampler, black, surround: None }
+        Presenter {
+            surface,
+            configuration,
+            pipeline,
+            layout,
+            sampler,
+            black,
+            surround: None,
+            pipeline_over,
+            overlay: None,
+        }
     }
 
     /// Sets what is shown around the game's picture from now on.
@@ -206,6 +241,16 @@ impl Presenter {
             height: bar.height,
             border: bar.border,
             border_color: wgpu::Color { r: red, g: green, b: blue, a: 1.0 },
+        });
+    }
+
+    /// Sets the picture laid over the game's from now on, or takes it away.
+    pub fn set_overlay(&mut self, gpu: &Gpu, overlay: Option<Overlay>) {
+        self.overlay = overlay.map(|overlay| Laid {
+            picture: picture(gpu, &self.layout, &self.sampler, overlay.width, overlay.height, overlay.rgba),
+            width: overlay.width,
+            height: overlay.height,
+            margin: overlay.margin,
         });
     }
 
@@ -286,6 +331,17 @@ impl Presenter {
                         1.0,
                     );
                     pass.draw(0..3, 0..1);
+                }
+                // The overlay, in the room's top right corner, if it fits.
+                if let Some(laid) = &self.overlay {
+                    let (width, height, margin) = (laid.width as f32, laid.height as f32, laid.margin as f32);
+                    if width + margin <= room_width && height + margin <= room_height {
+                        pass.set_pipeline(&self.pipeline_over);
+                        pass.set_bind_group(0, &laid.picture, &[]);
+                        let x = left + room_width - margin - width;
+                        pass.set_viewport(x, top as f32 + margin, width, height, 0.0, 1.0);
+                        pass.draw(0..3, 0..1);
+                    }
                 }
             }
         }

@@ -3,6 +3,7 @@
 mod atlas;
 mod capture;
 mod frame;
+mod gauge;
 mod play;
 mod speaker;
 mod wav;
@@ -53,7 +54,7 @@ USAGE:
                                     machine's clock (which also passes
                                     while the game waits)
                                     --with/--without ID switch a modification
-    andy play    [EXE] [--args TEXT] [--seconds N] [--with/--without ID]
+    andy play    [EXE] [--args TEXT] [--seconds N] [--gauge] [--with/--without ID]
                                     Run the game in a window, with the
                                     keyboard and the sound device;
                                     --seconds closes the window after N
@@ -113,6 +114,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut draws = None;
     let mut sound = None;
     let mut gpu = false;
+    let mut gauge = false;
     let mut frames = None;
     let mut frame_step = 1u64;
     let mut input = None;
@@ -146,6 +148,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 dumps.push(range.ok_or("--dump needs ADDR:LEN in hexadecimal")?);
             }
             "--gpu" => gpu = true,
+            "--gauge" => gauge = true,
             "--input" => input = Some(PathBuf::from(args.next().ok_or("--input needs a file")?)),
             "--frames" => frames = Some(PathBuf::from(args.next().ok_or("--frames needs a directory")?)),
             "--yuv" => yuv = Some(PathBuf::from(args.next().ok_or("--yuv needs a path")?)),
@@ -353,7 +356,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             os.command_line_arguments = game_args;
             os.mods = mods;
             os.addresses = addresses;
-            let (machine, stop) = play::play(Machine::load(&image, os), seconds)?;
+            let (machine, stop) = play::play(Machine::load(&image, os), seconds, gauge)?;
             println!("frames shown           {}", machine.os.ddraw.frames);
             match stop {
                 Some(stop) => println!("stopped at eip {:#010x}: {}", machine.cpu.eip, describe(&stop)),

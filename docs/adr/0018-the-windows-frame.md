@@ -48,3 +48,30 @@ while the window changes width.
   when the native Windows target is tried (`docs/BACKLOG.md`).
 - The corners are square: round ones need a window with transparency,
   which WSLg shows opaque.
+
+## The gauge (2026-11-22)
+
+Asked for by the owner: **F9 shows and hides a small panel in the top
+right corner of the game's picture** that says how fast the game is being
+shown.
+
+- It is the window's own, like the frame: drawn by the window over the
+  game's picture (`Presenter::set_overlay`), never by the game, and F9
+  does not reach the game. (The reference's default keys do not use F9;
+  a player who gave F9 to an action in the game would lose it here.)
+- It reads, twice a second: the frames of the game shown in a second, the
+  time from one frame to the next, and the frames a second there could
+  be if nothing were waited for: the frames shown divided by the time
+  spent running the machine and showing them. The game presents at the
+  display's 60 a second (ADR 0014); the third figure is the room left.
+- Its look is a space ranger's wrist panel, drawn by code
+  (`crates/cli/src/gauge.rs`): a white shell with a purple rim, a lime
+  strip with three oval buttons, a dark glass with green figures of seven
+  strokes, a band of red and white stripes. No picture, name or sign of
+  the rights holders is used (rule 3).
+- `andy play --gauge` starts with it shown, and `andy play` prints the
+  last reading when it ends.
+- Seen as a picture (`cargo test -p andy gauge -- --ignored` writes
+  `out/gauge.png`); on the window itself it is `UNVERIFIED` by the tool's
+  author, who cannot see the Windows desktop.
+
