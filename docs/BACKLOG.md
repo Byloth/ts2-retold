@@ -160,17 +160,27 @@ out of here into the roadmap or an ADR when work on them starts.
 
 - A verified dump of a pressed disc as a second witness for the reference
   copy in `ref/disc` (ADR 0003).
-- **Italian** (ADR 0016): to be a hybrid on the reference build, made by
-  transplanting texts and the language's own functions from the Italian
-  executable through an address map between the two builds. The map
-  exists (`crates/recomp/src/pairing.rs`, `andy pair`): on the two
-  executables it aligns 33,023 of 33,186 relocation sites in the code
-  and 1,521 of 1,522 elsewhere, pairs 8,622 addresses, 5 of them with
-  more than one answer and 41 left without. Next: the texts, taken site
-  by site (one English text can stand for two Italian ones: the name of
-  the "back" key and the menu's "go back"); the files served from the
-  Italian disc; then the functions one by one, the glyph functions first
-  (where the font's accents come from in the data is not yet known).
+- **Italian** (ADR 0016), the modification `language-italian`: a hybrid on
+  the reference build, made by transplanting from the Italian executable
+  through an address map between the two builds (`andy pair`: 33,023 of
+  33,186 relocation sites in the code aligned, 1,521 of 1,522 elsewhere,
+  8,623 addresses paired, 4 with more than one answer, 40 without).
+  Done: the texts, place by place (330 places, some 300 texts): the title,
+  the main menu, the level names and the levels' own texts come out
+  Italian. Still to do, in order:
+  - the functions that differ (about 40), each looked at once and, if its
+    difference is language, taken from the Italian executable: the four
+    that draw glyphs first (accents, the hyphen, the colon and the
+    narrower spacing; where the accents' glyphs come from in the data is
+    not yet known), then the menus, whose texts in changed code are still
+    English or stand against the wrong entry (the entry that loads a game
+    reads as the Italian build's "load and save options");
+  - speech, movies and screens served from the Italian disc, by a list of
+    which files are language and which are the later revision's level
+    data;
+  - choosing the language in a settings file instead of `--with`;
+  - a reading of all 300 pairs by someone who knows the game (the list is
+    written by `andy pair --json`).
 - **The other languages**: French, Spanish, Dutch, Swedish, Norwegian and
   Finnish are at hand as disc images; German, Danish and Portuguese have
   not been found (ADR 0003).

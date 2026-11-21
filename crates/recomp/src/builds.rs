@@ -15,12 +15,26 @@ pub struct Build {
     pub confirmed_retail: bool,
 }
 
-pub const KNOWN_BUILDS: &[Build] = &[Build {
-    id: "pc-1999-10-29",
-    sha256: "023eb6a9459443b34d24cf685591bfeb3b95e1acf579405f6d8fa4407ccbdaf0",
-    description: "PC, linked 1999-10-29, English text",
-    confirmed_retail: true,
-}];
+/// The reference build, which everything else is tied to.
+pub const REFERENCE: &str = "pc-1999-10-29";
+/// The Italian build, the source of the Italian language (ADR 0016).
+pub const ITALIAN: &str = "pc-2000-02-16-it";
+
+pub const KNOWN_BUILDS: &[Build] = &[
+    Build {
+        id: REFERENCE,
+        sha256: "023eb6a9459443b34d24cf685591bfeb3b95e1acf579405f6d8fa4407ccbdaf0",
+        description: "PC, linked 1999-10-29, English text",
+        confirmed_retail: true,
+    },
+    Build {
+        id: ITALIAN,
+        sha256: "e46abf778d2c532883000d313c1ca383130389ba704266c5190ced7f2cfbfeb5",
+        description: "PC, linked 2000-02-16, Italian text; not run itself, its language is brought to the \
+                      reference build",
+        confirmed_retail: false,
+    },
+];
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()

@@ -29,17 +29,32 @@ pub struct Modification {
 
 pub const SKIP_MODE_SELECT: &str = "skip-mode-select";
 
-pub static CATALOGUE: &[Modification] = &[Modification {
-    id: SKIP_MODE_SELECT,
-    class: Class::Feature,
-    affects_simulation: false,
-    enabled_by_default: true,
-    summary: "The start-up \"Screen Mode Select\" window does not exist: the game's routine for it is \
+pub const LANGUAGE_ITALIAN: &str = "language-italian";
+
+pub static CATALOGUE: &[Modification] = &[
+    Modification {
+        id: LANGUAGE_ITALIAN,
+        class: Class::Feature,
+        affects_simulation: false,
+        enabled_by_default: false,
+        summary: "The game in Italian (ADR 0016), from the user's own Italian disc (TS2_ITALIAN_DIR): the \
+                  places of the executable that refer to a text refer to the text the Italian executable \
+                  has in the same place. INCOMPLETE: texts only, and only where the code of the two \
+                  executables is the same; the letters with accents are drawn wrongly, and speech, movies \
+                  and screens are still English.",
+    },
+    Modification {
+        id: SKIP_MODE_SELECT,
+        class: Class::Feature,
+        affects_simulation: false,
+        enabled_by_default: true,
+        summary: "The start-up \"Screen Mode Select\" window does not exist: the game's routine for it is \
               replaced by one that makes the choice the original proposes when nothing was saved (the \
               first hardware 3D device and the first mode at least 480 lines high: 640x480 at 16 bits, \
               full screen). Choices saved in toy2.cfg are ignored, since they index lists that differ \
               from one machine to another.",
-}];
+    },
+];
 
 /// Which modifications are switched on for this run.
 #[derive(Debug, Clone)]

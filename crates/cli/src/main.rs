@@ -54,9 +54,13 @@ USAGE:
                                     keyboard and the sound device;
                                     --seconds closes the window after N
                                     seconds of the machine's clock
-    andy pair FIRST SECOND          Pair the addresses of two builds of the
+    andy pair FIRST SECOND [--json OUT]
+                                    Pair the addresses of two builds of the
                                     game (two language versions) through
-                                    their code, and report how well (ADR 0016)
+                                    their code, and report how well (ADR 0016);
+                                    --json lists the places whose text would
+                                    change, with both texts (derived from the
+                                    game: keep it out of git)
     andy mods                       List the modifications (docs/MODIFICATIONS.md)
     andy movie FILE [--yuv OUT [--pictures N]] [--pcm OUT]
                                     Decode a movie of the game and write its
@@ -167,7 +171,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         let (Some(first), Some(second)) = (first, second) else {
             return Err("pair needs two executables".into());
         };
-        return pair(Path::new(first), Path::new(second));
+        return pair(Path::new(first), Path::new(second), json.as_deref());
     }
     if command == "movie" {
         let file = positional.get(1).ok_or("movie needs a file")?;
@@ -184,7 +188,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
     };
     let bytes = fs::read(&exe).map_err(|e| format!("cannot read {}: {e}", exe.display()))?;
-    let image = Image::parse(&bytes).map_err(|e| format!("{}: {e}", exe.display()))?;
+    let mut image = Image::parse(&bytes).map_err(|e| format!("{}: {e}", exe.display()))?;
 
     println!("file      {} ({} bytes)", exe.display(), bytes.len());
     println!("sha256    {}", builds::sha256_hex(&bytes));
@@ -194,6 +198,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
             println!("build     {} - {} ({status})", build.id, build.description);
         }
         None => println!("build     UNKNOWN - addresses and patches are not valid for this file"),
+    }
+
+    if mods.is_enabled(andy_runtime::mods::LANGUAGE_ITALIAN) {
+        image = italian(&bytes, image)?;
     }
 
     match command.as_str() {
@@ -507,8 +515,28 @@ fn write_surfaces(machine: &mut Machine, directory: &Path) -> Result<usize, Box<
 
 /// Decodes a movie and writes its pictures one after another as planar
 /// YUV 4:2:0, the form other decoders can write too.
+/// The reference image with the Italian language, taken from the user's
+/// Italian disc (ADR 0016).
+fn italian(reference_bytes: &[u8], reference: Image) -> Result<Image, String> {
+    if builds::identify(reference_bytes).map(|build| build.id) != Some(builds::REFERENCE) {
+        return Err("the Italian language can only be brought to the reference build".into());
+    }
+    let dir =
+        env::var_os("TS2_ITALIAN_DIR").ok_or("language-italian needs TS2_ITALIAN_DIR, the Italian game")?;
+    let path = Path::new(&dir).join("toy2.exe");
+    let bytes = fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    if builds::identify(&bytes).map(|build| build.id) != Some(builds::ITALIAN) {
+        return Err(format!("{} is not the Italian build this was made for", path.display()));
+    }
+    let other = Image::parse(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+    let pairing = andy_recomp::pairing::pair(&reference, &other);
+    let transplant = andy_recomp::language::transplant_texts(&reference, &other, &pairing, &[]);
+    println!("italian   {} places refer to Italian texts", transplant.moved.len());
+    Ok(transplant.image)
+}
+
 /// Pairs the addresses of two builds of the game and reports how well.
-fn pair(first: &Path, second: &Path) -> Result<(), String> {
+fn pair(first: &Path, second: &Path, texts: Option<&Path>) -> Result<(), String> {
     let load = |path: &Path| -> Result<Image, String> {
         let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
         println!("{}  {}", builds::sha256_hex(&bytes), path.display());
@@ -544,6 +572,34 @@ fn pair(first: &Path, second: &Path) -> Result<(), String> {
         )
         .count();
     println!("pairs of different strings     {differing}");
+    let transplant = andy_recomp::language::transplant_texts(&first, &second, &pairing, &[]);
+    println!("places that would change text  {}", transplant.moved.len());
+    if let Some(path) = texts {
+        // For reading: every place, what it refers to and what it would.
+        // The texts are Latin-1.
+        let show = |image: &Image, at: u32| -> String {
+            andy_recomp::language::text(image, at)
+                .unwrap_or_default()
+                .iter()
+                .map(|&byte| byte as char)
+                .collect()
+        };
+        let list: Vec<_> = transplant
+            .moved
+            .iter()
+            .map(|moved| {
+                serde_json::json!({
+                    "site": format!("{:#010x}", moved.site),
+                    "from": format!("{:#010x}", moved.from),
+                    "to": format!("{:#010x}", moved.to),
+                    "first": show(&first, moved.from),
+                    "second": show(&second, moved.to),
+                })
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&list).map_err(|error| error.to_string())?;
+        fs::write(path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+    }
     Ok(())
 }
 

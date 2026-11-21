@@ -15,8 +15,13 @@
 //! - each pair of aligned sites holds the same address in both builds: a
 //!   pair of addresses;
 //! - relocation sites outside the code are the pointers in tables of the
-//!   data. Their sequences are aligned by how far apart they stand, which
-//!   pairs the addresses that only tables refer to.
+//!   data. Their sequences are aligned by two things: whether a site holds
+//!   an address the code has already paired (then it can only stand
+//!   against a site holding that address's pair), and how close it stands
+//!   to the site before it (next to it, one apart, or further: the first
+//!   of a table); and, where the next four bytes are not another address,
+//!   what they are: a table of names with a number beside each is aligned
+//!   by its numbers. That pairs the addresses only tables refer to.
 //!
 //! An address is usually referred to from many places, and all of them
 //! must give the same answer. Where they do not, the answer most of them
@@ -29,9 +34,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::pe::Image;
 
-/// Sites further apart than this are all "far apart" to the alignment of
-/// the data.
-const FAR: u32 = 64;
+/// Sites further apart than this are not in one table: all such
+/// distances are alike to the alignment of the data.
+const FAR: u32 = 8;
 
 /// The addresses of one build in another.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -50,6 +55,9 @@ pub struct Pairing {
     pub data_sites: (usize, usize, usize),
     /// Addresses the first build refers to that have no pair.
     pub unpaired: Vec<u32>,
+    /// The aligned relocation sites themselves: a site of the first build
+    /// and the site of the second that stands in the same place.
+    pub sites: Vec<(u32, u32)>,
 }
 
 /// The pairs of indices at which two sequences agree, in a longest common
@@ -153,17 +161,28 @@ fn code_pieces(image: &Image) -> (Vec<u32>, Vec<Vec<u8>>) {
     (sites, pieces)
 }
 
-/// The relocation sites outside the code and, for each, how far it is
-/// from the one before.
-fn data_gaps(image: &Image) -> (Vec<u32>, Vec<u32>) {
+/// The relocation sites outside the code and, for each, what the
+/// alignment goes by: how far it is from the one before (0 beyond
+/// [`FAR`]), and the address it holds as the first build knows it, if the
+/// code has paired that address (`known` gives it), else 0; and the four
+/// bytes after it, unless an address begins among them.
+type Mark = (u32, u32, Option<u32>);
+
+fn data_marks(image: &Image, known: impl Fn(u32) -> Option<u32>) -> (Vec<u32>, Vec<Mark>) {
     let code = image.code_section().map_or(0..0, |code| code.va..code.va + code.data.len() as u32);
     let sites: Vec<u32> = image.relocs.iter().copied().filter(|site| !code.contains(site)).collect();
-    let gaps = sites
+    let marks = sites
         .iter()
         .enumerate()
-        .map(|(index, &site)| if index == 0 { 4 } else { (site - sites[index - 1]).min(FAR) })
+        .map(|(index, &site)| {
+            let gap = if index == 0 { 0 } else { site - sites[index - 1] };
+            let held = image.read_u32(site).and_then(&known).unwrap_or(0);
+            let beside =
+                image.relocs_in(site + 1, site + 8).is_empty().then(|| image.read_u32(site + 4)).flatten();
+            (if gap > FAR { 0 } else { gap }, held, beside)
+        })
         .collect();
-    (sites, gaps)
+    (sites, marks)
 }
 
 /// Gives each piece a number, the same for equal pieces.
@@ -181,8 +200,12 @@ fn numbered<'p>(numbers: &mut HashMap<&'p [u8], u32>, pieces: &'p [Vec<u8>]) -> 
 pub fn pair(first: &Image, second: &Image) -> Pairing {
     // Every answer an address was given, with the number of sites.
     let mut answers: BTreeMap<u32, HashMap<u32, usize>> = BTreeMap::new();
-    let mut vote = |sites: (&[u32], &[u32]), matches: &[(usize, usize)]| {
+    let mut aligned_sites = Vec::new();
+    let mut vote = |answers: &mut BTreeMap<u32, HashMap<u32, usize>>,
+                    sites: (&[u32], &[u32]),
+                    matches: &[(usize, usize)]| {
         for &(a, b) in matches {
+            aligned_sites.push((sites.0[a], sites.1[b]));
             let (Some(from), Some(to)) = (first.read_u32(sites.0[a]), second.read_u32(sites.1[b])) else {
                 continue;
             };
@@ -196,15 +219,23 @@ pub fn pair(first: &Image, second: &Image) -> Pairing {
     let numbered_a = numbered(&mut numbers, &pieces_a);
     let numbered_b = numbered(&mut numbers, &pieces_b);
     let code_matches = align(&numbered_a, &numbered_b);
-    vote((&sites_a, &sites_b), &code_matches);
+    vote(&mut answers, (&sites_a, &sites_b), &code_matches);
     let code_sites = (sites_a.len(), sites_b.len(), code_matches.len());
 
-    let ((sites_a, gaps_a), (sites_b, gaps_b)) = (data_gaps(first), data_gaps(second));
-    let data_matches = align(&gaps_a, &gaps_b);
-    vote((&sites_a, &sites_b), &data_matches);
+    // What the code has paired so far, each way.
+    let chosen = |given: &HashMap<u32, usize>| {
+        given.iter().max_by_key(|&(&to, &count)| (count, std::cmp::Reverse(to))).map(|(&to, _)| to)
+    };
+    let forward: HashMap<u32, u32> =
+        answers.iter().filter_map(|(&from, given)| Some((from, chosen(given)?))).collect();
+    let backward: HashMap<u32, u32> = forward.iter().map(|(&from, &to)| (to, from)).collect();
+    let (sites_a, marks_a) = data_marks(first, |held| forward.contains_key(&held).then_some(held));
+    let (sites_b, marks_b) = data_marks(second, |held| backward.get(&held).copied());
+    let data_matches = align(&marks_a, &marks_b);
+    vote(&mut answers, (&sites_a, &sites_b), &data_matches);
     let data_sites = (sites_a.len(), sites_b.len(), data_matches.len());
 
-    let mut pairing = Pairing { code_sites, data_sites, ..Pairing::default() };
+    let mut pairing = Pairing { code_sites, data_sites, sites: aligned_sites, ..Pairing::default() };
     for (from, given) in answers {
         let mut given: Vec<(u32, usize)> = given.into_iter().collect();
         given.sort_by_key(|&(to, count)| (std::cmp::Reverse(count), to));

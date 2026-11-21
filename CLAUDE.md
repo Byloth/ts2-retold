@@ -132,9 +132,13 @@ cargo run --release --bin andy -- boot --limit 1300000000 --gpu --input out/inpu
 # Into the first level. --seconds bounds the machine's clock, which also
 # passes while the game waits for a key (the instruction limit does not).
 cargo run --release --bin andy -- boot --limit 6000000000 --seconds 400 --gpu --input out/input/level.txt --frames out/frames --frame-step 50
-# The addresses of one language's build in another's (ADR 0016). The
-# Italian disc is laid out in the git-ignored ref/disc-it.
-cargo run --release --bin andy -- pair ref/game/toy2.exe ref/disc-it/Setup/Toy2/Hd/toy2.exe
+# Italian (ADR 0016, incomplete): the Italian disc is in the git-ignored
+# ref/disc-it, laid out as a game directory by
+# tools/game-dir-from-disc.sh ref/disc-it ref/game-it
+export TS2_ITALIAN_DIR="$PWD/ref/game-it"
+cargo run --release --bin andy -- play --with language-italian
+# The addresses of one language's build in another's, and the texts that change
+cargo run --release --bin andy -- pair ref/game/toy2.exe ref/game-it/toy2.exe --json out/lang/texts.json
 # What the game plays, as a WAVE file (the same for the same run)
 cargo run --release --bin andy -- boot --limit 6000000000 --seconds 300 --input out/input/level.txt --sound out/sound/level.wav
 ```
