@@ -93,8 +93,12 @@ pub static CATALOGUE: &[Modification] = &[
         summary: "The mouse's buttons are controls (ADR 0021): where the game has read its devices and made its \
                   mask of actions, the actions bound to the buttons held are added. By default the left button \
                   fires, the middle one spins, and the right one holds the visor view (first person) for as long \
-                  as it is held, where the key for it is a switch. The original takes no notice of the mouse; with \
-                  the mouse left alone nothing differs.",
+                  as it is held, where the key for it is a switch. The options have a fifth entry, \"mouse and \
+                  camera\" (in the game's language), whose page is made after the graphics page: the mouse's \
+                  sensitivity in ten steps, the vertical axis inverted or not, and the right button holding \
+                  the visor or spinning. What is set there, and the camera chosen in the pause menu, is kept \
+                  in retold.ini in the state directory. The original takes no notice of the mouse and has \
+                  four options; with the mouse left alone and the options not opened nothing differs.",
     },
     Modification {
         id: RENDER_SCALE,

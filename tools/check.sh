@@ -34,7 +34,7 @@ unset TS2_LANGUAGE_DIR TS2_OTHER_DISCS
 # recordings made by `play --record --state DIR` on an empty directory
 # want; `new-orbit` moreover leaves the camera turned by the mouse on (the
 # other recordings are of the keyboard and the original's camera).
-runs="level:260 pause:200 options:170 options-list:135 en-menu:150 robot:94:new stairs:90:new wall:100:new orbit:64:new-orbit visor:70:new-orbit pad:64:new-orbit wasd:59:new-orbit cameras:74:new-orbit"
+runs="level:260 pause:200 options:170 options-list:135 en-menu:150 mouse-page:205 robot:94:new stairs:90:new wall:100:new orbit:64:new-orbit visor:70:new-orbit pad:64:new-orbit wasd:59:new-orbit cameras:74:new-orbit"
 
 mkdir -p out/check
 one() {
@@ -44,11 +44,14 @@ one() {
     work=out/check/$name
     rm -rf "$work"
     mkdir -p "$work"
-    state=out/run
+    # A run never writes to out/run itself: it starts from a copy of it.
+    state=$work/state
+    cp -r out/run "$state"
+    rm -f "$state/retold.ini"
     camera="--without orbit-camera --without walking-keys"
     # The outcomes are of the game's own picture, pixel for pixel.
     grain="--without render-scale"
-    case $rest in *:new*) state=$work/state; mkdir -p "$state" ;; esac
+    case $rest in *:new*) rm -rf "$state"; mkdir -p "$state" ;; esac
     case $rest in *-orbit) camera= ;; esac
     # shellcheck disable=SC2086
     "$program" boot --limit 12000000000 --seconds "$seconds" --gpu --state "$state" $camera $grain \

@@ -76,7 +76,10 @@ pub struct Os {
 
 impl Os {
     pub fn new(files: Files) -> Os {
-        Os { heap_next: HEAP_START, virtual_next: VIRTUAL_START, files, ..Os::default() }
+        let mut os = Os { heap_next: HEAP_START, virtual_next: VIRTUAL_START, files, ..Os::default() };
+        // The project's own settings, as the last session left them.
+        os.read_settings();
+        os
     }
 
     /// The handle of the process heap.

@@ -61,6 +61,53 @@ pub fn orbit_camera_wording(language: Option<&str>) -> &'static [u8] {
     }
 }
 
+/// The project's wordings for the options' entry "mouse and camera" and
+/// its page (ADR 0021), in the game's Latin-1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseAndCameraWording {
+    /// The entry in the list of options, and the page's title.
+    pub name: &'static [u8],
+    /// The row of the mouse's sensitivity; its number is written after it.
+    pub sensitivity: &'static [u8],
+    /// The row of the vertical axis: as it is, and inverted.
+    pub vertical: [&'static [u8]; 2],
+    /// The row of the right button: holding the visor, and spinning.
+    pub right_button: [&'static [u8]; 2],
+}
+
+/// Those wordings in the language of a build (the reference's, English,
+/// for `None`). The visor and the spin are called what each language's
+/// controls screen calls them. A row is at most twenty-three characters
+/// with its number, which is what fits between the page's two arrows.
+pub fn mouse_and_camera_wording(language: Option<&str>) -> MouseAndCameraWording {
+    match language {
+        Some(crate::builds::ITALIAN) => MouseAndCameraWording {
+            name: b"mouse e telecamera",
+            sensitivity: b"sensibilit\xE0 mouse",
+            vertical: [b"verticale normale", b"verticale invertita"],
+            right_button: [b"tasto destro: visuale", b"tasto destro: rotazione"],
+        },
+        Some(crate::builds::FRENCH) => MouseAndCameraWording {
+            name: b"souris et cam\xE9ra",
+            sensitivity: b"sensibilit\xE9 souris",
+            vertical: [b"axe vertical normal", b"axe vertical invers\xE9"],
+            right_button: [b"bouton droit: viseur", b"bouton droit: tournoyer"],
+        },
+        Some(crate::builds::SPANISH) => MouseAndCameraWording {
+            name: b"rat\xF3n y c\xE1mara",
+            sensitivity: b"sensibilidad rat\xF3n",
+            vertical: [b"eje vertical normal", b"eje vertical invertido"],
+            right_button: [b"bot\xF3n derecho: vista", b"bot\xF3n derecho: girar"],
+        },
+        _ => MouseAndCameraWording {
+            name: b"mouse and camera",
+            sensitivity: b"mouse sensitivity",
+            vertical: [b"vertical axis normal", b"vertical axis inverted"],
+            right_button: [b"right button: visor", b"right button: spin"],
+        },
+    }
+}
+
 /// Makes the main menu's entry for loading and saving read `wording`. To
 /// be done before [`load_before_options`], which moves the entry.
 pub fn word_load_and_save(image: &mut Image, wording: &[u8]) -> Result<(), String> {
@@ -87,6 +134,19 @@ pub fn word_load_and_save(image: &mut Image, wording: &[u8]) -> Result<(), Strin
 mod tests {
     use super::*;
     use crate::pe::Section;
+
+    #[test]
+    fn the_rows_of_the_mouse_page_fit_between_its_arrows() {
+        use crate::builds::{FRENCH, ITALIAN, SPANISH};
+        for language in [None, Some(ITALIAN), Some(FRENCH), Some(SPANISH)] {
+            let wording = mouse_and_camera_wording(language);
+            // The sensitivity's row is followed by a space and two digits.
+            assert!(wording.sensitivity.len() + 3 <= 23, "{language:?}");
+            for row in wording.vertical.into_iter().chain(wording.right_button) {
+                assert!(row.len() <= 23, "{language:?}");
+            }
+        }
+    }
 
     #[test]
     fn the_two_entries_change_places() {

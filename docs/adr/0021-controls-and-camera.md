@@ -95,14 +95,64 @@ What the game does was read from its code first (`docs/CODE-DISCOVERY.md`,
    game's cameras chosen the stretch of the follower runs as the game's
    code.
 
-## Still to build (in this order)
+10. **The options have a fifth entry, "mouse and camera"** (part of
+    `mouse-controls`; `crates/runtime/src/options.rs`). Not rows of the
+    controls screen: each of those captures one control into the game's
+    saved table, which has no room. The options screen is one function
+    with its own loop (`0x4371B0`); five short stretches of it are
+    replaced, each standing for the instructions it takes the place of:
+    - `0x437407`–`0x437410`, the three instructions that keep down from
+      going past the fourth entry: it stops at the fifth. The pointers
+      need nothing: the word after the table of the four heights
+      (`0x4F6BE4`) holds 145, the fifth's height at the same step;
+    - `0x43768C`, the first instruction after the four entries are drawn:
+      the fifth is drawn with the same function, at 145 + 14;
+    - `0x437374`, the first instruction of what the loop sets aside on
+      entering a page: the page takes its copy of the settings;
+    - `0x43773C`, the first instruction of the loop's search for the page
+      the pointers are at: at the fifth entry a frame of the page is done
+      and the loop goes on as after any page (`0x4376AE`);
+    - `0x4375BB`, the first instruction of what the loop does when a page
+      is accepted: the copy becomes the settings and they are written
+      down. Cancel needs nothing: the copy is dropped.
 
-- A fifth entry of the options, "mouse and camera": sensitivity, inverted
-  axes, the buttons' bindings. (Not the controls screen: each of its rows
-  captures one control into the game's saved table.)
-- The settings kept between sessions, in the project's settings file
-  (ADR 0016), not in the game's saved block: the camera chosen is the
-  orbit one at every start for now.
+    The page follows the game's graphics page (`0x49CAA0`): the title, a
+    row every 25 units from 0x4B, the row chosen blinking, the two arrows
+    of sheet 0x38 going after it, that page's own two lines of help, its
+    delay of 15 time steps between directions and its sounds. Its rows:
+    the mouse's sensitivity (1 to 10; a step is 56 of `Controls::turn`,
+    both axes, and the fourth is the 224 the mouse had), the vertical
+    axis (normal or inverted), the right button (holding the visor, or
+    spinning; the middle button spins either way). The rows are drawn
+    with the small typeface's function that places a text (`0x49B3B0`),
+    centred: the one that centres on the screen (`0x49B2A0`) has no
+    digits and draws 1 to 4 as the buttons' icons. Accepting sets only
+    what a row was moved on.
+    The pointers of `menu-arrows-by-text` take the fifth entry's width
+    into account.
+11. **The settings are kept between sessions** in `retold.ini` in the
+    state directory, beside the game's saves, not in the game's saved
+    block. It is read when the machine's system is made (`Os::new`), and
+    written when the page is accepted and when a camera is chosen in the
+    pause menu. No file means the defaults. Lines of `key=value`; `#`
+    starts a comment; a line that is not a known key with one of its
+    values is passed over and leaves that setting as it is:
+
+    ```ini
+    mouse_sensitivity=4      # 1 to 10
+    vertical_inverted=no     # yes, no
+    left_button=fire         # nothing, visor (while held), fire, spin
+    right_button=visor
+    middle_button=spin
+    fourth_button=nothing
+    camera=orbit             # orbit, game (one of the game's two)
+    ```
+
+    Which of the game's two cameras is the game's to remember (its bit is
+    saved with the game). `boot` prints the settings it read.
+
+## Still to build
+
 - The joypad on Linux: the `gilrs` crate wants the system's libudev
   headers there, which this project does not ask to be installed. On
   Windows the window reads the first pad found when the game starts
@@ -130,5 +180,18 @@ What the game does was read from its code first (`docs/CODE-DISCOVERY.md`,
   given none, 0 to 65535, and all ones for a direction pad that is not
   there are DirectInput's as remembered, `UNVERIFIED` against a reference.
 - The mouse turns the camera by seven eighths of a unit of angle a count
-  (4681 counts a turn), lowered once on the owner's word; it wants a
-  setting.
+  (4681 counts a turn) unless the options say otherwise: from a quarter
+  of that to two and a half times it.
+- With `mouse-controls` on, the list of options draws one text more, so a
+  run that opens the options is no longer the original's to the
+  instruction: the outcomes `tools/check.sh` has for `options` and
+  `options-list` are to be recorded again. With it off the options are
+  the original's (the `options` recording gives the same instructions
+  and the same frames as before).
+- A recording replays from the state it was made from, and the settings
+  file is part of that state: one that sets something leaves it for the
+  next run from the same directory.
+- The page was run in English, with the one typeface and with the
+  original's text functions. The wordings of the other languages were
+  not seen drawn, and neither the page in the compiled game
+  (`--check-blocks`): `UNVERIFIED`.

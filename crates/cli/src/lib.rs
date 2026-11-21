@@ -304,6 +304,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
     };
     let orbit_camera_text = andy_recomp::menu::orbit_camera_wording(language);
     let render_scale = if mods.is_enabled(andy_runtime::mods::RENDER_SCALE) { scale } else { 1 };
+    let page_wording = andy_recomp::menu::mouse_and_camera_wording(language);
     if one_typeface && mods.is_enabled(andy_runtime::mods::MENU_LOAD_SAVE_WORDING) {
         let wording = andy_recomp::menu::load_save_wording(language);
         andy_recomp::menu::word_load_and_save(&mut image, wording)?;
@@ -404,6 +405,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
                 state,
                 orbit_camera_text,
                 render_scale,
+                page_wording,
                 frames: frames.map(|directory| (directory, frame_step)),
             },
         ),
@@ -419,6 +421,7 @@ fn run(args: Vec<String>, compiled: Option<&'static andy_runtime::blocks::Blocks
             os.command_line_arguments = game_args;
             os.mods = mods;
             os.controls.orbit_camera_text = orbit_camera_text.to_vec();
+            os.controls.page_wording = page_wording;
             os.addresses = addresses;
             let mut machine = Machine::load(&image, os);
             if let Some(blocks) = blocks {
@@ -619,6 +622,8 @@ struct BootOptions {
     orbit_camera_text: &'static [u8],
     /// The grain triangles are drawn at (the `render-scale` modification).
     render_scale: u32,
+    /// The wordings of the options' entry for the mouse and the camera.
+    page_wording: andy_recomp::menu::MouseAndCameraWording,
     /// Where to write presented frames, and every how many.
     frames: Option<(PathBuf, u64)>,
 }
@@ -664,6 +669,7 @@ fn boot(image: &Image, options: BootOptions) {
         state: write_dir,
         orbit_camera_text,
         render_scale,
+        page_wording,
     } = options;
     // The program reads the game directory and writes only to the state
     // directory.
@@ -678,9 +684,14 @@ fn boot(image: &Image, options: BootOptions) {
         files.texture_filter = Some(filter);
     }
     let mut os = Os::new(files);
+    // The project's settings, if the state directory holds any: as read.
+    if os.files.read_own(andy_runtime::controls::SETTINGS_FILE).is_some() {
+        println!("settings read          {}", os.controls.settings_text().trim_end().replace('\n', ", "));
+    }
     os.command_line_arguments = game_args;
     os.mods = mods;
     os.controls.orbit_camera_text = orbit_camera_text.to_vec();
+    os.controls.page_wording = page_wording;
     os.addresses = addresses;
     let mut machine = Machine::load(image, os);
     if let Some(blocks) = blocks {

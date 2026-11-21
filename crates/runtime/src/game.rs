@@ -74,6 +74,56 @@ pub static REPLACEMENTS: &[Replacement] = &[
         function: crate::controls::add_the_mouse,
     },
     Replacement {
+        modification: MOUSE_CONTROLS,
+        address: |_| crate::options::PAGE_ENTERED,
+        name: "a page of the options entered",
+        callee_pops: 0,
+        resume: Some(crate::options::PAGE_ENTERED_NEXT),
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::options::enter_page,
+    },
+    Replacement {
+        modification: MOUSE_CONTROLS,
+        address: |_| crate::options::DOWN_ASKED,
+        name: "the last entry of the options",
+        callee_pops: 0,
+        resume: Some(crate::options::DOWN_TAKEN),
+        also_resumes: &[crate::options::DOWN_REFUSED],
+        reference_only: true,
+        function: crate::options::limit_down,
+    },
+    Replacement {
+        modification: MOUSE_CONTROLS,
+        address: |_| crate::options::PAGE_ACCEPTED,
+        name: "a page of the options accepted",
+        callee_pops: 0,
+        resume: Some(crate::options::PAGE_ACCEPTED_NEXT),
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::options::accept_page,
+    },
+    Replacement {
+        modification: MOUSE_CONTROLS,
+        address: |_| crate::options::ENTRIES_DRAWN,
+        name: "the options' fifth entry",
+        callee_pops: 0,
+        resume: Some(crate::options::ENTRIES_DRAWN_NEXT),
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::options::draw_fifth_entry,
+    },
+    Replacement {
+        modification: MOUSE_CONTROLS,
+        address: |_| crate::options::PAGE_SOUGHT,
+        name: "the options' page for the mouse and the camera",
+        callee_pops: 0,
+        resume: Some(crate::options::PAGE_SOUGHT_NEXT),
+        also_resumes: &[crate::options::PAGE_DONE],
+        reference_only: true,
+        function: crate::options::run_page,
+    },
+    Replacement {
         modification: ORBIT_CAMERA,
         address: |_| crate::camera::ENTRIES_COUNTED,
         name: "the entries of a page of the pause menu",
@@ -253,7 +303,8 @@ const ARROW_AFTER: i32 = 20;
 // pointers beside the entry chosen, at x = 48 and x = 240, and then its
 // four entries in the small typeface, centred, eight apart: right for an
 // entry of twenty letters, the longest the reference has. A longer one,
-// as other languages have, runs under the pointers.
+// as other languages have, runs under the pointers. (With the mouse's
+// controls the list has a fifth entry, drawn by `crate::options`.)
 
 /// Where the stretch that draws the two pointers begins, and where the
 /// code goes on after the two calls (it then removes their eight
@@ -288,15 +339,20 @@ const POINTER_BEFORE: i32 = 32;
 /// its two calls on the stack.
 fn draw_options_pointers(m: &mut Machine) -> Result<(), Stop> {
     let (turn, y) = (m.cpu.regs[3], m.cpu.regs[6]);
-    let mut half_widths = [0i32; 4];
-    for (site, half_width) in OPTIONS_TEXTS.into_iter().zip(&mut half_widths) {
+    let mut half_widths = Vec::with_capacity(5);
+    for site in OPTIONS_TEXTS {
         let text = m.game_word(site)?;
         let text = crate::typeface::text_at(m, text);
-        *half_width = crate::typeface::small_half_width(&text);
+        half_widths.push(crate::typeface::small_half_width(&text));
+    }
+    // The fifth entry, where the list has one (`crate::options`).
+    if m.os.mods.is_enabled(MOUSE_CONTROLS) {
+        half_widths.push(crate::typeface::small_half_width(m.os.controls.page_wording.name));
     }
     // Where the pointers are between two entries, in 256ths of a step.
-    let along = ((y as i32 - OPTIONS_TOP) * 256 / OPTIONS_STEP).clamp(0, 3 * 256);
-    let (from, part) = ((along / 256).min(2) as usize, along - (along / 256).min(2) * 256);
+    let last = half_widths.len() as i32 - 1;
+    let along = ((y as i32 - OPTIONS_TOP) * 256 / OPTIONS_STEP).clamp(0, last * 256);
+    let (from, part) = ((along / 256).min(last - 1) as usize, along - (along / 256).min(last - 1) * 256);
     let half_width = (half_widths[from] * (256 - part) + half_widths[from + 1] * part) / 256;
     let left = POINTER_LEFT.min(SCREEN_MIDDLE - half_width - POINTER_BEFORE);
     let right = POINTER_RIGHT.max(SCREEN_MIDDLE + half_width);
