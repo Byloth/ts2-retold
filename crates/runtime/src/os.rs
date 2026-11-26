@@ -65,6 +65,9 @@ pub struct Os {
     /// The coins the original would have drawn in the last frame: those
     /// that can be picked up (see `crate::distance`).
     pub(crate) coins_within_reach: std::collections::HashSet<u32>,
+    /// The enemies and characters beyond the game's range that are drawn
+    /// in this frame all the same (see `crate::distance`).
+    pub(crate) far_objects: Vec<u32>,
     /// The controls the project adds (ADR 0021).
     pub controls: crate::controls::Controls,
     /// A recording of input being played back, if any.

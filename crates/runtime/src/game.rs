@@ -9,8 +9,8 @@
 use andy_cpu::interp::Fault;
 
 use crate::mods::{
-    DRAW_DISTANCE, MENU_ARROWS_BY_TEXT, MOUSE_CONTROLS, ONE_TYPEFACE, ORBIT_CAMERA, SKIP_MODE_SELECT,
-    WALKING_KEYS,
+    DRAW_DISTANCE, FAR_ENEMIES, MENU_ARROWS_BY_TEXT, MOUSE_CONTROLS, ONE_TYPEFACE, ORBIT_CAMERA,
+    SKIP_MODE_SELECT, WALKING_KEYS,
 };
 use crate::{Machine, Stop};
 
@@ -54,6 +54,36 @@ pub fn replacement_points() -> Vec<u32> {
 }
 
 pub static REPLACEMENTS: &[Replacement] = &[
+    Replacement {
+        modification: FAR_ENEMIES,
+        address: |_| crate::distance::SEEN_DECIDED,
+        name: "the objects seen from afar",
+        callee_pops: 0,
+        resume: None,
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::distance::find_far_objects,
+    },
+    Replacement {
+        modification: FAR_ENEMIES,
+        address: |_| crate::distance::DRAW_LIST_MADE,
+        name: "the list of objects to draw",
+        callee_pops: 0,
+        resume: None,
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::distance::make_draw_list,
+    },
+    Replacement {
+        modification: FAR_ENEMIES,
+        address: |_| crate::distance::ENTRY_ASKED,
+        name: "whether an object of the list is drawn",
+        callee_pops: 0,
+        resume: Some(crate::distance::ENTRY_DRAWN),
+        also_resumes: &[crate::distance::ENTRY_PASSED_OVER],
+        reference_only: true,
+        function: crate::distance::entry_is_drawn,
+    },
     Replacement {
         modification: DRAW_DISTANCE,
         address: |_| crate::distance::SCENERY_LIMITS,

@@ -39,6 +39,7 @@ pub const ORBIT_CAMERA: &str = "orbit-camera";
 pub const WALKING_KEYS: &str = "walking-keys";
 pub const RENDER_SCALE: &str = "render-scale";
 pub const DRAW_DISTANCE: &str = "draw-distance";
+pub const FAR_ENEMIES: &str = "far-enemies";
 
 pub static CATALOGUE: &[Modification] = &[
     Modification {
@@ -123,9 +124,20 @@ pub static CATALOGUE: &[Modification] = &[
                   world's far plane. The original ends its detailed scenery 6500 units from the camera \
                   (12000 at its own high detail) and its coins at about 6650. Only tests that decide \
                   drawing are changed: a coin is still picked up only where the original would have \
-                  drawn it. Enemies are left as they are: whether one is drawn and whether it is awake \
-                  are one thing in the game. Drawing more is more of the game's code run in a frame, and the \
+                  drawn it. Enemies are far-enemies' matter. Drawing more is more of the game's code run in a frame, and the \
                   machine's clock is its instructions: frames take longer on it, as on a slower computer.",
+    },
+    Modification {
+        id: FAR_ENEMIES,
+        class: Class::Graphics,
+        affects_simulation: true,
+        enabled_by_default: true,
+        summary: "Enemies and characters are drawn from farther away than the game sees them (ADR 0022): \
+                  within four times their range times the factor of draw-distance, if they are alive, \
+                  in a room that was drawn and in view. The picture only: the game does not update one \
+                  until its own rule wakes it, so from afar they stand as they were left and do not \
+                  move. The original draws an enemy only while it updates it. Like draw-distance it \
+                  costs time on the machine's clock. Decided by the owner.",
     },
     Modification {
         id: WALKING_KEYS,

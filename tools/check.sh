@@ -54,7 +54,7 @@ one() {
     rm -f "$state/retold.ini"
     camera="--without orbit-camera --without walking-keys"
     # The outcomes are of the game's own picture, pixel for pixel.
-    grain="--without render-scale --without draw-distance"
+    grain="--without render-scale --without draw-distance --without far-enemies"
     case $rest in *:new*) rm -rf "$state"; mkdir -p "$state" ;; esac
     case $rest in *-orbit) camera= ;; esac
     language=
@@ -63,7 +63,9 @@ one() {
             rm -rf "$state"
             cp -r "out/state/$name-inizio" "$state"
             camera=
-            grain="--without render-scale"
+            # (Recorded before enemies were drawn from afar, which costs
+            # time on the machine's clock and so moves a recording.)
+            grain="--without render-scale --without far-enemies"
             language="--with language --interpret"
             ;;
     esac
