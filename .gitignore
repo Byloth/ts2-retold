@@ -1,5 +1,6 @@
 # --- Game files: NEVER commit any of these (see CLAUDE.md, rule 1) ---
 /game/
+/game-*/
 /gamefiles/
 *.exe
 *.dll
