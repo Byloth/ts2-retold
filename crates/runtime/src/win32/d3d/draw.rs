@@ -361,6 +361,86 @@ fn transformed_vertices(bytes: &[u8], layout: &Layout, viewport: Rect) -> Vec<Ve
         .collect()
 }
 
+/// The ends of the segments of a primitive of lines, two indices each;
+/// none for other primitives.
+fn segments(primitive: u32, indices: &[u16]) -> Option<Vec<u16>> {
+    const LINELIST: u32 = 2;
+    const LINESTRIP: u32 = 3;
+    match primitive {
+        LINELIST => Some(indices[..indices.len() - indices.len() % 2].to_vec()),
+        LINESTRIP => Some(indices.windows(2).flatten().copied().collect()),
+        _ => None,
+    }
+}
+
+/// Segments as triangles: each becomes a rectangle one pixel of the
+/// viewport wide, lying along it, with the colours and texture
+/// coordinates of its two ends. The video backend draws triangles only
+/// (ADR 0014), and a rectangle of the picture's own pixels stays one
+/// pixel wide at whatever grain the backend draws.
+///
+/// A segment that goes behind the viewer is cut where it does; one wholly
+/// behind is left out. Which pixels Direct3D's own rule for lines lights
+/// at a line's ends and along a steep or shallow slope is not modelled:
+/// the rectangle covers the pixels whose centres are within half a pixel
+/// of the line.
+fn line_quads(vertices: &[Vertex], ends: &[u16], viewport: Rect) -> (Vec<Vertex>, Vec<u16>) {
+    /// The nearest a point of a line is kept: `w` this small is at the eye.
+    const NEAREST: f32 = 1e-6;
+    let mix = |a: &Vertex, b: &Vertex, t: f32| {
+        let channel = |a: u32, b: u32| {
+            let part = |shift: u32| {
+                let (a, b) = ((a >> shift & 0xFF) as f32, (b >> shift & 0xFF) as f32);
+                ((a + (b - a) * t + 0.5) as u32) << shift
+            };
+            part(0) | part(8) | part(16) | part(24)
+        };
+        Vertex {
+            position: std::array::from_fn(|n| a.position[n] + (b.position[n] - a.position[n]) * t),
+            diffuse: channel(a.diffuse, b.diffuse),
+            specular: channel(a.specular, b.specular),
+            uv: std::array::from_fn(|n| a.uv[n] + (b.uv[n] - a.uv[n]) * t),
+        }
+    };
+    let (half_width, half_height) = (viewport.width as f32 / 2.0, viewport.height as f32 / 2.0);
+    let (mut out, mut indices) = (Vec::new(), Vec::new());
+    for ends in ends.chunks_exact(2) {
+        let (mut a, mut b) = (vertices[ends[0] as usize], vertices[ends[1] as usize]);
+        let (wa, wb) = (a.position[3], b.position[3]);
+        if wa < NEAREST && wb < NEAREST {
+            continue;
+        }
+        if wa < NEAREST {
+            a = mix(&a, &b, (NEAREST - wa) / (wb - wa));
+        } else if wb < NEAREST {
+            b = mix(&b, &a, (NEAREST - wb) / (wa - wb));
+        }
+        // Where the two ends are in the viewport, in pixels.
+        let on_screen = |v: &Vertex| {
+            [v.position[0] / v.position[3] * half_width, v.position[1] / v.position[3] * half_height]
+        };
+        let (pa, pb) = (on_screen(&a), on_screen(&b));
+        let (dx, dy) = (pb[0] - pa[0], pb[1] - pa[1]);
+        let length = (dx * dx + dy * dy).sqrt();
+        // A segment with no length is a point: nothing of a line.
+        if length == 0.0 || !length.is_finite() {
+            continue;
+        }
+        // Half a pixel to either side, across the line.
+        let across = [-dy / length * 0.5 / half_width, dx / length * 0.5 / half_height];
+        let first = out.len() as u16;
+        for (end, side) in [(a, 1.0), (a, -1.0), (b, 1.0), (b, -1.0)] {
+            let w = end.position[3];
+            let mut corner = end;
+            corner.position[0] += across[0] * side * w;
+            corner.position[1] += across[1] * side * w;
+            out.push(corner);
+        }
+        indices.extend_from_slice(&[first, first + 1, first + 2, first + 2, first + 1, first + 3]);
+    }
+    (out, indices)
+}
+
 /// The triangles of a primitive as a triangle list. The order of the
 /// vertices of each triangle keeps its winding and its first vertex, which
 /// gives a flat-shaded triangle its colour.
@@ -423,8 +503,13 @@ fn draw(m: &mut Machine, this: u32, primitive: Primitive, indices: Option<Vec<u1
     if indices.iter().any(|&index| index as u32 >= vertex_count) {
         return Ok(DDERR_INVALIDPARAMS);
     }
-    let Some(indices) = triangles(primitive, &indices) else {
-        return unsupported(format!("points or lines (primitive type {primitive})"));
+    // Lines are drawn as the strips of triangles that cover them (see
+    // `line_quads`): until then their indices are the segments' ends.
+    let segments = segments(primitive, &indices);
+    let indices = match (&segments, triangles(primitive, &indices)) {
+        (Some(ends), _) => ends.clone(),
+        (None, Some(indices)) => indices,
+        (None, None) => return unsupported(format!("points (primitive type {primitive})")),
     };
     // Only the vertices the triangles use are read and prepared: a draw
     // from a vertex buffer names a few of the buffer's many.
@@ -519,6 +604,14 @@ fn draw(m: &mut Machine, this: u32, primitive: Primitive, indices: Option<Vec<u1
             }
         }
     }
+    let (vertices, indices) = match segments {
+        Some(_) => {
+            // A line has no face to turn away.
+            state.cull = Cull::None;
+            line_quads(&vertices, &indices, viewport)
+        }
+        None => (vertices, indices),
+    };
     m.note(|| format!("{} triangles, {state:?}", indices.len() / 3));
     if indices.is_empty() {
         return Ok(DD_OK);
@@ -609,6 +702,35 @@ pub(super) fn draw_indexed_primitive_vb(m: &mut Machine, a: &[u32]) -> HostResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lines_become_rectangles_a_pixel_wide() {
+        assert_eq!(segments(3, &[4, 5, 6]), Some(vec![4, 5, 5, 6]));
+        assert_eq!(segments(2, &[4, 5, 6]), Some(vec![4, 5]));
+        assert_eq!(segments(4, &[4, 5, 6]), None);
+        let vertex = |x: f32, y: f32, w: f32, diffuse: u32| Vertex {
+            position: [x * w, y * w, 0.5 * w, w],
+            diffuse,
+            specular: 0,
+            uv: [0.0; 2],
+        };
+        // A level line across a viewport of 200 by 100, seen from twice
+        // as far at its right end: half a pixel up and down at each end.
+        let ends = [vertex(-0.5, 0.0, 1.0, 0xFF00_0000), vertex(0.5, 0.0, 2.0, 0xFF00_00FF)];
+        let (quad, indices) = line_quads(&ends, &[0, 1], Rect::whole(200, 100));
+        assert_eq!(indices, [0, 1, 2, 2, 1, 3]);
+        let heights: Vec<f32> = quad.iter().map(|v| v.position[1] / v.position[3] * 50.0).collect();
+        assert_eq!(heights, [0.5, -0.5, 0.5, -0.5]);
+        let across: Vec<f32> = quad.iter().map(|v| v.position[0] / v.position[3]).collect();
+        assert_eq!(across, [-0.5, -0.5, 0.5, 0.5]);
+        // Behind the viewer at one end, it is cut there; wholly behind, gone.
+        let ends =
+            [vertex(0.0, 0.0, 1.0, 0xFF00_0000), Vertex { position: [1.0, 0.0, 0.0, -1.0], ..ends[1] }];
+        let (quad, _) = line_quads(&ends, &[0, 1], Rect::whole(200, 100));
+        assert!(quad.len() == 4 && quad.iter().all(|v| v.position[3] > 0.0));
+        let behind = [ends[1], ends[1]];
+        assert!(line_quads(&behind, &[0, 1], Rect::whole(200, 100)).0.is_empty());
+    }
 
     #[test]
     fn strips_and_fans_become_lists_that_keep_winding_and_first_vertex() {

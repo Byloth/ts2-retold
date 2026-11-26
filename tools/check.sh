@@ -33,8 +33,12 @@ unset TS2_LANGUAGE_DIR TS2_OTHER_DISCS
 # (an empty state directory) and not from what out/run holds, as the
 # recordings made by `play --record --state DIR` on an empty directory
 # want; `new-orbit` moreover leaves the camera turned by the mouse on (the
-# other recordings are of the keyboard and the original's camera).
-runs="level:260 pause:200 options:170 options-list:135 en-menu:150 mouse-page:205 robot:94:new stairs:90:new wall:100:new orbit:64:new-orbit visor:70:new-orbit pad:64:new-orbit wasd:59:new-orbit cameras:74:new-orbit"
+# other recordings are of the keyboard and the original's camera);
+# `played-it` is a session the owner played in Italian with everything as
+# it comes, from the state kept in out/state/NAME-inizio (a saved game):
+# it is run in the interpreter by either program, the compiled game being
+# the English one, and needs the Italian disc in ref/game-it.
+runs="level:260 pause:200 options:170 options-list:135 en-menu:150 mouse-page:205 robot:94:new stairs:90:new wall:100:new orbit:64:new-orbit visor:70:new-orbit pad:64:new-orbit wasd:59:new-orbit cameras:74:new-orbit albero:150:played-it"
 
 mkdir -p out/check
 one() {
@@ -53,8 +57,21 @@ one() {
     grain="--without render-scale --without draw-distance"
     case $rest in *:new*) rm -rf "$state"; mkdir -p "$state" ;; esac
     case $rest in *-orbit) camera= ;; esac
+    language=
+    case $rest in
+        *:played-it)
+            rm -rf "$state"
+            cp -r "out/state/$name-inizio" "$state"
+            camera=
+            grain="--without render-scale"
+            language="--with language --interpret"
+            ;;
+    esac
     # shellcheck disable=SC2086
-    "$program" boot --limit 12000000000 --seconds "$seconds" --gpu --state "$state" $camera $grain \
+    # (Each run is a shell of its own: the language is that run's alone.)
+    if [ -n "$language" ]; then export TS2_LANGUAGE_DIR="$PWD/ref/game-it"; fi
+    "$program" boot --limit 12000000000 --seconds "$seconds" --gpu --state "$state" \
+        $camera $grain $language \
         --input "out/input/$name.txt" --frames "$work/frames" --frame-step 100 \
         --sound "$work/sound.wav" > "$work/log.txt" 2>&1 || true
     {
