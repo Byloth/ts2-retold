@@ -33,6 +33,7 @@ const D3DFVF_TEXCOUNT_MASK: u32 = 0xF00;
 // update, vertices need no lighting. None of them changes what is drawn
 // from transformed vertices.
 const KNOWN_FLAGS: u32 = 0x01 | 0x04 | 0x08 | 0x10;
+const D3DDP_DONOTLIGHT: u32 = 0x10;
 
 /// `D3DRENDERSTATE_*` numbers.
 pub(super) mod render_state {
@@ -300,6 +301,7 @@ fn draw_state(device: &Device) -> Result<DrawState, Stop> {
 }
 
 /// Where the parts of a vertex are, from its flexible vertex format.
+#[derive(Debug, Clone, Copy)]
 pub(super) struct Layout {
     pub size: u32,
     pub normal: Option<usize>,
@@ -410,8 +412,12 @@ fn draw(m: &mut Machine, this: u32, primitive: Primitive, indices: Option<Vec<u1
     if flags & !KNOWN_FLAGS != 0 {
         return unsupported(format!("flags {flags:#x}"));
     }
-    if format & D3DFVF_POSITION_MASK != D3DFVF_XYZRHW {
-        return unsupported("vertices Direct3D has to transform and light".into());
+    // Vertices given as they are in the world are transformed here, and
+    // lit unless the call says not to, as `ProcessVertices` does for a
+    // buffer.
+    let untransformed = format & D3DFVF_POSITION_MASK != D3DFVF_XYZRHW;
+    if untransformed && format & D3DFVF_POSITION_MASK != super::vertex_buffer::D3DFVF_XYZ {
+        return unsupported(format!("vertices of format {format:#x} to transform"));
     }
     let indices = indices.unwrap_or_else(|| (0..vertex_count as u16).collect());
     if indices.iter().any(|&index| index as u32 >= vertex_count) {
@@ -469,7 +475,30 @@ fn draw(m: &mut Machine, this: u32, primitive: Primitive, indices: Option<Vec<u1
             color_key,
         });
     }
-    let mut vertices = transformed_vertices(&bytes, &layout, viewport);
+    let mut vertices = if untransformed {
+        use super::vertex_buffer::{Missing, Pipeline};
+        let pipeline = match Pipeline::prepare(m, device_index, &layout, flags & D3DDP_DONOTLIGHT == 0) {
+            Ok(pipeline) => pipeline,
+            Err(Missing::Stop(stop)) => return Err(stop),
+            Err(Missing::Named(what)) => return unsupported(format!("vertices to transform {what}")),
+        };
+        let float =
+            |vertex: &[u8], at: usize| f32::from_le_bytes(vertex[at..at + 4].try_into().expect("four bytes"));
+        bytes
+            .chunks_exact(layout.size as usize)
+            .map(|vertex| {
+                let processed = pipeline.vertex(vertex);
+                Vertex {
+                    position: processed.clip,
+                    diffuse: processed.diffuse,
+                    specular: processed.specular,
+                    uv: layout.uv.map_or([0.0; 2], |at| [float(vertex, at), float(vertex, at + 4)]),
+                }
+            })
+            .collect()
+    } else {
+        transformed_vertices(&bytes, &layout, viewport)
+    };
     // Vertices Direct3D transformed into a buffer, and the program has not
     // touched since, are drawn from their positions before the division by
     // `w`, so that the backend can clip them (see `VertexBuffer`).

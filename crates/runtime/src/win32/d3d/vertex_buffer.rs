@@ -18,7 +18,7 @@ const D3DMAXNUMVERTICES: u32 = 0xFFFF;
 
 // Flexible vertex format bits.
 const D3DFVF_POSITION_MASK: u32 = 0x00E;
-const D3DFVF_XYZ: u32 = 0x002;
+pub const D3DFVF_XYZ: u32 = 0x002;
 pub const D3DFVF_XYZRHW: u32 = 0x004;
 const D3DFVF_NORMAL: u32 = 0x010;
 const D3DFVF_RESERVED1: u32 = 0x020;
@@ -169,6 +169,132 @@ fn unlock(m: &mut Machine, a: &[u32]) -> u32 {
     }
 }
 
+/// What stands in the way of transforming vertices: something not
+/// implemented, to be named by whoever asked, or a stop of the machine.
+pub(super) enum Missing {
+    Named(String),
+    Stop(Stop),
+}
+
+/// Direct3D's transformation and lighting of vertices, set up from a
+/// device's state for vertices of one layout: what `ProcessVertices` does
+/// into a buffer, and what a draw call does with vertices that are not
+/// transformed yet.
+pub(super) struct Pipeline {
+    /// World, view and projection in one.
+    matrix: [f32; 16],
+    /// The viewport on the target, and its clip volume: left, top, width,
+    /// height, nearest and farthest depth.
+    pub area: Rect,
+    volume: [f32; 6],
+    lighting: Option<lighting::Lighting>,
+    /// Vertex fog: the matrix into camera space, where it starts and ends.
+    fog: Option<([f32; 16], f32, f32)>,
+    input: draw::Layout,
+}
+
+/// A vertex as the pipeline leaves it.
+pub(super) struct Processed {
+    /// On the screen: x, y, depth, and the reciprocal of `w`.
+    pub screen: [f32; 4],
+    /// In the backend's clip space, before the division by `w`.
+    pub clip: [f32; 4],
+    pub diffuse: u32,
+    pub specular: u32,
+}
+
+impl Pipeline {
+    /// `light` says whether lighting was asked for; vertices are lit then
+    /// if they have normals and a material is selected, and otherwise
+    /// their colours are copied.
+    pub(super) fn prepare(
+        m: &Machine,
+        device: usize,
+        input: &draw::Layout,
+        light: bool,
+    ) -> Result<Pipeline, Missing> {
+        let named = |what: &str| Missing::Named(what.to_string());
+        let state = &m.os.ddraw.devices[device];
+        let current = state.current_viewport.ok_or_else(|| named("without a current viewport"))?;
+        let (Some(area), Some(volume)) = (viewport::area(m, current), viewport::clip_volume(m, current))
+        else {
+            return Err(named("with a viewport without dimensions"));
+        };
+        let transforms = &state.transforms;
+        let matrix = device::multiply(
+            &device::multiply(&transforms[WORLD], &transforms[VIEW]),
+            &transforms[PROJECTION],
+        );
+        let lighting = match input.normal {
+            Some(_) if light => lighting::prepare(m, device).map_err(Missing::Stop)?,
+            _ => None,
+        };
+        // Vertex fog: with a fog mode set in the light states, the alpha of
+        // the specular colour becomes the fog factor, from the depth in
+        // camera space (Wine's `update_fog_factor`).
+        let fog = match state.light_states[4] {
+            0 => None,
+            // Linear, between a start and an end.
+            3 if state.render_states[draw::render_state::RANGEFOGENABLE] == 0 => Some((
+                device::multiply(&state.transforms[WORLD], &state.transforms[VIEW]),
+                f32::from_bits(state.render_states[draw::render_state::FOGSTART]),
+                f32::from_bits(state.render_states[draw::render_state::FOGEND]),
+            )),
+            mode => return Err(Missing::Named(format!("with fog mode {mode} or range fog"))),
+        };
+        Ok(Pipeline { matrix, area, volume, lighting, fog, input: *input })
+    }
+
+    /// One vertex, given as its bytes in the layout the pipeline was set
+    /// up for.
+    pub(super) fn vertex(&self, vertex: &[u8]) -> Processed {
+        let Pipeline { matrix, area, volume, lighting, fog, input } = self;
+        let [clip_x, clip_y, clip_width, clip_height, min_z, max_z] = *volume;
+        // Half a pixel, in the backend's clip space: a screen coordinate
+        // names a pixel's centre, the backend's viewport maps to pixel edges.
+        let (half_x, half_y) = (1.0 / area.width as f32, 1.0 / area.height as f32);
+        let float = |at: usize| f32::from_le_bytes(vertex[at..at + 4].try_into().expect("four bytes"));
+        let word = |at: usize| u32::from_le_bytes(vertex[at..at + 4].try_into().expect("four bytes"));
+        let p = [float(0), float(4), float(8)];
+        let along = |matrix: &[f32; 16], column: usize| {
+            p[0] * matrix[column]
+                + p[1] * matrix[4 + column]
+                + p[2] * matrix[8 + column]
+                + matrix[12 + column]
+        };
+        let (mut x, mut y, mut z, w) =
+            (along(matrix, 0), along(matrix, 1), along(matrix, 2), along(matrix, 3));
+        let clip = [
+            (x - clip_x * w) * 2.0 / clip_width - w + half_x * w,
+            w - (clip_y * w - y) * 2.0 / clip_height - half_y * w,
+            (z - min_z * w) / (max_z - min_z),
+            w,
+        ];
+        let rhw = if w != 0.0 { 1.0 / w } else { 1.0 };
+        x = (x * rhw - clip_x) / clip_width * area.width as f32 + area.x as f32;
+        y = (clip_y - y * rhw) / clip_height * area.height as f32 + area.y as f32;
+        z = (z * rhw - min_z) / (max_z - min_z);
+        // A colour the source does not have is white for the diffuse one
+        // and black for the specular one.
+        let (diffuse, specular) = match (lighting, input.normal) {
+            (Some(lighting), Some(normal)) => {
+                let normal = [float(normal), float(normal + 4), float(normal + 8)];
+                lighting.light(p, normal, input.diffuse.map(word))
+            }
+            _ => (input.diffuse.map_or(0xFFFF_FFFF, word), input.specular.map_or(0, word)),
+        };
+        let specular = match fog {
+            Some((to_camera, start, end)) => {
+                let depth = (along(to_camera, 2) / along(to_camera, 3)).abs();
+                let factor = ((end - depth) / (end - start)).clamp(0.0, 1.0);
+                specular & 0x00FF_FFFF | ((factor * 255.0 + 0.5) as u32) << 24
+            }
+            None => specular,
+        };
+        Processed { screen: [x, y, z, rhw], clip, diffuse, specular }
+    }
+}
+
 /// `ProcessVertices`: fills part of this buffer with the transformed
 /// vertices of another, as Direct3D transforms them for drawing.
 ///
@@ -219,103 +345,30 @@ fn process_vertices(m: &mut Machine, a: &[u32]) -> HostResult {
     }
     let (to_address, from_address) = (to.memory + first * out.size, from.memory + source_first * input.size);
 
-    let state = &m.os.ddraw.devices[device];
-    let Some(current) = state.current_viewport else {
-        return unsupported("without a current viewport".into());
+    let pipeline = match Pipeline::prepare(m, device, &input, operation & D3DVOP_LIGHT != 0) {
+        Ok(pipeline) => pipeline,
+        Err(Missing::Stop(stop)) => return Err(stop),
+        Err(Missing::Named(what)) => return unsupported(what),
     };
-    let (Some(area), Some([clip_x, clip_y, clip_width, clip_height, min_z, max_z])) =
-        (viewport::area(m, current), viewport::clip_volume(m, current))
-    else {
-        return unsupported("with a viewport without dimensions".into());
-    };
-    let transforms = &state.transforms;
-    let matrix =
-        device::multiply(&device::multiply(&transforms[WORLD], &transforms[VIEW]), &transforms[PROJECTION]);
-
-    // Vertices are lit when asked, if they have normals and a material is
-    // selected; otherwise their colours are copied.
-    let lighting = match input.normal {
-        Some(_) if operation & D3DVOP_LIGHT != 0 => lighting::prepare(m, device)?,
-        _ => None,
-    };
-    // Vertex fog: with a fog mode set in the light states, the alpha of the
-    // specular colour becomes the fog factor, from the depth in camera
-    // space (Wine's `update_fog_factor`).
-    let state = &m.os.ddraw.devices[device];
-    let fog = match state.light_states[4] {
-        0 => None,
-        // Linear, between a start and an end.
-        3 if state.render_states[draw::render_state::RANGEFOGENABLE] == 0 => Some((
-            device::multiply(&state.transforms[WORLD], &state.transforms[VIEW]),
-            f32::from_bits(state.render_states[draw::render_state::FOGSTART]),
-            f32::from_bits(state.render_states[draw::render_state::FOGEND]),
-        )),
-        mode => return unsupported(format!("with fog mode {mode} or range fog")),
-    };
+    let area = pipeline.area;
     let Some(vertices) = m.memory.dump(from_address, count * input.size) else {
         return Ok(DDERR_INVALIDPARAMS);
     };
     let mut result = vec![0u8; (count * out.size) as usize];
     let mut remembered = Vec::with_capacity(count as usize);
-    // Half a pixel, in the backend's clip space: a screen coordinate names
-    // a pixel's centre, the backend's viewport maps to pixel edges.
-    let (half_x, half_y) = (1.0 / area.width as f32, 1.0 / area.height as f32);
-    let float =
-        |bytes: &[u8], at: usize| f32::from_le_bytes(bytes[at..at + 4].try_into().expect("four bytes"));
     for (vertex, written) in
         vertices.chunks_exact(input.size as usize).zip(result.chunks_exact_mut(out.size as usize))
     {
-        let p = [float(vertex, 0), float(vertex, 4), float(vertex, 8)];
-        let along = |column: usize| {
-            p[0] * matrix[column]
-                + p[1] * matrix[4 + column]
-                + p[2] * matrix[8 + column]
-                + matrix[12 + column]
-        };
-        let (mut x, mut y, mut z, w) = (along(0), along(1), along(2), along(3));
-        let clip = [
-            (x - clip_x * w) * 2.0 / clip_width - w + half_x * w,
-            w - (clip_y * w - y) * 2.0 / clip_height - half_y * w,
-            (z - min_z * w) / (max_z - min_z),
-            w,
-        ];
-        let rhw = if w != 0.0 { 1.0 / w } else { 1.0 };
-        x = (x * rhw - clip_x) / clip_width * area.width as f32 + area.x as f32;
-        y = (clip_y - y * rhw) / clip_height * area.height as f32 + area.y as f32;
-        z = (z * rhw - min_z) / (max_z - min_z);
-        for (n, value) in [x, y, z, rhw].into_iter().enumerate() {
+        let processed = pipeline.vertex(vertex);
+        for (n, value) in processed.screen.into_iter().enumerate() {
             written[4 * n..4 * n + 4].copy_from_slice(&value.to_le_bytes());
         }
-        remembered.push(Some(([x, y, z, rhw].map(f32::to_bits), clip)));
-        // A colour the source does not have is white for the diffuse one
-        // and black for the specular one.
-        let word = |at: usize| u32::from_le_bytes(vertex[at..at + 4].try_into().expect("four bytes"));
-        let (diffuse, specular) = match (&lighting, input.normal) {
-            (Some(lighting), Some(normal)) => {
-                let normal = [float(vertex, normal), float(vertex, normal + 4), float(vertex, normal + 8)];
-                lighting.light(p, normal, input.diffuse.map(word))
-            }
-            _ => (input.diffuse.map_or(0xFFFF_FFFF, word), input.specular.map_or(0, word)),
-        };
+        remembered.push(Some((processed.screen.map(f32::to_bits), processed.clip)));
         if let Some(at) = out.diffuse {
-            written[at..at + 4].copy_from_slice(&diffuse.to_le_bytes());
+            written[at..at + 4].copy_from_slice(&processed.diffuse.to_le_bytes());
         }
-        let specular = match &fog {
-            Some((to_camera, start, end)) => {
-                let along = |column: usize| {
-                    p[0] * to_camera[column]
-                        + p[1] * to_camera[4 + column]
-                        + p[2] * to_camera[8 + column]
-                        + to_camera[12 + column]
-                };
-                let depth = (along(2) / along(3)).abs();
-                let factor = ((end - depth) / (end - start)).clamp(0.0, 1.0);
-                specular & 0x00FF_FFFF | ((factor * 255.0 + 0.5) as u32) << 24
-            }
-            None => specular,
-        };
         if let Some(at) = out.specular {
-            written[at..at + 4].copy_from_slice(&specular.to_le_bytes());
+            written[at..at + 4].copy_from_slice(&processed.specular.to_le_bytes());
         }
         if let (Some(at), Some(from)) = (out.uv, input.uv) {
             written[at..at + 8].copy_from_slice(&vertex[from..from + 8]);

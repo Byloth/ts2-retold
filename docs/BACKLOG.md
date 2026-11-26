@@ -125,8 +125,11 @@ out of here into the roadmap or an ADR when work on them starts.
 - **Draw states not implemented** stop the machine by name: fog from a
   table (per pixel) and exponential or range vertex fog, a second
   texture stage, wireframe and point fill, points and lines, depth bias,
-  stencil, the texture factor, border addressing, and untransformed
-  vertices passed straight to a draw call.
+  stencil, the texture factor and border addressing.
+- **Untransformed vertices passed straight to a draw call** are
+  transformed and lit by the path `ProcessVertices` uses (met in the second
+  level, climbing the tree). `UNVERIFIED` in the game: no recording
+  reaches the place yet; the recordings there are give what they gave.
 - **A run starts from what the previous one wrote.** `andy boot` keeps
   `out/run` (saves, `toy2.cfg`) between runs, as an installed game would,
   so two runs are identical only if that directory is. `--state DIR`
