@@ -123,10 +123,39 @@ const ELEVATION: u32 = 0x2E;
 /// What the camera's actions turn it by, in a unit of the step: the
 /// original's, in its camera that does not turn by itself.
 const KEY_TURN: i32 = 16;
-/// How low and how high the camera goes: the original's own camera stays
-/// within -0x200 and 0x300 (1024 is straight above).
-const LOWEST: i32 = -0x280;
+/// The player's view goes from looking steeply up to looking down from
+/// almost straight above (1024 is a quarter turn). The camera itself goes
+/// no lower than a little above the ground the character stands on: at
+/// its rest it is 256 units above the height it looks at, and 1200 away.
+/// Below that the view is tilted instead, upwards past the character: the
+/// camera stays where it is and no longer looks straight at him. (The
+/// original's own camera stays within -0x200 and 0x300 and always looks
+/// at the character.)
+const VIEW_LOWEST: i32 = -0x300;
+const CAMERA_LOWEST: i32 = -0x60;
 const HIGHEST: i32 = 0x380;
+/// The camera's rotation about the axis across the view, 4096 to the turn.
+const ROTATION_UP_AND_DOWN: u32 = 0x20;
+/// Which way that rotation goes when the view is tilted up.
+const TILT_UP: i32 = -1;
+/// The `ret` of the follower's function, and its camera.
+pub const CAMERA_FOLLOWED: u32 = 0x0040_5825;
+const FOLLOWER: u32 = 0x0052_F3A0;
+
+/// In place of the `ret` of the follower's function: the view is tilted
+/// up by what the player asked for beyond the lowest place of the camera.
+/// The tilt is taken off again before the function next runs, which eases
+/// this rotation from its own last value.
+pub fn tilt_view(m: &mut Machine) -> Result<(), Stop> {
+    m.cpu.instructions += 1;
+    let tilt = m.os.controls.tilt;
+    if m.os.controls.camera_orbits && tilt != 0 {
+        let rotation = m.game_half(FOLLOWER + ROTATION_UP_AND_DOWN)? as i32;
+        m.set_game_half(FOLLOWER + ROTATION_UP_AND_DOWN, (rotation + TILT_UP * tilt) as u32 & 0xFFF)?;
+        m.os.controls.tilt_applied = TILT_UP * tilt;
+    }
+    Ok(())
+}
 
 /// In the visor's function (`0x4038E0`): where every path arrives with the
 /// two rates it turns the aim by, and the instruction after the two this
@@ -172,6 +201,8 @@ fn player_turn(m: &mut Machine, step: i32) -> [i32; 2] {
 /// instructions do.
 pub fn aim_visor(m: &mut Machine) -> Result<(), Stop> {
     let camera = m.cpu.regs[5];
+    // The visor turns the camera itself: no tilt of the follower's is in it.
+    m.os.controls.tilt_applied = 0;
     let step = m.cpu.regs[3] as i32;
     let [sideways, down] = player_turn(m, step);
     if sideways != 0 {
@@ -206,6 +237,7 @@ pub fn orbit(m: &mut Machine) -> Result<(), Stop> {
         // instruction, and the game's code goes on from the next.
         m.cpu.regs[0] = m.game_word(SPEED_SIDEWAYS)?;
         m.cpu.instructions += 1;
+        (m.os.controls.tilt, m.os.controls.tilt_applied) = (0, 0);
         m.resume_at = Some(ANGLES_DECIDED_BY_THE_GAME);
         return Ok(());
     }
@@ -223,8 +255,24 @@ pub fn orbit(m: &mut Machine) -> Result<(), Stop> {
     let (left, right) = camera_actions(m)?;
     let keys = KEY_TURN * step * (left as i32 - right as i32);
     let yaw = (m.game_half(camera + YAW)? as i32 + turned[0] + keys) & 0xFFF;
-    let elevation =
-        (m.game_half(camera + ELEVATION)? as u16 as i16 as i32 + turned[1]).clamp(LOWEST, HIGHEST);
+    // The tilt given to the view at the end of the last frame comes off,
+    // so that the tail eases the rotation from its own value.
+    let applied = std::mem::take(&mut m.os.controls.tilt_applied);
+    if applied != 0 {
+        let rotation = m.game_half(camera + ROTATION_UP_AND_DOWN)? as i32;
+        m.set_game_half(camera + ROTATION_UP_AND_DOWN, (rotation - applied) as u32 & 0xFFF)?;
+    }
+    // The view the player wants goes on from the camera's elevation unless
+    // the game has put the camera elsewhere since (a reset, a script).
+    let found = m.game_half(camera + ELEVATION)? as u16 as i16 as i32;
+    let controls = &mut m.os.controls;
+    if controls.elevation_left != Some(found) {
+        controls.view = found;
+    }
+    controls.view = (controls.view + turned[1]).clamp(VIEW_LOWEST, HIGHEST);
+    let elevation = controls.view.max(CAMERA_LOWEST);
+    controls.tilt = elevation - controls.view;
+    controls.elevation_left = Some(elevation);
     m.set_game_half(camera + YAW, yaw as u32)?;
     m.set_game_half(camera + ELEVATION, elevation as u32 & 0xFFFF)?;
 

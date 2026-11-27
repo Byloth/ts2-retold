@@ -38,7 +38,7 @@ unset TS2_LANGUAGE_DIR TS2_OTHER_DISCS
 # it comes, from the state kept in out/state/NAME-inizio (a saved game):
 # it is run in the interpreter by either program, the compiled game being
 # the English one, and needs the Italian disc in ref/game-it.
-runs="level:260 pause:200 options:170 options-list:135 en-menu:150 mouse-page:205 robot:94:new stairs:90:new wall:100:new orbit:64:new-orbit visor:70:new-orbit pad:64:new-orbit wasd:59:new-orbit cameras:74:new-orbit albero:150:played-it"
+runs="level:260 pause:200 options:170 options-list:135 en-menu:150 mouse-page:205 robot:94:new stairs:90:new wall:100:new orbit:64:new-orbit visor:70:new-orbit pad:64:new-orbit wasd:59:new-orbit cameras:74:new-orbit albero:150:played-it tilt:62:new-orbit vuoto:120:played-it scale:110:played-it basso:160:played-it"
 
 mkdir -p out/check
 one() {

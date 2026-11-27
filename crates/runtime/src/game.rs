@@ -186,6 +186,16 @@ pub static REPLACEMENTS: &[Replacement] = &[
     },
     Replacement {
         modification: ORBIT_CAMERA,
+        address: |_| crate::camera::CAMERA_FOLLOWED,
+        name: "the view tilted beyond the camera's lowest place",
+        callee_pops: 0,
+        resume: None,
+        also_resumes: &[],
+        reference_only: true,
+        function: crate::camera::tilt_view,
+    },
+    Replacement {
+        modification: ORBIT_CAMERA,
         address: |_| crate::camera::ENTRIES_COUNTED,
         name: "the entries of a page of the pause menu",
         callee_pops: 0,

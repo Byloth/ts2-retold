@@ -89,6 +89,14 @@ pub struct Controls {
     pub(crate) page: crate::options::Page,
     /// The parts of a unit of angle not yet turned, sideways and up.
     pub(crate) turn_left_over: [i32; 2],
+    /// The view up and down the player has asked for, as an elevation;
+    /// the camera's own elevation as the orbit left it; how far the view
+    /// is tilted up beyond the camera's lowest place, and the tilt now in
+    /// the camera's rotation.
+    pub(crate) view: i32,
+    pub(crate) elevation_left: Option<i32>,
+    pub(crate) tilt: i32,
+    pub(crate) tilt_applied: i32,
     /// Whether the visor is on because a button is held.
     visor_held: bool,
     /// Whether the last frame's mask had the visor's action from here: the
@@ -115,6 +123,10 @@ impl Default for Controls {
             page_wording: andy_recomp::menu::mouse_and_camera_wording(None),
             page: crate::options::Page::default(),
             turn_left_over: [0; 2],
+            view: 0,
+            elevation_left: None,
+            tilt: 0,
+            tilt_applied: 0,
             visor_held: false,
             visor_asked: false,
         }
