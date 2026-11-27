@@ -151,6 +151,19 @@ What the game does was read from its code first (`docs/CODE-DISCOVERY.md`,
     Which of the game's two cameras is the game's to remember (its bit is
     saved with the game). `boot` prints the settings it read.
 
+12. **Looking up tilts the view; the camera stays above the ground**
+    (2026-11-27, after the owner played with it). Lowered to look up, the
+    camera met the floor, came right up to the character's helmet and
+    still did not see far up; on stairs it went into the steps, and at
+    times outside the room, with nothing drawn around the character. The
+    player's view up and down is now a number of its own: down to a
+    little above the ground (-0x60) it is the camera's elevation, as
+    before; below that the camera stays there and the view is tilted up
+    instead, past the character, as far as -0x300 in all. The tilt is
+    added to the camera's rotation where the follower's function returns
+    (`0x405825`) and taken off before it next runs, so that the game's own
+    easing of that rotation goes on from its own value.
+
 ## Still to build
 
 - The joypad on Linux: the `gilrs` crate wants the system's libudev
@@ -170,9 +183,17 @@ What the game does was read from its code first (`docs/CODE-DISCOVERY.md`,
   in which the original forces the camera behind the character (what each
   is, is `UNVERIFIED`), and the swinging away from walls. Where a level
   relies on one of them the view differs; none has been met yet.
-- The elevation is kept between -0x280 and 0x380 (the original's own stays
-  within -0x200 and 0x300); steeper views are `UNVERIFIED` against the
-  game's culling.
+- The camera's elevation is kept between -0x60 and 0x380 (the original's
+  own stays within -0x200 and 0x300), and the view tilts up to 0x2A0 more.
+  What the owner reported besides (the camera in the steps of a stair,
+  the view outside the room, the point looked at moving ahead when looking
+  down, which he likes) has three recordings of his; whether the lower
+  limit alone cures the first two is `UNVERIFIED`: the replays here did
+  not show a frame with the room gone.
+- The original's swinging away from walls is still not there; the other
+  recompilation of this game (of its PlayStation version) keeps the game's
+  own avoidance in charge and only adds the player's angles, which is the
+  way to go if the camera still ends up where it should not.
 - Not run on Windows or with a real mouse by the author: the window's part
   (holding the pointer, relative movement) is the owner's to try.
 - The game's joystick code has been run with a recorded pad (walking with
